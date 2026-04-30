@@ -12,6 +12,7 @@ const { countryGateCheck } = require('../filters/countryGate');
 const { proxyGateCheck } = require('../filters/proxyGate');
 const { hashFingerprint, behaviorFilter } = require('../filters/behavior');
 const { buildInjection } = require('../lib/autoConversion');
+const { buildTrackingInjection } = require('../lib/tracking');
 const { decide } = require('../scoring/decide');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
 const logger = require('../lib/logger');
@@ -68,7 +69,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
     // Run the filter chain
@@ -124,7 +125,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     // Append the pass flag for visibility
     doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
@@ -145,7 +146,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
 
@@ -223,7 +224,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       logger.error('click_write_failed', { err: err.message, click_id: doc.click_id });
     });
 
-    res.status(200).type('html').send(html);
+    res.status(200).type('html').send(applyPageTracking(html, workspace));
   } catch (err) {
     logger.error('go_route_error', { err: err.message, stack: err.stack });
     res.status(500).send('Internal error');
@@ -338,6 +339,20 @@ function injectBeforeBodyEnd(html, injection) {
     return html.slice(0, m.index) + injection + html.slice(m.index);
   }
   return html + injection;
+}
+
+/**
+ * Apply workspace-level tracking (Microsoft Clarity, etc.) to any page response.
+ * Runs on BOTH offer pages and safe pages so the client gets recordings of all traffic.
+ *
+ * No-op when no tracking is configured for the workspace.
+ */
+function applyPageTracking(html, workspace) {
+  const trackingId = workspace?.settings?.tracking?.clarity_project_id;
+  if (!trackingId) return html;
+  const injection = buildTrackingInjection({ clarityProjectId: trackingId });
+  if (!injection) return html;
+  return injectBeforeBodyEnd(html, injection);
 }
 
 /**

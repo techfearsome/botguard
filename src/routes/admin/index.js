@@ -601,6 +601,33 @@ router.get('/settings', async (req, res) => {
   res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });
 });
 
+router.post('/settings/tracking', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { isValidClarityId } = require('../../lib/tracking');
+  const body = req.body || {};
+
+  const raw = String(body.clarity_project_id || '').trim();
+  // Empty string = remove. Otherwise validate format strictly.
+  let clarityId = '';
+  if (raw && raw.length > 0) {
+    if (!isValidClarityId(raw)) {
+      return res.status(400).send('Invalid Clarity project ID. Must be alphanumeric (with optional hyphens), 1-32 chars.');
+    }
+    clarityId = raw;
+  }
+
+  await Workspace.updateOne(
+    { _id: ws._id },
+    { $set: { 'settings.tracking.clarity_project_id': clarityId } }
+  );
+
+  // Invalidate the workspace cache so the new ID is picked up immediately
+  // (otherwise pages would show stale config for up to 60s due to /go cache)
+  await cache.invalidateWorkspace(ws.slug);
+
+  res.redirect('/admin/settings#tracking');
+});
+
 router.post('/settings/api-keys', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const label = (req.body?.label || 'unnamed').slice(0, 60);

@@ -55,6 +55,44 @@
   <% } %>
 </section>
 
+<section class="panel" id="tracking">
+  <h3>Page Tracking</h3>
+  <p class="muted">
+    Inject third-party analytics into every offer and safe page rendered by <code>/go/&lt;slug&gt;</code>.
+    Useful for session replay (Microsoft Clarity), heatmaps, and ad-platform pixels.
+  </p>
+
+  <%
+    const trackingId = ws.settings?.tracking?.clarity_project_id || '';
+  %>
+
+  <form method="POST" action="/admin/settings/tracking" class="form" style="padding:0;">
+    <div class="form-row">
+      <label>Microsoft Clarity Project ID</label>
+      <input type="text" name="clarity_project_id"
+             value="<%= trackingId %>"
+             pattern="[a-zA-Z0-9-]{1,32}"
+             placeholder="e.g. wjsr5hjt53"
+             maxlength="32">
+      <small class="muted">
+        Find this in your Clarity dashboard at <a href="https://clarity.microsoft.com/" target="_blank" rel="noopener">clarity.microsoft.com</a>
+        under Settings → Setup. Leave blank to disable. Once set, the Clarity script is injected
+        into every offer AND safe page so you can review session recordings of both successful
+        and blocked traffic.
+      </small>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save tracking settings</button>
+    </div>
+  </form>
+
+  <% if (trackingId) { %>
+    <div style="background:#e8f4ea;color:#1f6b3a;padding:10px 12px;border-radius:4px;margin-top:12px;">
+      Clarity is currently <strong>active</strong> on all pages. Project ID: <code><%= trackingId %></code>
+    </div>
+  <% } %>
+</section>
+
 <section class="panel">
   <h3>Workspace Info</h3>
   <table class="table table-dense">

@@ -13,6 +13,15 @@ const WorkspaceSchema = new mongoose.Schema({
   settings: {
     default_threshold: { type: Number, default: 70 },
     default_mode: { type: String, enum: ['log_only', 'enforce'], default: 'log_only' },
+
+    // Third-party analytics injection - applied to all offer + safe pages.
+    // Useful for session replay (Clarity), error tracking, and ad-platform pixels.
+    tracking: {
+      // Microsoft Clarity project ID (e.g. "wjsr5hjt53"). Empty = no Clarity.
+      // Validated to alphanumeric only at save time so we can't be tricked into
+      // injecting arbitrary JS by setting an exotic value.
+      clarity_project_id: { type: String, default: '' },
+    },
   },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
