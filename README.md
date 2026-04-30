@@ -75,10 +75,11 @@ Even though week 1 is single-tenant, every collection has `workspace_id` and the
 - **UTM gate filter** — per-campaign toggle; when on, visits missing required UTM keys (configurable: source/medium/campaign by default, plus optional term/content) are routed to the safe page without burning a ProxyCheck call
 - **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict (ISO 3166-1 alpha-2 codes). Configurable `on_unknown` behavior for ProxyCheck-unavailable cases.
 - **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection. Per-category toggles (block_vpn / block_tor / block_public_proxy / block_compromised / block_hosting) plus a separate risk-score threshold.
+- **ProxyCheck.io v3 API client fixed** — the previous implementation used the wrong endpoint format (query param `?ips=` instead of path `/v3/<ip>`) and the wrong response shape (flat instead of nested under `network`/`location`/`detections`). Fixed in this build along with new fields surfaced: `organisation`, `country_name`, `operator`, `hosting`, `scraper`, `confidence`.
 - **Safe-page fallback** — if a gate fires but no `safe_page_id` is configured, a built-in "Page not available" message is shown
 - All gates show their status on the campaigns list with a single "Gates" column showing UTM / CTRY+ / CTRY- / PROXY badges
 - Gate ordering: UTM (cheapest, no I/O) → network filter → country gate → proxy gate → remaining filters. Each gate short-circuits to safe page on failure.
-- 51 new unit tests + 19 integration tests covering all three gates and their ordering
+- Click detail page now shows organisation, operator, country_name, hosting/scraper flags
 
 **Not yet (week 4+):**
 - FB CAPI / Google Enhanced Conversions outbound conversion forwarding

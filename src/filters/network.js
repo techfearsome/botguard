@@ -37,13 +37,19 @@ async function networkFilter({ ip, userAgent, workspaceId }) {
     if (pcVerdict) {
       enrichment.asn = pcVerdict.asn;
       enrichment.asn_org = pcVerdict.asn_org;
+      enrichment.organisation = pcVerdict.organisation;
       enrichment.country = pcVerdict.country;
+      enrichment.country_name = pcVerdict.country_name;
       enrichment.region = pcVerdict.region;
       enrichment.city = pcVerdict.city;
       enrichment.ip_type = pcVerdict.type;
       enrichment.is_proxy = pcVerdict.is_proxy;
       enrichment.proxy_type = pcVerdict.proxy_type;
+      enrichment.operator = pcVerdict.operator;
       enrichment.risk_score = pcVerdict.risk_score;
+      enrichment.confidence = pcVerdict.confidence;
+      enrichment.hosting = pcVerdict.hosting;
+      enrichment.scraper = pcVerdict.scraper;
 
       if (pcVerdict.is_proxy) {
         flags.push(`proxycheck_${pcVerdict.proxy_type?.toLowerCase() || 'proxy'}`);
@@ -80,9 +86,12 @@ async function networkFilter({ ip, userAgent, workspaceId }) {
   // --- 2. ASN blacklist overlay (the ProxyCheck gap fix) ---
   // Run lookup whenever we have ANY identifying info from ProxyCheck. Term rules can match
   // even when ProxyCheck didn't return an ASN (some lookups give us provider but no ASN).
-  if (enrichment.asn || enrichment.asn_org) {
+  // Combine provider + organisation into the haystack since they're often complementary
+  // (provider="OVH SAS", organisation="Smtp.fr - Emailing Services" - the term might be in either).
+  if (enrichment.asn || enrichment.asn_org || enrichment.organisation) {
+    const haystack = [enrichment.asn_org, enrichment.organisation].filter(Boolean).join(' | ');
     const asnHit = await lookupAsn(enrichment.asn || null, workspaceId, {
-      provider: enrichment.asn_org,    // ProxyCheck v3 calls it "provider"; we store it as asn_org
+      provider: haystack,
       asnOrg: enrichment.asn_org,
     });
     if (asnHit.match) {

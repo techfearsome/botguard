@@ -11,10 +11,15 @@ const ClickSchema = new mongoose.Schema({
   ip: String,
   ip_hash: String,         // sha256 of ip - for privacy-respecting joins
   asn: Number,
-  asn_org: String,
-  country: String,
+  asn_org: String,         // ProxyCheck "provider" field, e.g. "OVH SAS"
+  organisation: String,    // ProxyCheck "organisation" field, e.g. "Smtp.fr - Emailing Services"
+  operator: String,        // VPN/proxy operator name when ProxyCheck identifies one
+  country: String,         // ISO alpha-2
+  country_name: String,    // human-readable
   region: String,
   city: String,
+  hosting: Boolean,        // ProxyCheck detection.hosting (separate from is_proxy)
+  scraper: Boolean,        // ProxyCheck detection.scraper
 
   // Device / UA
   user_agent: String,

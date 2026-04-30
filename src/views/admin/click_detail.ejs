@@ -64,7 +64,24 @@
     <table class="table table-dense">
       <tr><td>IP (hashed)</td><td><code><%= click.ip_hash || '–' %></code></td></tr>
       <tr><td>ASN</td><td><%= click.asn ? 'AS' + click.asn : '–' %> <small><%= click.asn_org || '' %></small></td></tr>
-      <tr><td>Country</td><td><%= click.country || '–' %> <%= click.region ? '/ ' + click.region : '' %> <%= click.city ? '/ ' + click.city : '' %></td></tr>
+      <tr><td>Organisation</td><td><%= click.organisation || '–' %></td></tr>
+      <tr><td>Operator</td><td><%= click.operator || '–' %></td></tr>
+      <tr><td>Country</td>
+        <td>
+          <% if (click.country) { %>
+            <code><%= click.country %></code>
+            <% if (click.country_name) { %><small> — <%= click.country_name %></small><% } %>
+          <% } else { %>–<% } %>
+        </td>
+      </tr>
+      <tr><td>Region / City</td><td><%= click.region || '–' %> / <%= click.city || '–' %></td></tr>
+      <tr><td>IP type</td>
+        <td>
+          <%= click.ua_parsed?.device_type || '–' %>
+          <% if (click.hosting) { %><span class="badge badge-warn">hosting</span><% } %>
+          <% if (click.scraper) { %><span class="badge badge-block">scraper</span><% } %>
+        </td>
+      </tr>
       <tr><td>UA</td><td><small><%= click.user_agent || '–' %></small></td></tr>
       <tr><td>Browser</td><td><%= click.ua_parsed?.browser || '–' %> / <%= click.ua_parsed?.os || '–' %> / <%= click.ua_parsed?.device_type || '–' %></td></tr>
       <tr><td>In-app</td><td><%= click.in_app_browser || '–' %></td></tr>
