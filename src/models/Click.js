@@ -102,6 +102,9 @@ const ClickSchema = new mongoose.Schema({
   variant_shown: String,
   page_rendered: String,     // 'offer' | 'safe' | 'redirect'
   landing_page_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
+  // Diagnostic: was auto-conversion injection actually applied to the response HTML?
+  // Useful for confirming the script is reaching the visitor's browser.
+  auto_conv_injected: { type: Boolean, default: false },
   redirect_url: String,
 
   // Session linkage

@@ -202,6 +202,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
           eventName: targetPage.auto_conversion.event_name || 'auto_click',
         });
         html = injectBeforeBodyEnd(html, injection);
+        doc.auto_conv_injected = true;
       }
     }
 

@@ -107,64 +107,97 @@ const RUNTIME = `
       return null;
     }
 
-    // Walk up the DOM looking for an ancestor whose text matches a term.
-    // We deliberately do NOT gate on "is clickable" — modern frameworks (React, Vue,
-    // Svelte, etc.) attach handlers via addEventListener, leaving node.onclick === null
-    // and no role attribute. So we just check every ancestor up to MAX_DEPTH levels
-    // and let the click event itself prove the element was interactive.
+    // Walk up the DOM looking for an ANCESTOR that is plausibly a button.
+    // The detection has to handle two competing cases:
     //
-    // Special case: <a href="tel:..."> always matches (phone link), regardless of text.
+    // 1. SPA-rendered <div onClick> patterns: React/Vue/Svelte attach handlers via
+    //    addEventListener, leaving node.onclick === null. So we can't rely on it.
     //
-    // We STOP before reaching <body> / <html> because their innerText includes the
-    // entire page (including our own injected config block), which would cause every
-    // click anywhere on the page to falsely match.
-    var MAX_DEPTH = 5;
+    // 2. Generic containers: a click anywhere inside <section>, <div>, <main>, <body>
+    //    would match if we just check text (their text includes ALL descendant text,
+    //    including buttons inside). So we need to AVOID matching containers.
+    //
+    // Heuristic: a node is "plausibly a button" if ANY of:
+    //   - tag is button/a/input[submit|button] (explicit interactive)
+    //   - role="button" attribute
+    //   - computed cursor is 'pointer' (standard styling for clickable elements)
+    //   - class name contains common button hints (btn, button, cta, link)
+    //   - has an onclick attribute or .onclick handler
+    //
+    // We STOP before <body>/<html>/<head> regardless. Script/style nodes are skipped.
+    var MAX_DEPTH = 6;
     var STOP_TAGS = { body: 1, html: 1, head: 1 };
     var SKIP_TAGS = { script: 1, style: 1, noscript: 1 };
+    var INTERACTIVE_TAGS = { button: 1, a: 1, summary: 1, label: 1 };
+    var BUTTON_CLASS_HINT = /(?:^|[\\s_-])(btn|button|cta|link|action|tap|press|clickable|trigger)(?:[\\s_-]|$)/i;
+
+    function isPlausibleButton(node, win) {
+      var tag = (node.tagName || '').toLowerCase();
+      if (INTERACTIVE_TAGS[tag]) return true;
+      if (tag === 'input') {
+        var type = (node.getAttribute && node.getAttribute('type') || '').toLowerCase();
+        if (type === 'submit' || type === 'button' || type === 'image') return true;
+      }
+      if (node.getAttribute && node.getAttribute('role') === 'button') return true;
+      if (node.onclick) return true;
+      if (node.hasAttribute && node.hasAttribute('onclick')) return true;
+
+      // Class name hint
+      var cls = (node.className && node.className.toString) ? node.className.toString() : '';
+      if (cls && BUTTON_CLASS_HINT.test(cls)) return true;
+
+      // Computed cursor:pointer - the most reliable signal for SPA-styled clickables
+      try {
+        var cursor = win.getComputedStyle && win.getComputedStyle(node).cursor;
+        if (cursor === 'pointer') return true;
+      } catch (e) {}
+
+      return false;
+    }
 
     function findMatch(target) {
       var node = target;
-      for (var i = 0; i < MAX_DEPTH && node && node.nodeType === 1; i++) {
-        var tag = (node.tagName || '').toLowerCase();
+      var win = (target.ownerDocument && target.ownerDocument.defaultView) || window;
 
-        // Stop before page-level containers - they include all text on the page
-        if (STOP_TAGS[tag]) return null;
-        // Skip nodes whose text we shouldn't match against
-        if (SKIP_TAGS[tag]) { node = node.parentNode; continue; }
-
-        // Phone links: <a href="tel:..."> always counts as a "call" conversion
-        if (tag === 'a') {
-          var href = node.getAttribute && node.getAttribute('href') || '';
-          if (href.toLowerCase().indexOf('tel:') === 0) {
-            // Use the link text for forensics; record term as 'call' if configured,
-            // else first term so the conversion always lands somewhere.
-            var phoneText = (node.innerText || node.textContent || href).trim();
-            return {
-              term: terms.indexOf('call') !== -1 ? 'call' : terms[0],
-              text: phoneText.replace(/\\s+/g, ' ').slice(0, 100),
-              tag: 'a',
-              href: href.slice(0, 200),
-              id: node.id || '',
-              cls: (node.className || '').toString().slice(0, 100),
-            };
-          }
-          // mailto: links - match if text contains a configured term
-          if (href.toLowerCase().indexOf('mailto:') === 0) {
-            var emailMatched = matchTerm(node.innerText || node.textContent || '');
-            if (emailMatched) {
-              return mkMatch(node, emailMatched, tag);
-            }
-          }
+      // First pass: walk up looking for the first plausibly-clickable ancestor.
+      // This is the element we'll match text against.
+      var clickable = null;
+      var walker = node;
+      for (var i = 0; i < MAX_DEPTH && walker && walker.nodeType === 1; i++) {
+        var tag = (walker.tagName || '').toLowerCase();
+        if (STOP_TAGS[tag]) break;
+        if (SKIP_TAGS[tag]) { walker = walker.parentNode; continue; }
+        if (isPlausibleButton(walker, win)) {
+          clickable = walker;
+          break;
         }
+        walker = walker.parentNode;
+      }
+      if (!clickable) return null;
 
-        // Text-based match on this node
-        var text = node.innerText || node.textContent || node.value || '';
-        var matched = matchTerm(text);
-        if (matched) {
-          return mkMatch(node, matched, tag);
+      var tag = (clickable.tagName || '').toLowerCase();
+
+      // Phone links: <a href="tel:..."> always counts as a "call" conversion
+      if (tag === 'a') {
+        var href = clickable.getAttribute && clickable.getAttribute('href') || '';
+        if (href.toLowerCase().indexOf('tel:') === 0) {
+          var phoneText = (clickable.textContent || href).trim();
+          return {
+            term: terms.indexOf('call') !== -1 ? 'call' : terms[0],
+            text: phoneText.replace(/\\s+/g, ' ').slice(0, 100),
+            tag: 'a',
+            href: href.slice(0, 200),
+            id: clickable.id || '',
+            cls: (clickable.className || '').toString().slice(0, 100),
+          };
         }
+      }
 
-        node = node.parentNode;
+      // Text-based match. Use textContent (works on SVG too); fall back to value for inputs.
+      var text = clickable.textContent || clickable.value || '';
+      var matched = matchTerm(text);
+      if (matched) {
+        return mkMatch(clickable, matched, tag);
       }
       return null;
     }

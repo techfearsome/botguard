@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Acme Industries — Financial Consulting</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --border: #1e1e2e;
+      --text: #e2e2e8;
+      --text-muted: #7a7a8e;
+      --accent: #4f8cff;
+      --accent-hover: #6ba0ff;
+      --green: #34d399;
+      --green-hover: #4ee8ab;
+      --radius: 12px;
+    }
+
+    html { scroll-behavior: smooth }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed; top: 0; width: 100%; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.25rem 2.5rem;
+      background: rgba(10,10,15,.75);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      transition: padding .3s;
+    }
+    nav.scrolled { padding: .8rem 2.5rem }
+
+    .logo {
+      display: flex; align-items: center; gap: .6rem;
+      font-weight: 700; font-size: 1.15rem; letter-spacing: -.02em;
+      text-decoration: none; color: var(--text);
+    }
+    .logo-icon {
+      width: 32px; height: 32px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: grid; place-items: center;
+      color: #fff;
+    }
+    .logo-icon svg { width: 18px; height: 18px }
+
+    .nav-links { display: flex; gap: 2rem; list-style: none }
+    .nav-links a {
+      text-decoration: none; color: var(--text-muted);
+      font-size: .875rem; font-weight: 500;
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--text) }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+      padding: 8rem 2rem 4rem;
+      position: relative;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute; top: -20%; left: 50%; transform: translateX(-50%);
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(79,140,255,.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: .4rem;
+      padding: .4rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: .8rem; color: var(--text-muted);
+      margin-bottom: 2rem;
+      animation: fadeUp .8s ease both;
+    }
+    .badge svg { width: 14px; height: 14px }
+
+    h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 800; letter-spacing: -.03em;
+      line-height: 1.1;
+      max-width: 700px;
+      animation: fadeUp .8s .15s ease both;
+    }
+    h1 span { color: var(--accent) }
+
+    .hero p {
+      margin-top: 1.5rem;
+      font-size: 1.125rem;
+      color: var(--text-muted);
+      max-width: 520px;
+      animation: fadeUp .8s .3s ease both;
+    }
+
+    .cta-group {
+      display: flex; gap: 1rem; margin-top: 2.5rem;
+      flex-wrap: wrap; justify-content: center;
+      animation: fadeUp .8s .45s ease both;
+    }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: .5rem;
+      padding: .85rem 1.75rem;
+      border-radius: var(--radius);
+      font-size: .95rem; font-weight: 600;
+      text-decoration: none; cursor: pointer;
+      border: none; transition: all .25s;
+    }
+    .btn svg { width: 18px; height: 18px }
+
+    .btn-primary {
+      background: var(--accent); color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent-hover); transform: translateY(-2px) }
+
+    .btn-secondary {
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--accent); transform: translateY(-2px) }
+
+    .btn-green {
+      background: var(--green); color: #0a0a0f;
+    }
+    .btn-green:hover { background: var(--green-hover); transform: translateY(-2px) }
+
+    /* ── STATS ── */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1.5rem;
+      max-width: 900px; margin: 4rem auto 0;
+      padding: 0 2rem;
+      animation: fadeUp .8s .6s ease both;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.75rem;
+      text-align: center;
+      transition: border-color .3s;
+    }
+    .stat-card:hover { border-color: var(--accent) }
+    .stat-card .number {
+      font-size: 2rem; font-weight: 800;
+      letter-spacing: -.02em;
+      color: var(--accent);
+    }
+    .stat-card .label {
+      margin-top: .35rem;
+      font-size: .85rem; color: var(--text-muted);
+    }
+
+    /* ── SERVICES ── */
+    .section {
+      max-width: 1000px; margin: 0 auto;
+      padding: 6rem 2rem;
+    }
+    .section-title {
+      font-size: .8rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .1em;
+      color: var(--accent); margin-bottom: .75rem;
+    }
+    .section h2 {
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      font-weight: 700; letter-spacing: -.02em;
+    }
+    .section h2 + p {
+      color: var(--text-muted); margin-top: .75rem;
+      max-width: 500px;
+    }
+
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.25rem; margin-top: 3rem;
+    }
+    .service-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      transition: all .3s;
+    }
+    .service-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-4px);
+    }
+    .service-card .icon-wrap {
+      width: 44px; height: 44px;
+      border-radius: 10px;
+      background: rgba(79,140,255,.1);
+      display: grid; place-items: center;
+      color: var(--accent);
+      margin-bottom: 1.25rem;
+    }
+    .service-card .icon-wrap svg { width: 22px; height: 22px }
+    .service-card h3 {
+      font-size: 1.05rem; font-weight: 600; margin-bottom: .5rem;
+    }
+    .service-card p {
+      font-size: .875rem; color: var(--text-muted); line-height: 1.65;
+    }
+
+    /* ── CTA BANNER ── */
+    .cta-banner {
+      max-width: 1000px; margin: 0 auto 6rem;
+      padding: 3.5rem 2rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      text-align: center;
+      position: relative; overflow: hidden;
+    }
+    .cta-banner::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse at top, rgba(79,140,255,.07), transparent 60%);
+      pointer-events: none;
+    }
+    .cta-banner h2 {
+      font-size: clamp(1.5rem, 3.5vw, 2.25rem);
+      font-weight: 700; letter-spacing: -.02em;
+      position: relative;
+    }
+    .cta-banner p {
+      color: var(--text-muted); margin-top: .75rem;
+      position: relative;
+    }
+    .cta-banner .cta-group { position: relative }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 3rem 2rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: .85rem;
+    }
+    footer a { color: var(--accent); text-decoration: none }
+    footer a:hover { text-decoration: underline }
+
+    /* ── ANIMATIONS ── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px) }
+      to   { opacity: 1; transform: translateY(0) }
+    }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 640px) {
+      nav { padding: 1rem 1.25rem }
+      .nav-links { display: none }
+      .hero { padding: 7rem 1.25rem 3rem }
+      .stats { grid-template-columns: 1fr 1fr }
+      .cta-group { flex-direction: column; align-items: center }
+      .btn { width: 100%; justify-content: center; max-width: 280px }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAV -->
+  <nav id="navbar">
+    <a href="#" class="logo">
+      <div class="logo-icon">
+        <i data-lucide="trending-up"></i>
+      </div>
+      Acme Industries
+    </a>
+    <ul class="nav-links">
+      <li><a href="#services">Services</a></li>
+      <li><a href="#about">About</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ul>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="badge">
+      <i data-lucide="shield-check"></i>
+      Trusted by 500+ companies worldwide
+    </div>
+
+    <h1>Strategic financial <span>clarity</span> for your business</h1>
+
+    <p>We help organizations navigate complex financial landscapes with precision, discipline, and forward-thinking strategy.</p>
+
+    <div class="cta-group">
+      <a href="tel:+18005551234" class="btn btn-green">
+        <i data-lucide="phone"></i>
+        Call Us Now
+      </a>
+      <a href="#" class="btn btn-primary" id="downloadBtn">
+        <i data-lucide="download"></i>
+        Download Brochure
+      </a>
+    </div>
+
+    <div class="stats">
+      <div class="stat-card">
+        <div class="number">$2.4B</div>
+        <div class="label">Assets Advised</div>
+      </div>
+      <div class="stat-card">
+        <div class="number">15+</div>
+        <div class="label">Years Experience</div>
+      </div>
+      <div class="stat-card">
+        <div class="number">98%</div>
+        <div class="label">Client Retention</div>
+      </div>
+      <div class="stat-card">
+        <div class="number">500+</div>
+        <div class="label">Clients Served</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SERVICES -->
+  <section class="section" id="services">
+    <div class="section-title">What We Do</div>
+    <h2>Tailored financial solutions</h2>
+    <p>From strategy to execution, we deliver measurable outcomes across every dimension of your financial operations.</p>
+
+    <div class="services-grid">
+      <div class="service-card">
+        <div class="icon-wrap"><i data-lucide="bar-chart-3"></i></div>
+        <h3>Financial Planning</h3>
+        <p>Comprehensive forecasting and budgeting aligned with your long-term organizational goals.</p>
+      </div>
+      <div class="service-card">
+        <div class="icon-wrap"><i data-lucide="briefcase"></i></div>
+        <h3>M&A Advisory</h3>
+        <p>End-to-end merger and acquisition support including due diligence, valuation, and integration.</p>
+      </div>
+      <div class="service-card">
+        <div class="icon-wrap"><i data-lucide="shield-check"></i></div>
+        <h3>Risk Management</h3>
+        <p>Identify, assess, and mitigate financial risks to protect and strengthen your enterprise.</p>
+      </div>
+      <div class="service-card">
+        <div class="icon-wrap"><i data-lucide="landmark"></i></div>
+        <h3>Capital Markets</h3>
+        <p>Access debt and equity markets with strategic structuring and investor-ready positioning.</p>
+      </div>
+      <div class="service-card">
+        <div class="icon-wrap"><i data-lucide="file-text"></i></div>
+        <h3>Tax Strategy</h3>
+        <p>Optimize your tax position through proactive planning and regulatory compliance.</p>
+      </div>
+      <div class="service-card">
+        <div class="icon-wrap"><i data-lucide="users"></i></div>
+        <h3>Wealth Management</h3>
+        <p>Personalized portfolio management and estate planning for executives and founders.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA BANNER -->
+  <div class="cta-banner" id="contact">
+    <h2>Ready to transform your financial strategy?</h2>
+    <p>Speak with a senior advisor today or download our capabilities brochure.</p>
+    <div class="cta-group">
+      <a href="tel:+18005551234" class="btn btn-green">
+        <i data-lucide="phone"></i>
+        +1 (800) 555-1234
+      </a>
+      <a href="#" class="btn btn-primary" id="downloadBtn2">
+        <i data-lucide="download"></i>
+        Download Brochure
+      </a>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    <p>&copy; 2025 Acme Industries. All rights reserved. &nbsp;|&nbsp; <a href="tel:+18005551234">+1 (800) 555-1234</a></p>
+  </footer>
+
+  <script>
+    // Init Lucide icons
+    lucide.createIcons();
+
+    // Navbar shrink on scroll
+    const nav = document.getElementById('navbar');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 40);
+    });
+
+    // Download button — generates a dummy text file
+    function handleDownload(e) {
+      e.preventDefault();
+      const content =
+        "Acme Industries — Financial Consulting\n" +
+        "=======================================\n\n" +
+        "Thank you for your interest in our services.\n\n" +
+        "Contact: +1 (800) 555-1234\n" +
+        "Email:   info@acmeindustries.com\n" +
+        "Web:     www.acmeindustries.com\n\n" +
+        "Services:\n" +
+        "  • Financial Planning\n" +
+        "  • M&A Advisory\n" +
+        "  • Risk Management\n" +
+        "  • Capital Markets\n" +
+        "  • Tax Strategy\n" +
+        "  • Wealth Management\n";
+
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = 'Acme_Industries_Brochure.txt';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    document.getElementById('downloadBtn').addEventListener('click', handleDownload);
+    document.getElementById('downloadBtn2').addEventListener('click', handleDownload);
+
+    // Intersection Observer for scroll reveal
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.animation = 'fadeUp .6s ease both';
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+
+    document.querySelectorAll('.service-card, .stat-card, .cta-banner').forEach(el => {
+      el.style.opacity = '0';
+      observer.observe(el);
+    });
+  </script>
+</body>
+</html>

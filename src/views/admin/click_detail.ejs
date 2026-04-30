@@ -158,6 +158,21 @@
 
 <section class="panel">
   <h3>Conversions (<%= conversions.length %>)</h3>
+
+  <% if (click.page_rendered === 'offer') { %>
+    <div style="background:<%= click.auto_conv_injected ? '#e8f4ea' : '#fef3c7' %>;color:<%= click.auto_conv_injected ? '#1f6b3a' : '#7a5b00' %>;padding:10px 12px;border-radius:4px;margin-bottom:12px;font-size:13px;">
+      <strong>Auto-conversion injection:</strong>
+      <% if (click.auto_conv_injected) { %>
+        ✓ The auto-conversion script WAS injected into the offer page served to this visitor. If no conversion shows below, the visitor either didn't click a matching button, already had the dedup cookie set, or the click happened in an environment where the script couldn't run (script-blocking extensions, very old browsers, etc.).
+      <% } else { %>
+        ✗ The auto-conversion script was NOT injected. Either the offer page doesn't have auto-conversion tracking enabled, or this click was logged before the toggle was turned on.
+        <% if (click.landing_page_id) { %>
+          <br><a href="/admin/pages/<%= click.landing_page_id %>/edit">Edit the landing page →</a>
+        <% } %>
+      <% } %>
+    </div>
+  <% } %>
+
   <% if (conversions.length === 0) { %>
     <p class="muted">No conversions recorded for this click.</p>
   <% } else { %>

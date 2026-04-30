@@ -299,6 +299,66 @@ router.post('/campaigns/:id/delete', async (req, res) => {
   res.redirect('/admin/campaigns');
 });
 
+/**
+ * Preview the rendered HTML for a campaign — useful for verifying that the auto-conversion
+ * script and Clarity tag are actually being injected.
+ *
+ * Returns plain text so the admin can scroll through the source. Does NOT log a click,
+ * does NOT set cookies, does NOT run filters. It's purely a "what would I serve" view.
+ *
+ * To peek at safe page: ?kind=safe
+ * To pretend to be a specific device: ?device=iphone (or android/windows/mac/linux/other)
+ */
+router.get('/campaigns/:id/preview', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!campaign) return res.status(404).send('Campaign not found');
+
+  const kind = req.query.kind === 'safe' ? 'safe' : 'offer';
+  const device = ['iphone','android','windows','mac','linux','other'].includes(req.query.device)
+    ? req.query.device : 'other';
+
+  const { resolvePageForDevice } = require('../../lib/pageResolver');
+  const { buildInjection } = require('../../lib/autoConversion');
+  const { buildTrackingInjection } = require('../../lib/tracking');
+
+  const page = await resolvePageForDevice(campaign, device, kind);
+  if (!page) {
+    return res.type('text/plain').send(`No ${kind} page configured for device class "${device}".\nFalls back to the built-in stub at request time.`);
+  }
+
+  let html = page.html_template || (page.variants?.[0]?.html) || '';
+
+  // Apply same injections /go would
+  if (kind === 'offer' && page.auto_conversion?.enabled) {
+    const injection = buildInjection({
+      terms: page.auto_conversion.terms,
+      eventName: page.auto_conversion.event_name || 'auto_click',
+    });
+    const idx = html.search(/<\/body\s*>/i);
+    html = idx >= 0 ? html.slice(0, idx) + injection + html.slice(idx) : html + injection;
+  }
+  const trackingId = ws.settings?.tracking?.clarity_project_id;
+  if (trackingId) {
+    const injection = buildTrackingInjection({ clarityProjectId: trackingId });
+    const idx = html.search(/<\/body\s*>/i);
+    html = idx >= 0 ? html.slice(0, idx) + injection + html.slice(idx) : html + injection;
+  }
+
+  // Render as plain text so the admin can scroll through the source easily
+  res.type('text/plain; charset=utf-8').send(
+    `=== Preview: campaign="${campaign.slug}", kind=${kind}, device=${device}\n` +
+    `=== Page: "${page.name}" (slug: ${page.slug})\n` +
+    `=== auto_conversion.enabled: ${!!page.auto_conversion?.enabled}\n` +
+    `=== Clarity project ID: ${trackingId || '(not set)'}\n` +
+    `=== HTML length: ${html.length} bytes\n` +
+    `=== Auto-conv script present: ${html.includes('bg-auto-conv-config') ? 'YES' : 'NO'}\n` +
+    `=== Clarity script present: ${html.includes('clarity.ms/tag') ? 'YES' : 'NO'}\n` +
+    `\n${'='.repeat(72)}\n\n` +
+    html
+  );
+});
+
 // ---------- Landing pages ----------
 router.get('/pages', async (req, res) => {
   const ws = await resolveWorkspace(req);

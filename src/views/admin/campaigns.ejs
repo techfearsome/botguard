@@ -52,6 +52,7 @@
         <td><%= c.landing_page_id?.name || '–' %></td>
         <td>
           <a href="/admin/campaigns/<%= c._id %>/edit" class="btn btn-small">Edit</a>
+          <a href="/admin/campaigns/<%= c._id %>/preview" class="btn btn-small" target="_blank" title="See exactly what HTML is served to visitors, including injected scripts">Preview</a>
           <form method="POST" action="/admin/campaigns/<%= c._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this campaign?')">
             <button type="submit" class="btn btn-small btn-danger">Delete</button>
           </form>
