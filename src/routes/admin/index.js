@@ -210,6 +210,23 @@ function parseDevicePages(input) {
   return out;
 }
 
+// Parse auto-conversion settings from the page form. Terms come in as a textarea
+// (one term per line). We strip whitespace, drop empties, dedupe, and limit to 50 terms
+// to prevent abuse where someone pastes a 10MB file.
+function parseAutoConversion(body) {
+  const enabled = body.auto_conversion_enabled === 'on' || body.auto_conversion_enabled === 'true';
+  let terms = [];
+  if (typeof body.auto_conversion_terms === 'string' && body.auto_conversion_terms.trim()) {
+    terms = body.auto_conversion_terms
+      .split(/[\r\n]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && s.length <= 50);
+    terms = Array.from(new Set(terms)).slice(0, 50);
+  }
+  const eventName = (body.auto_conversion_event_name || 'auto_click').trim().slice(0, 50) || 'auto_click';
+  return { enabled, terms, event_name: eventName };
+}
+
 router.get('/campaigns/:id/edit', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
@@ -308,7 +325,9 @@ router.post('/pages', async (req, res) => {
       name: body.name,
       kind: body.kind || 'offer',
       html_template: body.html_template || '',
+      auto_conversion: parseAutoConversion(body),
     });
+    // Invalidate any campaigns whose render path might cache this page (cache is on campaign-by-slug)
     res.redirect('/admin/pages');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -346,6 +365,7 @@ router.post('/pages/:id', async (req, res) => {
           name: body.name,
           kind: body.kind,
           html_template: body.html_template || '',
+          auto_conversion: parseAutoConversion(body),
         },
       }
     );

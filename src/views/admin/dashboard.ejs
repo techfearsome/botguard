@@ -75,6 +75,7 @@
         <th>Type</th>
         <th>Country</th>
         <th>Device</th>
+        <th>Conv</th>
         <th>Decision</th>
       </tr>
       <% recentClicks.forEach(c => { %>
@@ -107,6 +108,14 @@
           <td>
             <%= c.ua_parsed?.device_label || c.ua_parsed?.device_type || '–' %>
             <% if (c.in_app_browser) { %><small class="muted"> (<%= c.in_app_browser %>)</small><% } %>
+          </td>
+          <td>
+            <% if (c.conversion_count > 0) { %>
+              <span class="badge badge-allow"><%= c.conversion_count %></span>
+              <% if (c.auto_conversion_count > 0) { %>
+                <small class="muted" title="auto-detected"> auto</small>
+              <% } %>
+            <% } else { %>–<% } %>
           </td>
           <td><span class="badge badge-<%= c.decision %>"><%= c.decision %></span></td>
         </tr>

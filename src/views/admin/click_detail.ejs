@@ -162,13 +162,25 @@
     <p class="muted">No conversions recorded for this click.</p>
   <% } else { %>
     <table class="table table-dense">
-      <tr><th>Time</th><th>Event</th><th>Value</th><th>Source</th></tr>
+      <tr><th>Time</th><th>Event</th><th>Value</th><th>Source</th><th>Details</th></tr>
       <% conversions.forEach(c => { %>
         <tr>
           <td><%= new Date(c.ts).toLocaleString() %></td>
           <td><%= c.event_name %></td>
           <td><%= c.value %> <%= c.currency %></td>
-          <td><%= c.source %></td>
+          <td>
+            <%= c.source %>
+            <% if (c.auto_detected) { %>
+              <span class="badge badge-allow">auto</span>
+            <% } %>
+          </td>
+          <td>
+            <% if (c.auto_detected) { %>
+              <% if (c.matched_term) { %>matched: <code><%= c.matched_term %></code><% } %>
+              <% if (c.matched_text) { %><br><small class="muted">on: "<%= c.matched_text %>"</small><% } %>
+              <% if (c.matched_element) { %><br><small class="muted">el: <code><%= c.matched_element %></code></small><% } %>
+            <% } else { %>–<% } %>
+          </td>
         </tr>
       <% }) %>
     </table>

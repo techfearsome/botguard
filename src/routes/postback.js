@@ -54,4 +54,101 @@ async function handlePostback(req, res) {
 router.get('/postback', handlePostback);
 router.post('/postback', handlePostback);
 
+/**
+ * POST /cb/auto-conv
+ *
+ * Auto-conversion endpoint hit by the in-page injection script when a visitor clicks
+ * a button matching one of the configured terms. Per-session deduplication is enforced
+ * BOTH client-side (the script checks the cookie before sending) AND here server-side
+ * (defense in depth: a malicious page or shared device shouldn't fire 100 conversions).
+ *
+ * Body: { click_id, event_name, term, text, element, page_url, ts }
+ */
+const AUTO_CONV_SESSION_COOKIE = 'bg_conv';
+const AUTO_CONV_SESSION_DAYS = 30;
+
+router.post('/auto-conv', async (req, res) => {
+  // Always no-cache
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('CDN-Cache-Control', 'no-store');
+
+  const data = req.body || {};
+  const clickId = data.click_id;
+
+  // Strict input validation - this endpoint is exposed to anyone
+  if (!clickId || typeof clickId !== 'string' || clickId.length > 64) {
+    return res.status(400).json({ ok: false, error: 'invalid_click_id' });
+  }
+
+  // Server-side session dedup: if the visitor's browser already sent us a
+  // bg_conv cookie, treat as duplicate. This protects against:
+  //   - Malicious clients clearing the cookie and re-sending
+  //   - Race condition between cookie set + click event firing twice
+  if (req.cookies && req.cookies[AUTO_CONV_SESSION_COOKIE]) {
+    return res.json({ ok: true, dedup: true });
+  }
+
+  try {
+    const click = await Click.findOne({ click_id: clickId }).lean();
+    if (!click) {
+      // Don't 404 - that would let attackers probe valid click IDs
+      return res.json({ ok: true, ignored: true });
+    }
+
+    // Sanitize text fields - we'll display these in admin pages
+    const term = sanitizeShort(data.term);
+    const text = sanitizeShort(data.text, 200);
+    const element = sanitizeShort(data.element, 200);
+    const pageUrl = sanitizeShort(data.page_url, 500);
+    const eventName = sanitizeShort(data.event_name) || 'auto_click';
+
+    const conv = await Conversion.create({
+      workspace_id: click.workspace_id,
+      campaign_id: click.campaign_id,
+      click_id: clickId,
+      ts: new Date(),
+      source: 'auto',
+      event_name: eventName,
+      auto_detected: true,
+      matched_term: term,
+      matched_text: text,
+      matched_element: element,
+      page_url: pageUrl,
+      raw_payload: data,
+    });
+
+    // Update denormalized counters on the click record
+    await Click.updateOne(
+      { click_id: clickId },
+      {
+        $inc: { conversion_count: 1, auto_conversion_count: 1 },
+        $set: { last_conversion_at: new Date() },
+      }
+    );
+
+    // Set dedup cookie - matches the client-side cookie name
+    res.cookie(AUTO_CONV_SESSION_COOKIE, '1', {
+      maxAge: AUTO_CONV_SESSION_DAYS * 86400 * 1000,
+      sameSite: 'lax',
+      secure: req.secure,
+      httpOnly: false,
+    });
+
+    logger.info('auto_conversion_recorded', {
+      click_id: clickId, term, event_name: eventName,
+    });
+
+    return res.json({ ok: true, conversion_id: conv._id.toString() });
+  } catch (err) {
+    logger.error('auto_conv_error', { err: err.message });
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+function sanitizeShort(s, max = 100) {
+  if (typeof s !== 'string') return null;
+  // Strip control characters and clamp length
+  return s.replace(/[\x00-\x1f\x7f]/g, '').slice(0, max).trim() || null;
+}
+
 module.exports = router;

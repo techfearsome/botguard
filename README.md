@@ -81,6 +81,7 @@ Even though week 1 is single-tenant, every collection has `workspace_id` and the
 - **Responsive admin panel** — mobile-friendly nav, full-width inputs, horizontally-scrolling tables on mobile
 - **Cloudflare-aware** — `TRUST_PROXY=cloudflare` mode whitelists Cloudflare's IP ranges; `Cache-Control: no-store` on all dynamic routes prevents CDN caching of click responses; `CF-IPCountry` / `CF-IPCity` / `CF-Region` headers used as geo fallback when ProxyCheck unavailable; static assets get aggressive `max-age=86400` caching
 - **Redis-backed campaign cache** — `/go/:slug` hot path caches workspace + campaign for 60s, drops Mongo load by 90%+ on repeat traffic; auto-invalidates on admin update/delete; in-memory fallback when Redis unavailable
+- **Auto-conversion tracking** — per-page toggle that injects a small JS snippet matching button-text terms (Download / Subscribe / Place Order / etc., configurable). Fires `/cb/auto-conv` POST on click. 30-day session-cookie dedup enforced both client-side and server-side. Conversions show with an "auto" badge in the click log and click detail page. Never injected on safe pages, so blocked traffic can't fire fake conversions.
 
 **Not yet (week 4+):**
 - FB CAPI / Google Enhanced Conversions outbound conversion forwarding

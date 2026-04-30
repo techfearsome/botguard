@@ -11,6 +11,7 @@ const { utmGateCheck } = require('../filters/utmGate');
 const { countryGateCheck } = require('../filters/countryGate');
 const { proxyGateCheck } = require('../filters/proxyGate');
 const { hashFingerprint, behaviorFilter } = require('../filters/behavior');
+const { buildInjection } = require('../lib/autoConversion');
 const { decide } = require('../scoring/decide');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
 const logger = require('../lib/logger');
@@ -190,6 +191,16 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
     // Inject challenge - only on offer pages, never on safe pages
     if (doc.page_rendered === 'offer') {
       html = injectChallenge(html);
+
+      // Auto-conversion tracking - only when explicitly enabled on the page that's actually rendering.
+      // Safe pages never get this injection (we don't want auto-conversions on blocked traffic).
+      if (targetPage?.auto_conversion?.enabled) {
+        const injection = buildInjection({
+          terms: targetPage.auto_conversion.terms,
+          eventName: targetPage.auto_conversion.event_name || 'auto_click',
+        });
+        html = injectBeforeBodyEnd(html, injection);
+      }
     }
 
     // Cookie
@@ -310,6 +321,22 @@ function pickVariantHtml(landingPage) {
   if (!landingPage) return '';
   const variant = pickVariant(landingPage);
   return variant ? variant.html : (landingPage.html_template || '');
+}
+
+/**
+ * Inject HTML right before the closing </body> tag, or append to the document
+ * if no </body> is present. Case-insensitive on the tag.
+ *
+ * Used for auto-conversion script and challenge - we want them to load AFTER
+ * the page's own content so they don't block render.
+ */
+function injectBeforeBodyEnd(html, injection) {
+  if (!html) return injection;
+  const m = html.match(/<\/body\s*>/i);
+  if (m) {
+    return html.slice(0, m.index) + injection + html.slice(m.index);
+  }
+  return html + injection;
 }
 
 /**

@@ -22,6 +22,17 @@ const LandingPageSchema = new mongoose.Schema({
     og_image: String,
   },
 
+  // Auto-conversion tracking: when enabled, /go injects a JS snippet that fires a
+  // conversion when the visitor clicks an element whose text matches one of the terms.
+  // Terms are case-insensitive substring matches. Empty list = use the global defaults.
+  auto_conversion: {
+    enabled: { type: Boolean, default: false },
+    terms: { type: [String], default: [] },
+    // What to record on the Conversion document. Useful when the offer pays per type
+    // (e.g. install, signup, purchase) and you want to discriminate without extra setup.
+    event_name: { type: String, default: 'auto_click' },
+  },
+
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
 });

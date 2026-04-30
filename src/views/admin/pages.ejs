@@ -15,12 +15,24 @@
   </div>
 <% } else { %>
   <table class="table">
-    <tr><th>Name</th><th>Slug</th><th>Kind</th><th>Updated</th><th></th></tr>
+    <tr><th>Name</th><th>Slug</th><th>Kind</th><th>Auto-Conv</th><th>Updated</th><th></th></tr>
     <% pages.forEach(p => { %>
       <tr>
         <td><strong><%= p.name %></strong></td>
         <td><code><%= p.slug %></code></td>
         <td><%= p.kind %></td>
+        <td>
+          <% if (p.auto_conversion?.enabled) { %>
+            <span class="badge badge-allow">on</span>
+            <% if (Array.isArray(p.auto_conversion.terms) && p.auto_conversion.terms.length > 0) { %>
+              <small class="muted"><%= p.auto_conversion.terms.length %> terms</small>
+            <% } else { %>
+              <small class="muted">defaults</small>
+            <% } %>
+          <% } else if (p.kind === 'safe') { %>
+            <small class="muted">n/a</small>
+          <% } else { %>–<% } %>
+        </td>
         <td><%= new Date(p.updated_at).toLocaleString() %></td>
         <td>
           <a href="/admin/pages/<%= p._id %>/edit" class="btn btn-small">Edit</a>
