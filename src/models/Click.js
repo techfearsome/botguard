@@ -41,6 +41,7 @@ const ClickSchema = new mongoose.Schema({
     os_version: String,
     device_type: String,    // 'desktop' | 'mobile' | 'tablet' | 'bot'
     device_label: String,   // human-readable: 'iPhone', 'Android phone', 'Windows', 'Mac', etc.
+    device_class: String,   // routing key: 'iphone'|'android'|'windows'|'mac'|'linux'|'other'
     device_vendor: String,  // 'Apple', 'Samsung', etc. (when known)
     device_model: String,   // 'iPhone', 'SM-G991B', etc. (when known)
     is_bot: Boolean,

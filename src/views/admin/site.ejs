@@ -1,0 +1,92 @@
+<%- include('../partials/header', { ws, page, title: 'Site Pages - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Site Pages</h1>
+    <p class="muted">
+      Static pages served at the root domain. Useful so the bare domain isn't a dead end
+      and so you have <code>/privacy</code> and <code>/terms</code> for ad platform compliance.
+    </p>
+  </div>
+</div>
+
+<section class="panel">
+  <h3>Standard Pages</h3>
+  <table class="table">
+    <thead>
+      <tr><th>Slug</th><th>Public URL</th><th>Title</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      <% pages.filter(p => ['home','privacy','terms'].includes(p.slug)).forEach(p => { %>
+        <tr>
+          <td><code><%= p.slug %></code></td>
+          <td>
+            <% if (p.slug === 'home') { %>
+              <code>/</code>
+            <% } else { %>
+              <code>/<%= p.slug %></code>
+            <% } %>
+          </td>
+          <td><%= p.title || '–' %></td>
+          <td>
+            <% if (p._placeholder) { %>
+              <span class="badge badge-status-archived">not set</span>
+            <% } else if (p.enabled) { %>
+              <span class="badge badge-allow">live</span>
+            <% } else { %>
+              <span class="badge badge-block">disabled</span>
+            <% } %>
+          </td>
+          <td>
+            <a href="/admin/site/<%= p.slug %>/edit" class="btn btn-small">
+              <%= p._placeholder ? 'Create' : 'Edit' %>
+            </a>
+            <% if (!p._placeholder) { %>
+              <form method="POST" action="/admin/site/<%= p.slug %>/delete" style="display:inline" onsubmit="return confirm('Delete this page?')">
+                <button type="submit" class="btn btn-small btn-danger">Delete</button>
+              </form>
+            <% } %>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</section>
+
+<% const customPages = pages.filter(p => !['home','privacy','terms'].includes(p.slug) && !p._placeholder); %>
+<% if (customPages.length > 0) { %>
+  <section class="panel">
+    <h3>Custom Pages</h3>
+    <p class="muted">Reachable at <code>/p/&lt;slug&gt;</code>.</p>
+    <table class="table">
+      <tbody>
+        <% customPages.forEach(p => { %>
+          <tr>
+            <td><code>/p/<%= p.slug %></code></td>
+            <td><%= p.title || '–' %></td>
+            <td>
+              <% if (p.enabled) { %><span class="badge badge-allow">live</span>
+              <% } else { %><span class="badge badge-block">disabled</span><% } %>
+            </td>
+            <td>
+              <a href="/admin/site/<%= p.slug %>/edit" class="btn btn-small">Edit</a>
+              <form method="POST" action="/admin/site/<%= p.slug %>/delete" style="display:inline" onsubmit="return confirm('Delete this page?')">
+                <button type="submit" class="btn btn-small btn-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </section>
+<% } %>
+
+<section class="panel">
+  <h3>Create Custom Page</h3>
+  <form method="GET" action="" class="form-inline" onsubmit="event.preventDefault(); var s=this.slug.value.trim().toLowerCase(); if(!/^[a-z0-9-]+$/.test(s)){alert('Slug must be lowercase letters, numbers, hyphens only');return false;} window.location.href='/admin/site/'+encodeURIComponent(s)+'/edit';">
+    <input type="text" name="slug" placeholder="e.g. about, contact, cookies" pattern="[a-z0-9-]+" required>
+    <button type="submit" class="btn btn-primary">Create page →</button>
+  </form>
+</section>
+
+<%- include('../partials/footer') %>

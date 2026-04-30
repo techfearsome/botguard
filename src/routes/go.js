@@ -5,6 +5,7 @@ const { Workspace, Campaign, LandingPage, Click } = require('../models');
 const { buildClickDoc, writeClick } = require('../lib/click');
 const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
+const { resolvePageForDevice } = require('../lib/pageResolver');
 const { utmGateCheck } = require('../filters/utmGate');
 const { countryGateCheck } = require('../filters/countryGate');
 const { proxyGateCheck } = require('../filters/proxyGate');
@@ -40,6 +41,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
 
     // Build base click record
     const doc = buildClickDoc({ req, workspace, campaign });
+    const deviceClass = doc.ua_parsed?.device_class || 'other';
 
     // --- UTM gate (runs BEFORE the filter chain so we don't waste a ProxyCheck call) ---
     const gateResult = utmGateCheck({ utm: doc.utm, campaign });
@@ -56,7 +58,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       doc.mode_at_decision = 'enforce';   // gate is always enforcing - it's not a score
       doc.page_rendered = 'safe';
 
-      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
@@ -113,7 +115,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       doc.mode_at_decision = 'enforce';   // gate is always enforcing
       doc.page_rendered = 'safe';
 
-      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
       return res.status(200).type('html').send(html);
@@ -134,7 +136,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       doc.mode_at_decision = 'enforce';
       doc.page_rendered = 'safe';
 
-      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
       return res.status(200).type('html').send(html);
@@ -150,10 +152,9 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       return res.status(410).send('This campaign is currently paused.');
     }
 
-    // Resolve which page to show
+    // Resolve which page to show (per-device override applies)
     const showSafePage = (doc.decision === 'block');
-    const pageId = showSafePage ? campaign.safe_page_id : campaign.landing_page_id;
-    const targetPage = pageId ? await LandingPage.findById(pageId) : null;
+    const targetPage = await resolvePageForDevice(campaign, deviceClass, showSafePage ? 'safe' : 'offer');
 
     let html, variantName;
     if (targetPage) {

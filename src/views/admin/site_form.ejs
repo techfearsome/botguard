@@ -1,0 +1,71 @@
+<%- include('../partials/header', { ws, page, title: 'Edit Site Page - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Edit Site Page: <code><%= sp.slug %></code></h1>
+    <p class="muted">
+      <% if (sp.slug === 'home') { %>
+        Served at <code>/</code> (your root domain).
+      <% } else if (['privacy','terms'].includes(sp.slug)) { %>
+        Served at <code>/<%= sp.slug %></code>.
+      <% } else { %>
+        Served at <code>/p/<%= sp.slug %></code>.
+      <% } %>
+    </p>
+  </div>
+  <a href="/admin/site" class="btn">← Back</a>
+</div>
+
+<form method="POST" action="/admin/site/<%= sp.slug %>" class="form" style="max-width:none;">
+  <div class="form-row">
+    <label>Title</label>
+    <input type="text" name="title" value="<%= sp.title || '' %>" placeholder="Page title">
+  </div>
+
+  <div class="form-row">
+    <label style="font-weight:normal;">
+      <input type="checkbox" name="enabled" <%= sp.enabled !== false ? 'checked' : '' %>>
+      Enabled (page is live)
+    </label>
+  </div>
+
+  <div class="form-row">
+    <label>HTML</label>
+    <textarea name="html" rows="22" class="code"><%= sp.html || '' %></textarea>
+    <small class="muted">
+      Paste full HTML or just a body fragment. If your HTML doesn't include <code>&lt;!DOCTYPE html&gt;</code>
+      we'll wrap it in a minimal shell using the title and meta below.
+    </small>
+  </div>
+
+  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+    <legend style="font-weight:600; padding:0 6px;">Meta</legend>
+
+    <div class="form-row">
+      <label>Description (for &lt;meta name="description"&gt;)</label>
+      <input type="text" name="meta_description" value="<%= sp.meta?.description || '' %>" maxlength="200">
+    </div>
+
+    <div class="form-row">
+      <label>Open Graph image URL</label>
+      <input type="text" name="meta_og_image" value="<%= sp.meta?.og_image || '' %>" placeholder="https://...">
+    </div>
+
+    <div class="form-row">
+      <label style="font-weight:normal;">
+        <input type="checkbox" name="meta_noindex" <%= sp.meta?.noindex ? 'checked' : '' %>>
+        Noindex (set X-Robots-Tag and meta robots so search engines don't index this page)
+      </label>
+    </div>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Save</button>
+    <a href="/admin/site" class="btn">Cancel</a>
+    <% if (!sp._new) { %>
+      <a href="/<%= sp.slug === 'home' ? '' : (['privacy','terms'].includes(sp.slug) ? sp.slug : 'p/' + sp.slug) %>" target="_blank" class="btn">View live →</a>
+    <% } %>
+  </div>
+</form>
+
+<%- include('../partials/footer') %>

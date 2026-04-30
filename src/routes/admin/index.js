@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { resolveSlug } = require('../../lib/slug');
-const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist } = require('../../models');
+const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist, SitePage } = require('../../models');
 const { invalidateCache } = require('../../lib/asnLookup');
 const { DEFAULT_SLUG } = require('../../lib/bootstrap');
 const { replay } = require('../../lib/replay');
@@ -100,6 +100,9 @@ router.post('/campaigns', async (req, res) => {
     // Proxy gate config
     const proxyGate = parseProxyGate(body);
 
+    // Per-device pages
+    const devicePages = parseDevicePages(body.device_pages);
+
     await Campaign.create({
       workspace_id: ws._id,
       slug,
@@ -107,6 +110,7 @@ router.post('/campaigns', async (req, res) => {
       status: body.status || 'active',
       landing_page_id: body.landing_page_id || null,
       safe_page_id: body.safe_page_id || null,
+      device_pages: devicePages,
       source_profile: body.source_profile || 'mixed',
       filter_config: {
         threshold: Number(body.threshold) || 70,
@@ -178,6 +182,26 @@ function clamp(n, min, max, fallback) {
   return Math.max(min, Math.min(max, n));
 }
 
+// Parse the device_pages nested form input: { iphone: { offer: id, safe: id }, ... }
+// Empty strings (—use default—) are converted to null so Mongoose stores nothing for them.
+function parseDevicePages(input) {
+  const out = {};
+  const validClasses = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
+  if (!input || typeof input !== 'object') return out;
+  for (const cls of validClasses) {
+    const entry = input[cls];
+    if (!entry || typeof entry !== 'object') continue;
+    const offer = entry.offer && entry.offer.trim() ? entry.offer : null;
+    const safe = entry.safe && entry.safe.trim() ? entry.safe : null;
+    if (offer || safe) {
+      out[cls] = {};
+      if (offer) out[cls].offer = offer;
+      if (safe) out[cls].safe = safe;
+    }
+  }
+  return out;
+}
+
 router.get('/campaigns/:id/edit', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
@@ -210,6 +234,7 @@ router.post('/campaigns/:id', async (req, res) => {
     };
     const countryGate = parseCountryGate(body);
     const proxyGate = parseProxyGate(body);
+    const devicePages = parseDevicePages(body.device_pages);
 
     await Campaign.updateOne(
       { _id: req.params.id, workspace_id: ws._id },
@@ -220,6 +245,7 @@ router.post('/campaigns/:id', async (req, res) => {
           status: body.status,
           landing_page_id: body.landing_page_id || null,
           safe_page_id: body.safe_page_id || null,
+          device_pages: devicePages,
           source_profile: body.source_profile,
           'filter_config.threshold': Number(body.threshold) || 70,
           'filter_config.mode': body.mode,
@@ -424,6 +450,61 @@ router.post('/settings/api-keys/:key/delete', async (req, res) => {
     { $pull: { api_keys: { key: req.params.key } } }
   );
   res.redirect('/admin/settings');
+});
+
+// ---------- Site pages (homepage, privacy, terms, etc.) ----------
+router.get('/site', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const pages = await SitePage.find({ workspace_id: ws._id }).sort({ slug: 1 }).lean();
+  // Pre-load the well-known slugs even if they don't exist yet, so the UI shows them
+  const knownSlugs = ['home', 'privacy', 'terms'];
+  const bySlug = Object.fromEntries(pages.map((p) => [p.slug, p]));
+  const enriched = knownSlugs
+    .map((slug) => bySlug[slug] || { slug, title: '', html: '', enabled: false, _placeholder: true })
+    .concat(pages.filter((p) => !knownSlugs.includes(p.slug)));
+  res.render('admin/site', { ws, pages: enriched, page: 'site' });
+});
+
+router.get('/site/:slug/edit', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const slug = String(req.params.slug || '').toLowerCase();
+  let sp = await SitePage.findOne({ workspace_id: ws._id, slug }).lean();
+  if (!sp) {
+    sp = { slug, title: '', html: '', enabled: true, meta: {}, _new: true };
+  }
+  res.render('admin/site_form', { ws, sp, page: 'site' });
+});
+
+router.post('/site/:slug', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const slug = String(req.params.slug || '').toLowerCase().trim();
+  if (!/^[a-z0-9-]+$/.test(slug)) return res.status(400).send('Invalid slug');
+
+  const body = req.body || {};
+  const update = {
+    title: body.title || '',
+    html: body.html || '',
+    enabled: body.enabled === 'on' || body.enabled === 'true',
+    meta: {
+      description: body.meta_description || '',
+      og_image: body.meta_og_image || '',
+      noindex: body.meta_noindex === 'on',
+    },
+  };
+
+  await SitePage.updateOne(
+    { workspace_id: ws._id, slug },
+    { $set: update, $setOnInsert: { workspace_id: ws._id, slug, created_at: new Date() } },
+    { upsert: true }
+  );
+  res.redirect('/admin/site');
+});
+
+router.post('/site/:slug/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const slug = String(req.params.slug || '').toLowerCase();
+  await SitePage.deleteOne({ workspace_id: ws._id, slug });
+  res.redirect('/admin/site');
 });
 
 // ---------- Click detail ----------

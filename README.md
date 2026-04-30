@@ -72,14 +72,14 @@ Even though week 1 is single-tenant, every collection has `workspace_id` and the
 **Done in week 3 (this build):**
 - **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name (lowercase, accented characters normalized, special chars dropped, max 60 chars)
 - **Slug collision handling** — if the derived (or provided) slug already exists, a random 4-digit suffix is appended; suffix length grows with persistent collisions
-- **UTM gate filter** — per-campaign toggle; when on, visits missing required UTM keys (configurable: source/medium/campaign by default, plus optional term/content) are routed to the safe page without burning a ProxyCheck call
-- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict (ISO 3166-1 alpha-2 codes). Configurable `on_unknown` behavior for ProxyCheck-unavailable cases.
-- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection. Per-category toggles (block_vpn / block_tor / block_public_proxy / block_compromised / block_hosting) plus a separate risk-score threshold.
-- **ProxyCheck.io v3 API client fixed** — the previous implementation used the wrong endpoint format (query param `?ips=` instead of path `/v3/<ip>`) and the wrong response shape (flat instead of nested under `network`/`location`/`detections`). Fixed in this build along with new fields surfaced: `organisation`, `country_name`, `operator`, `hosting`, `scraper`, `confidence`.
-- **Safe-page fallback** — if a gate fires but no `safe_page_id` is configured, a built-in "Page not available" message is shown
-- All gates show their status on the campaigns list with a single "Gates" column showing UTM / CTRY+ / CTRY- / PROXY badges
-- Gate ordering: UTM (cheapest, no I/O) → network filter → country gate → proxy gate → remaining filters. Each gate short-circuits to safe page on failure.
-- Click detail page now shows organisation, operator, country_name, hosting/scraper flags
+- **UTM gate filter** — per-campaign toggle; when on, visits missing required UTM keys are routed to the safe page without burning a ProxyCheck call
+- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict (ISO 3166-1 alpha-2 codes)
+- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection. Per-category toggles plus risk-score threshold.
+- **ProxyCheck.io v3 API client fixed** — endpoint format and response shape both corrected. `operator` field handles both string and rich-object responses (VPN Unlimited returns a full object with anonymity/protocols/policies)
+- **Per-device page routing** — campaigns can now serve different offer / safe pages per device class. Six classes: `iphone`, `android`, `windows`, `mac`, `linux`, `other` (iPad, smart TV, unknown UAs). Falls back to campaign default when no per-device override is set.
+- **Site pages** — homepage, privacy policy, terms of service, and arbitrary `/p/<slug>` pages managed under admin Settings → Site. The bare domain (`/`) is no longer an admin-login redirect; it shows your homepage if configured, otherwise a real 404.
+- **Responsive admin panel** — stacked nav with horizontal-scroll menu on mobile, full-width form inputs (≥16px font to prevent iOS zoom-on-focus), stat grid collapses to 2 columns, tables scroll horizontally inside their panels
+- **Click log shows IP, provider, type (proxy/residential/hosting/etc.), country, and device label** with rich operator details on the click detail page
 
 **Not yet (week 4+):**
 - FB CAPI / Google Enhanced Conversions outbound conversion forwarding

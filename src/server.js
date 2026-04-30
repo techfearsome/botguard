@@ -15,6 +15,7 @@ const goRoutes = require('./routes/go');
 const pixelRoutes = require('./routes/pixel');
 const postbackRoutes = require('./routes/postback');
 const adminRoutes = require('./routes/admin');
+const siteRoutes = require('./routes/site');
 
 const app = express();
 
@@ -49,8 +50,10 @@ app.use('/cb', postbackRoutes);
 // --- Admin panel (scoped per workspace, multi-tenant ready) ---
 app.use('/admin', adminRoutes);
 
-// Root → admin
-app.get('/', (req, res) => res.redirect('/admin'));
+// --- Public site pages (homepage, privacy, terms, /p/:slug) ---
+// Mounted AFTER /admin so /admin doesn't get caught by the / handler.
+// When no SitePage is configured, these fall through to a real 404 (not the admin login).
+app.use('/', siteRoutes);
 
 // Health check
 app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));

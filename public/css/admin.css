@@ -217,3 +217,147 @@ code {
   color: #7a8294;
 }
 .empty-state p { margin-bottom: 16px; }
+
+/* ============================================================
+   RESPONSIVE - mobile and tablet breakpoints
+   ============================================================ */
+
+/* Tablet: scroll wide tables instead of squeezing */
+@media (max-width: 1024px) {
+  .container {
+    padding: 16px 12px;
+  }
+  .table-dense th, .table-dense td {
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+  /* Wrap any container holding a wide table so it scrolls horizontally */
+  .panel {
+    overflow-x: auto;
+  }
+}
+
+/* Mobile: stack the nav, simplify everything */
+@media (max-width: 720px) {
+  .nav {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .nav-brand {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .nav-links {
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+    /* a touch-friendly horizontal scroll bar for the menu */
+    padding-bottom: 4px;
+  }
+  .nav-links a {
+    margin-left: 0;
+    margin-right: 14px;
+    display: inline-block;
+  }
+  .nav-links a:last-child { margin-right: 0; }
+
+  .container {
+    padding: 12px 10px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .page-header h1 { font-size: 18px; }
+
+  /* Stat grid: 2 columns on mobile, not auto-fit */
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .stat-card {
+    padding: 12px;
+  }
+  .stat-value { font-size: 18px; }
+
+  /* Two-column grids stack */
+  .grid-2 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  /* Tables: smaller font, allow horizontal scroll on the panel wrapper */
+  .table th, .table td {
+    padding: 6px 6px;
+    font-size: 12px;
+  }
+  .table-dense th, .table-dense td {
+    padding: 3px 4px;
+    font-size: 11px;
+  }
+
+  /* Forms: full-width inputs, stacked actions */
+  .form {
+    padding: 14px 12px;
+  }
+  .form-row input[type="text"],
+  .form-row input[type="number"],
+  .form-row select,
+  .form-row textarea {
+    font-size: 16px;       /* >= 16px prevents iOS zoom-on-focus */
+  }
+  .form-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .form-actions .btn {
+    text-align: center;
+  }
+
+  .form-inline {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .form-inline input,
+  .form-inline select,
+  .form-inline button {
+    width: 100%;
+  }
+
+  /* Filter bar stacks */
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .filter-bar select,
+  .filter-bar input,
+  .filter-bar .btn {
+    width: 100%;
+  }
+
+  /* Buttons: roomier tap targets */
+  .btn {
+    padding: 8px 14px;
+    font-size: 14px;
+  }
+  .btn-small {
+    padding: 5px 10px;
+  }
+
+  /* Fieldsets: tighter padding */
+  fieldset {
+    padding: 10px 12px !important;
+  }
+}
+
+/* Print: hide nav so users can print clean reports of the click log */
+@media print {
+  .nav { display: none; }
+  .panel { border: 0; }
+  .btn, .form-actions { display: none; }
+}
