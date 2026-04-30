@@ -82,7 +82,8 @@ test('VPN response sets is_proxy=true with proxy_type=VPN', () => {
   const r = normalize('1.2.3.4', raw);
   assert.strictEqual(r.is_proxy, true);
   assert.strictEqual(r.proxy_type, 'VPN');
-  assert.strictEqual(r.operator, 'NordVPN');
+  assert.strictEqual(r.operator_name, 'NordVPN');     // denormalized name field
+  assert.deepStrictEqual(r.operator, { name: 'NordVPN' });    // wrapped into object
   assert.strictEqual(r.risk_score, 75);
 });
 
@@ -129,6 +130,73 @@ test('Anonymous (without proxy/vpn/tor) → PUB type', () => {
   const r = normalize('1.2.3.4', raw);
   assert.strictEqual(r.is_proxy, true);
   assert.strictEqual(r.proxy_type, 'PUB');
+});
+
+test('Operator as STRING (legacy/simple) → wrapped into {name}', () => {
+  const raw = {
+    network: { asn: 'AS9009', provider: 'M247' },
+    location: { country_code: 'US' },
+    detections: { vpn: true, risk: 75, confidence: 100 },
+    operator: 'NordVPN',     // string form
+  };
+  const r = normalize('1.2.3.4', raw);
+  assert.strictEqual(r.operator_name, 'NordVPN');
+  assert.deepStrictEqual(r.operator, { name: 'NordVPN' });
+  assert.strictEqual(r.operator_anonymity, null);
+});
+
+test('Operator as OBJECT (real v3 response) → preserved + denormalized', () => {
+  // This is the EXACT shape from the live error log (VPN Unlimited).
+  // Without object handling this used to crash Mongoose with "Cast to string failed".
+  const raw = {
+    network: { asn: 'AS123', provider: 'KeepSolid Inc' },
+    location: { country_code: 'US' },
+    detections: { vpn: true, risk: 80, confidence: 100 },
+    operator: {
+      name: 'VPN Unlimited',
+      url: 'https://www.vpnunlimited.com/',
+      anonymity: 'medium',
+      popularity: 'high',
+      services: ['datacenter_vpns'],
+      protocols: ['WireGuard', 'OpenVPN', 'IKEv2', 'IPSec', 'PPTP'],
+      policies: {
+        ad_filtering: false, free_access: false, paid_access: true,
+        port_forwarding: false, logging: false, anonymous_payments: true,
+        crypto_payments: true, traceable_ownership: true,
+      },
+      additional_operators: null,
+    },
+  };
+  const r = normalize('1.2.3.4', raw);
+  assert.strictEqual(r.operator_name, 'VPN Unlimited');
+  assert.strictEqual(r.operator_anonymity, 'medium');
+  assert.strictEqual(r.operator.url, 'https://www.vpnunlimited.com/');
+  assert.deepStrictEqual(r.operator.protocols, ['WireGuard', 'OpenVPN', 'IKEv2', 'IPSec', 'PPTP']);
+  assert.strictEqual(r.is_proxy, true);
+  assert.strictEqual(r.proxy_type, 'VPN');
+});
+
+test('Operator missing/null → all operator fields null', () => {
+  const r = normalize('1.2.3.4', {
+    network: { asn: 'AS1', provider: 'X' },
+    location: {},
+    detections: {},
+    operator: null,
+  });
+  assert.strictEqual(r.operator, null);
+  assert.strictEqual(r.operator_name, null);
+  assert.strictEqual(r.operator_anonymity, null);
+});
+
+test('Operator object without anonymity field → operator_anonymity is null', () => {
+  const r = normalize('1.2.3.4', {
+    network: { asn: 'AS1', provider: 'X' },
+    location: {},
+    detections: { vpn: true },
+    operator: { name: 'SomeVPN', url: 'https://example.com' },
+  });
+  assert.strictEqual(r.operator_name, 'SomeVPN');
+  assert.strictEqual(r.operator_anonymity, null);
 });
 
 test('Residential clean IP - all detections false', () => {

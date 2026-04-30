@@ -84,6 +84,8 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       asn_org: result.enrichment.asn_org,
       organisation: result.enrichment.organisation,
       operator: result.enrichment.operator,
+      operator_name: result.enrichment.operator_name,
+      operator_anonymity: result.enrichment.operator_anonymity,
       country: result.enrichment.country,
       country_name: result.enrichment.country_name,
       region: result.enrichment.region,

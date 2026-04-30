@@ -46,6 +46,8 @@ async function networkFilter({ ip, userAgent, workspaceId }) {
       enrichment.is_proxy = pcVerdict.is_proxy;
       enrichment.proxy_type = pcVerdict.proxy_type;
       enrichment.operator = pcVerdict.operator;
+      enrichment.operator_name = pcVerdict.operator_name;
+      enrichment.operator_anonymity = pcVerdict.operator_anonymity;
       enrichment.risk_score = pcVerdict.risk_score;
       enrichment.confidence = pcVerdict.confidence;
       enrichment.hosting = pcVerdict.hosting;

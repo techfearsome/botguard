@@ -13,7 +13,14 @@ const ClickSchema = new mongoose.Schema({
   asn: Number,
   asn_org: String,         // ProxyCheck "provider" field, e.g. "OVH SAS"
   organisation: String,    // ProxyCheck "organisation" field, e.g. "Smtp.fr - Emailing Services"
-  operator: String,        // VPN/proxy operator name when ProxyCheck identifies one
+
+  // ProxyCheck "operator" - when the IP is identified as belonging to a known VPN/proxy service,
+  // this is a rich object with the operator's profile. Stored as Mixed because the shape varies
+  // and we want to preserve everything for forensics.
+  // Convenience denormalized fields for quick display:
+  operator: { type: mongoose.Schema.Types.Mixed, default: null },
+  operator_name: String,   // e.g. "NordVPN", "ExpressVPN", "VPN Unlimited"
+  operator_anonymity: String,  // 'low' | 'medium' | 'high'
   country: String,         // ISO alpha-2
   country_name: String,    // human-readable
   region: String,

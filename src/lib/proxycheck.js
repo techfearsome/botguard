@@ -196,6 +196,25 @@ function normalize(ip, raw) {
     proxyType = 'PUB';
   }
 
+  // Operator: ProxyCheck v3 returns this as either:
+  //   - null (most IPs - no operator info)
+  //   - a string (older/simpler responses)
+  //   - a rich object: { name, url, anonymity, popularity, services, protocols, policies, ... }
+  // We preserve the original shape for forensics, plus extract a convenience name + anonymity.
+  let operator = null;
+  let operatorName = null;
+  let operatorAnonymity = null;
+  if (raw.operator) {
+    if (typeof raw.operator === 'string') {
+      operator = { name: raw.operator };
+      operatorName = raw.operator;
+    } else if (typeof raw.operator === 'object') {
+      operator = raw.operator;
+      operatorName = raw.operator.name || null;
+      operatorAnonymity = raw.operator.anonymity || null;
+    }
+  }
+
   return {
     ip,
     asn,
@@ -208,7 +227,9 @@ function normalize(ip, raw) {
     type: network.type ? String(network.type).toLowerCase() : null,
     is_proxy: isProxy,
     proxy_type: proxyType,
-    operator: raw.operator || null,
+    operator,                 // full object (or {name} when string)
+    operator_name: operatorName,
+    operator_anonymity: operatorAnonymity,
     risk_score: typeof detections.risk === 'number' ? detections.risk : 0,
     confidence: typeof detections.confidence === 'number' ? detections.confidence : 0,
     hosting: !!detections.hosting,

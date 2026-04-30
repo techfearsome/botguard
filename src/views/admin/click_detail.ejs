@@ -65,7 +65,31 @@
       <tr><td>IP (hashed)</td><td><code><%= click.ip_hash || '–' %></code></td></tr>
       <tr><td>ASN</td><td><%= click.asn ? 'AS' + click.asn : '–' %> <small><%= click.asn_org || '' %></small></td></tr>
       <tr><td>Organisation</td><td><%= click.organisation || '–' %></td></tr>
-      <tr><td>Operator</td><td><%= click.operator || '–' %></td></tr>
+      <tr>
+        <td>Operator</td>
+        <td>
+          <% if (click.operator_name) { %>
+            <strong><%= click.operator_name %></strong>
+            <% if (click.operator_anonymity) { %>
+              <span class="badge badge-<%= click.operator_anonymity === 'high' ? 'block' : (click.operator_anonymity === 'medium' ? 'warn' : 'allow') %>">
+                anonymity: <%= click.operator_anonymity %>
+              </span>
+            <% } %>
+            <% if (click.operator?.url) { %>
+              <br><small><a href="<%= click.operator.url %>" target="_blank" rel="noopener"><%= click.operator.url %></a></small>
+            <% } %>
+            <% if (click.operator?.popularity) { %>
+              <small class="muted"> · popularity: <%= click.operator.popularity %></small>
+            <% } %>
+            <% if (Array.isArray(click.operator?.services) && click.operator.services.length) { %>
+              <br><small class="muted">services: <%= click.operator.services.join(', ') %></small>
+            <% } %>
+            <% if (Array.isArray(click.operator?.protocols) && click.operator.protocols.length) { %>
+              <br><small class="muted">protocols: <%= click.operator.protocols.join(', ') %></small>
+            <% } %>
+          <% } else { %>–<% } %>
+        </td>
+      </tr>
       <tr><td>Country</td>
         <td>
           <% if (click.country) { %>
