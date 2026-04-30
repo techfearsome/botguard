@@ -60,7 +60,15 @@ app.use(helmet({
 
 app.use(compression());
 app.use(cookieParser());
-app.use(express.json({ limit: '1mb' }));
+
+// Body parsing. We parse JSON for the standard content-type AND for text/plain,
+// because navigator.sendBeacon() in some browsers sends application/json blobs
+// with the content-type set to text/plain by the browser's blob handling.
+// This lets the auto-conv beacon work everywhere without needing a fetch fallback.
+app.use(express.json({
+  limit: '1mb',
+  type: ['application/json', 'text/plain'],
+}));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 

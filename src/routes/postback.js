@@ -130,8 +130,10 @@ router.post('/auto-conv', async (req, res) => {
       raw_payload: data,
     });
 
-    // Update denormalized counters on the click record
-    await Click.updateOne(
+    // Update denormalized counters on the click record. Capture the result so
+    // we can log whether the update actually matched - if matchedCount is 0,
+    // something is wrong (click_id race, dropped index, etc.).
+    const updateResult = await Click.updateOne(
       { click_id: clickId },
       {
         $inc: { conversion_count: 1, auto_conversion_count: 1 },
@@ -149,7 +151,38 @@ router.post('/auto-conv', async (req, res) => {
 
     logger.info('auto_conversion_recorded', {
       click_id: clickId, term, event_name: eventName,
+      // Critical observability: if matched=0, the conversion was created but the
+      // click record's denormalized counter wasn't incremented - the dashboard
+      // and click log will show CONV: – even though the conversion exists.
+      matched: updateResult.matchedCount,
+      modified: updateResult.modifiedCount,
     });
+
+    // In debug mode, return verbose response so it can be inspected in DevTools.
+    // This includes the updated counter values - useful for confirming whether
+    // the click record was actually updated.
+    if (debugMode) {
+      const updatedClick = await Click.findOne({ click_id: clickId })
+        .select('conversion_count auto_conversion_count last_conversion_at click_id workspace_id')
+        .lean();
+      return res.json({
+        ok: true,
+        conversion_id: conv._id.toString(),
+        debug: {
+          conversion_created: true,
+          click_record_match: updateResult.matchedCount,
+          click_record_modified: updateResult.modifiedCount,
+          updated_counters: updatedClick ? {
+            conversion_count: updatedClick.conversion_count,
+            auto_conversion_count: updatedClick.auto_conversion_count,
+            last_conversion_at: updatedClick.last_conversion_at,
+          } : null,
+          tip: updateResult.matchedCount === 0
+            ? 'CRITICAL: Click record was NOT found by updateOne despite findOne succeeding. This is unexpected.'
+            : 'Click record successfully updated. Refresh /admin/conversions to see this conversion.',
+        },
+      });
+    }
 
     return res.json({ ok: true, conversion_id: conv._id.toString() });
   } catch (err) {

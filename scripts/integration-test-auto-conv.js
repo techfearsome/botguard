@@ -15,12 +15,20 @@ require.cache[modelsPath + '.js'] = require.cache[modelsPath + '/index.js'] = {
   id: modelsPath, filename: modelsPath, loaded: true,
   exports: {
     Click: {
-      findOne: (q) => ({
-        lean: async () => stubState.click,
-      }),
+      findOne: (q) => {
+        const result = stubState.click;
+        return {
+          lean: async () => result,
+          select: () => ({ lean: async () => result }),
+        };
+      },
       updateOne: async (q, u) => {
         stubState.clickUpdates.push({ q, u });
-        return { acknowledged: true };
+        return {
+          acknowledged: true,
+          matchedCount: stubState.click ? 1 : 0,
+          modifiedCount: stubState.click ? 1 : 0,
+        };
       },
     },
     Conversion: {
@@ -35,7 +43,9 @@ require.cache[modelsPath + '.js'] = require.cache[modelsPath + '/index.js'] = {
 const postbackRouter = require(path.resolve(__dirname, '../src/routes/postback'));
 const app = express();
 app.use(cookieParser());
-app.use(express.json());
+// Match server.js body parser - accepts JSON for application/json AND text/plain
+// (some browsers send sendBeacon JSON with text/plain content-type)
+app.use(express.json({ type: ['application/json', 'text/plain'] }));
 app.use('/cb', postbackRouter);
 
 let pass = 0, fail = 0;
@@ -46,6 +56,27 @@ async function test(name, fn) {
 
 function postJson(server, urlPath, body, cookies = '') {
   return postJsonWithReferer(server, urlPath, body, cookies, '');
+}
+
+function postJsonWithContentType(server, urlPath, body, contentType) {
+  return new Promise((resolve, reject) => {
+    const port = server.address().port;
+    const data = JSON.stringify(body);
+    const req = http.request({
+      host: '127.0.0.1', port, path: urlPath, method: 'POST',
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': Buffer.byteLength(data),
+      },
+    }, (res) => {
+      let resBody = '';
+      res.on('data', (c) => resBody += c);
+      res.on('end', () => resolve({ status: res.statusCode, body: resBody, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
 }
 
 function postJsonWithReferer(server, urlPath, body, cookies, referer) {
@@ -242,6 +273,21 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     const json = JSON.parse(r.body);
     assert.strictEqual(json.dedup, true, 'should still dedup without debug flag');
     assert.strictEqual(stubState.conversions.length, 0);
+  });
+
+  await test('sendBeacon-style request with text/plain content-type still works', async () => {
+    // sendBeacon's Blob with type 'application/json' sometimes arrives with
+    // content-type 'text/plain' due to browser quirks. The JSON body must
+    // still be parsed.
+    stubState = makeState();
+    const r = await postJsonWithContentType(server, '/cb/auto-conv',
+      { click_id: 'CLICK123', term: 'call' },
+      'text/plain');
+    assert.strictEqual(r.status, 200, `expected 200, got ${r.status}: ${r.body}`);
+    const json = JSON.parse(r.body);
+    assert.strictEqual(json.ok, true);
+    assert.strictEqual(stubState.conversions.length, 1, 'conversion should be recorded');
+    assert.strictEqual(stubState.conversions[0].matched_term, 'call');
   });
 
   server.close();
