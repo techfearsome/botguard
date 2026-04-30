@@ -11,8 +11,8 @@
   </div>
 
   <div class="form-row">
-    <label>Slug</label>
-    <input type="text" name="slug" value="<%= lp?.slug || '' %>" pattern="[a-z0-9-]+" required>
+    <label>Slug <span class="muted">(optional — auto-generated from name if empty)</span></label>
+    <input type="text" name="slug" value="<%= lp?.slug || '' %>" pattern="[a-z0-9-]*" placeholder="leave blank to auto-generate">
   </div>
 
   <div class="form-row">

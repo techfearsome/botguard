@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
+const { resolveSlug } = require('../../lib/slug');
 const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist } = require('../../models');
 const { invalidateCache } = require('../../lib/asnLookup');
 const { DEFAULT_SLUG } = require('../../lib/bootstrap');
@@ -78,9 +79,20 @@ router.post('/campaigns', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const body = req.body || {};
   try {
+    // Auto-resolve slug from name if not provided, append digits on collision
+    const slug = await resolveSlug(body.slug, body.name, async (s) => {
+      return !!(await Campaign.exists({ workspace_id: ws._id, slug: s }));
+    });
+
+    // UTM gate config
+    const utmGate = {
+      enabled: body.utm_gate_enabled === 'on' || body.utm_gate_enabled === 'true',
+      required_keys: parseRequiredUtmKeys(body.utm_required_keys),
+    };
+
     await Campaign.create({
       workspace_id: ws._id,
-      slug: body.slug,
+      slug,
       name: body.name,
       status: body.status || 'active',
       landing_page_id: body.landing_page_id || null,
@@ -89,6 +101,7 @@ router.post('/campaigns', async (req, res) => {
       filter_config: {
         threshold: Number(body.threshold) || 70,
         mode: body.mode || 'log_only',
+        utm_gate: utmGate,
       },
       postback_url: body.postback_url || '',
       notes: body.notes || '',
@@ -98,6 +111,21 @@ router.post('/campaigns', async (req, res) => {
     res.status(400).send(`Error: ${err.message}`);
   }
 });
+
+// Parse UTM required keys from form input - either a comma-separated string
+// or an array (when multiple checkboxes share the name)
+function parseRequiredUtmKeys(input) {
+  const valid = new Set(['source', 'medium', 'campaign', 'term', 'content']);
+  let keys = [];
+  if (Array.isArray(input)) {
+    keys = input;
+  } else if (typeof input === 'string' && input.trim()) {
+    keys = input.split(',').map((s) => s.trim());
+  } else {
+    keys = ['source', 'medium', 'campaign'];   // sensible default
+  }
+  return keys.filter((k) => valid.has(k));
+}
 
 router.get('/campaigns/:id/edit', async (req, res) => {
   const ws = await resolveWorkspace(req);
@@ -111,11 +139,30 @@ router.post('/campaigns/:id', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const body = req.body || {};
   try {
+    // Resolve slug only if user actually edited it; if blank, derive from name.
+    // Exclude the current campaign from collision check so saving without slug change works.
+    const existing = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id });
+    if (!existing) return res.status(404).send('Campaign not found');
+
+    let slug = existing.slug;
+    const requestedSlug = body.slug || '';
+    if (requestedSlug !== existing.slug || !requestedSlug) {
+      slug = await resolveSlug(requestedSlug, body.name, async (s) => {
+        if (s === existing.slug) return false;   // its own current slug doesn't count as collision
+        return !!(await Campaign.exists({ workspace_id: ws._id, slug: s, _id: { $ne: existing._id } }));
+      });
+    }
+
+    const utmGate = {
+      enabled: body.utm_gate_enabled === 'on' || body.utm_gate_enabled === 'true',
+      required_keys: parseRequiredUtmKeys(body.utm_required_keys),
+    };
+
     await Campaign.updateOne(
       { _id: req.params.id, workspace_id: ws._id },
       {
         $set: {
-          slug: body.slug,
+          slug,
           name: body.name,
           status: body.status,
           landing_page_id: body.landing_page_id || null,
@@ -123,6 +170,7 @@ router.post('/campaigns/:id', async (req, res) => {
           source_profile: body.source_profile,
           'filter_config.threshold': Number(body.threshold) || 70,
           'filter_config.mode': body.mode,
+          'filter_config.utm_gate': utmGate,
           postback_url: body.postback_url || '',
           notes: body.notes || '',
         },
@@ -156,9 +204,13 @@ router.post('/pages', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const body = req.body || {};
   try {
+    const slug = await resolveSlug(body.slug, body.name, async (s) => {
+      return !!(await LandingPage.exists({ workspace_id: ws._id, slug: s }));
+    });
+
     await LandingPage.create({
       workspace_id: ws._id,
-      slug: body.slug,
+      slug,
       name: body.name,
       kind: body.kind || 'offer',
       html_template: body.html_template || '',
@@ -179,18 +231,34 @@ router.get('/pages/:id/edit', async (req, res) => {
 router.post('/pages/:id', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const body = req.body || {};
-  await LandingPage.updateOne(
-    { _id: req.params.id, workspace_id: ws._id },
-    {
-      $set: {
-        slug: body.slug,
-        name: body.name,
-        kind: body.kind,
-        html_template: body.html_template || '',
-      },
+  try {
+    const existing = await LandingPage.findOne({ _id: req.params.id, workspace_id: ws._id });
+    if (!existing) return res.status(404).send('Page not found');
+
+    let slug = existing.slug;
+    const requestedSlug = body.slug || '';
+    if (requestedSlug !== existing.slug || !requestedSlug) {
+      slug = await resolveSlug(requestedSlug, body.name, async (s) => {
+        if (s === existing.slug) return false;
+        return !!(await LandingPage.exists({ workspace_id: ws._id, slug: s, _id: { $ne: existing._id } }));
+      });
     }
-  );
-  res.redirect('/admin/pages');
+
+    await LandingPage.updateOne(
+      { _id: req.params.id, workspace_id: ws._id },
+      {
+        $set: {
+          slug,
+          name: body.name,
+          kind: body.kind,
+          html_template: body.html_template || '',
+        },
+      }
+    );
+    res.redirect('/admin/pages');
+  } catch (err) {
+    res.status(400).send(`Error: ${err.message}`);
+  }
 });
 
 router.post('/pages/:id/delete', async (req, res) => {

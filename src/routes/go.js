@@ -5,6 +5,7 @@ const { Workspace, Campaign, LandingPage, Click } = require('../models');
 const { buildClickDoc, writeClick } = require('../lib/click');
 const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
+const { utmGateCheck } = require('../filters/utmGate');
 const { hashFingerprint, behaviorFilter } = require('../filters/behavior');
 const { decide } = require('../scoring/decide');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
@@ -37,6 +38,28 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
 
     // Build base click record
     const doc = buildClickDoc({ req, workspace, campaign });
+
+    // --- UTM gate (runs BEFORE the filter chain so we don't waste a ProxyCheck call) ---
+    const gateResult = utmGateCheck({ utm: doc.utm, campaign });
+    if (gateResult.blocked) {
+      // Gate failed. Skip the filter chain entirely - this visit is already going to the safe page.
+      doc.scores = {
+        network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
+        total: 0,
+        profile_used: campaign.source_profile,
+        flags: gateResult.flags,
+      };
+      doc.decision = 'block';
+      doc.decision_reason = `utm_gate:missing_${gateResult.missing_keys.join('_')}`;
+      doc.mode_at_decision = 'enforce';   // gate is always enforcing - it's not a score
+      doc.page_rendered = 'safe';
+
+      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
+
+      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+      return res.status(200).type('html').send(html);
+    }
 
     // Run the filter chain
     const result = await runFilterChain({
@@ -216,6 +239,12 @@ function renderStubPage({ campaign, click_id }) {
 <div class="card"><strong>Click recorded</strong><p>Click ID: <code>${click_id}</code></p></div>
 <div class="card"><strong>Test conversion</strong><p><code>GET /px/conv?cid=${click_id}&value=10</code></p></div>
 </body></html>`;
+}
+
+function pickVariantHtml(landingPage) {
+  if (!landingPage) return '';
+  const variant = pickVariant(landingPage);
+  return variant ? variant.html : (landingPage.html_template || '');
 }
 
 function renderSafeFallback() {

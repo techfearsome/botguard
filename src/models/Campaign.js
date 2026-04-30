@@ -20,6 +20,17 @@ const CampaignSchema = new mongoose.Schema({
     threshold: { type: Number, default: 70, min: 0, max: 100 },
     mode: { type: String, enum: ['log_only', 'enforce'], default: 'log_only' },
     rule_overrides: { type: mongoose.Schema.Types.Mixed, default: {} },
+
+    // UTM gate: when enabled, visits missing required UTM keys are routed to safe page.
+    // Useful to keep direct/scraped visits off the offer.
+    utm_gate: {
+      enabled: { type: Boolean, default: false },
+      required_keys: {
+        type: [String],
+        enum: ['source', 'medium', 'campaign', 'term', 'content'],
+        default: ['source', 'medium', 'campaign'],
+      },
+    },
   },
 
   // Conversion tracking

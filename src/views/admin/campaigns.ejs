@@ -20,6 +20,7 @@
       <th>Slug / URL</th>
       <th>Profile</th>
       <th>Mode</th>
+      <th>UTM Gate</th>
       <th>Status</th>
       <th>Landing Page</th>
       <th></th>
@@ -30,6 +31,14 @@
         <td><code>/go/<%= c.slug %></code></td>
         <td><%= c.source_profile %></td>
         <td><span class="badge badge-mode-<%= c.filter_config?.mode %>"><%= c.filter_config?.mode || 'log_only' %></span></td>
+        <td>
+          <% if (c.filter_config?.utm_gate?.enabled) { %>
+            <span class="badge badge-allow">on</span>
+            <small class="muted"><%= (c.filter_config.utm_gate.required_keys || []).join(', ') %></small>
+          <% } else { %>
+            <span class="badge badge-status-archived">off</span>
+          <% } %>
+        </td>
         <td><span class="badge badge-status-<%= c.status %>"><%= c.status %></span></td>
         <td><%= c.landing_page_id?.name || '–' %></td>
         <td>

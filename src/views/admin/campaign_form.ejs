@@ -11,8 +11,9 @@
   </div>
 
   <div class="form-row">
-    <label>Slug <span class="muted">(used in URL: /go/&lt;slug&gt;)</span></label>
-    <input type="text" name="slug" value="<%= campaign?.slug || '' %>" pattern="[a-z0-9-]+" required>
+    <label>Slug <span class="muted">(optional — auto-generated from name if empty)</span></label>
+    <input type="text" name="slug" value="<%= campaign?.slug || '' %>" pattern="[a-z0-9-]*" placeholder="leave blank to auto-generate">
+    <small class="muted">URL will be: <code>/go/&lt;slug&gt;</code>. If the generated slug already exists, a random suffix is appended.</small>
   </div>
 
   <div class="form-row">
@@ -71,6 +72,39 @@
       <option value="enforce" <%= campaign?.filter_config?.mode === 'enforce' ? 'selected' : '' %>>enforce — actually block bad traffic</option>
     </select>
   </div>
+
+  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+    <legend style="font-weight:600; padding:0 6px;">UTM Gate</legend>
+    <p class="muted" style="margin-top:0;">
+      When enabled, visits missing required UTM keys are routed to the safe page. Useful to keep
+      direct visits, scrapers, and stripped social shares off the offer page.
+    </p>
+
+    <div class="form-row">
+      <label style="font-weight:normal;">
+        <input type="checkbox" name="utm_gate_enabled"
+          <%= campaign?.filter_config?.utm_gate?.enabled ? 'checked' : '' %>>
+        Enable UTM gate
+      </label>
+    </div>
+
+    <div class="form-row">
+      <label>Required UTM keys</label>
+      <%
+        const requiredKeys = campaign?.filter_config?.utm_gate?.required_keys || ['source','medium','campaign'];
+      %>
+      <div style="display:flex; gap:14px; flex-wrap:wrap;">
+        <% ['source', 'medium', 'campaign', 'term', 'content'].forEach(k => { %>
+          <label style="font-weight:normal;">
+            <input type="checkbox" name="utm_required_keys" value="<%= k %>"
+              <%= requiredKeys.includes(k) ? 'checked' : '' %>>
+            utm_<%= k %>
+          </label>
+        <% }) %>
+      </div>
+      <small class="muted">A visit must have ALL the checked keys present (and non-empty) to reach the offer.</small>
+    </div>
+  </fieldset>
 
   <div class="form-row">
     <label>S2S Postback URL <span class="muted">(optional)</span></label>

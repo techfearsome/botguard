@@ -67,6 +67,22 @@ The blacklist can flip a "clean" verdict to "proxy", but never the reverse — P
 ### Multi-tenancy seams
 Even though week 1 is single-tenant, every collection has `workspace_id` and the `/go` route accepts both `/go/:slug` (single tenant) and `/go/:workspaceSlug/:campaignSlug` (multi-tenant). When you flip on SaaS later, you add signup/billing — the data layer is already correct.
 
+## Week 3 status
+
+**Done in week 3 (this build):**
+- **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name (lowercase, accented characters normalized, special chars dropped, max 60 chars)
+- **Slug collision handling** — if the derived (or provided) slug already exists, a random 4-digit suffix is appended; suffix length grows with persistent collisions
+- **UTM gate filter** — per-campaign toggle; when on, visits missing required UTM keys (configurable: source/medium/campaign by default, plus optional term/content) are routed to the safe page without burning a ProxyCheck call
+- **Safe-page fallback** — if a campaign has the UTM gate on but no `safe_page_id` configured, a built-in "Page not available" message is shown
+- UTM gate state shown on the campaigns list with required keys
+- 26 new unit tests (slug + UTM gate logic) and 14 integration tests (route handlers with stubbed Mongo)
+- Seed script now creates a `/go/gated` campaign demonstrating the UTM gate
+
+**Not yet (week 4+):**
+- FB CAPI / Google Enhanced Conversions outbound conversion forwarding
+- Multi-step funnel chaining (offer → upsell → thank-you, preserving click_id)
+- Outlook SafeLinks rescan deduplication
+
 ## Setup
 
 ```bash

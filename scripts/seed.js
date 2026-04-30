@@ -61,8 +61,52 @@ async function run() {
     console.log('Created campaign:', camp.slug);
   }
 
-  console.log(`\nReady. Try: ${process.env.BASE_URL || 'http://localhost:3000'}/go/demo?utm_source=test&utm_medium=email&utm_campaign=launch`);
-  console.log(`Admin:  ${process.env.BASE_URL || 'http://localhost:3000'}/admin`);
+  // A second campaign with the UTM gate enabled, to demonstrate the feature.
+  // Visits to /go/gated without utm_source/medium/campaign go to the safe page.
+  let safeLp = await LandingPage.findOne({ workspace_id: ws._id, slug: 'safe-fallback' });
+  if (!safeLp) {
+    safeLp = await LandingPage.create({
+      workspace_id: ws._id,
+      slug: 'safe-fallback',
+      name: 'Safe Fallback',
+      kind: 'safe',
+      html_template: `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Page not available</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:640px;margin:80px auto;padding:0 20px;text-align:center;color:#666}</style>
+</head><body><h1>Page not available</h1>
+<p>This page is not available in your region.</p>
+</body></html>`,
+    });
+    console.log('Created safe page:', safeLp.slug);
+  }
+
+  let gated = await Campaign.findOne({ workspace_id: ws._id, slug: 'gated' });
+  if (!gated) {
+    gated = await Campaign.create({
+      workspace_id: ws._id,
+      slug: 'gated',
+      name: 'UTM-Gated Demo',
+      status: 'active',
+      source_profile: 'paid_ads',
+      landing_page_id: lp._id,
+      safe_page_id: safeLp._id,
+      filter_config: {
+        threshold: 70,
+        mode: 'log_only',
+        utm_gate: {
+          enabled: true,
+          required_keys: ['source', 'medium', 'campaign'],
+        },
+      },
+    });
+    console.log('Created UTM-gated campaign:', gated.slug);
+  }
+
+  console.log(`\nReady. Try:`);
+  console.log(`  Open campaign:   ${process.env.BASE_URL || 'http://localhost:3000'}/go/demo?utm_source=test&utm_medium=email&utm_campaign=launch`);
+  console.log(`  UTM-gated:       ${process.env.BASE_URL || 'http://localhost:3000'}/go/gated?utm_source=fb&utm_medium=cpc&utm_campaign=q4   (offer)`);
+  console.log(`  UTM-gated fail:  ${process.env.BASE_URL || 'http://localhost:3000'}/go/gated   (safe page - missing UTMs)`);
+  console.log(`  Admin:           ${process.env.BASE_URL || 'http://localhost:3000'}/admin`);
 
   await mongoose.disconnect();
 }
