@@ -16,6 +16,7 @@ const ConversionSchema = new mongoose.Schema({
   matched_term: { type: String },                  // which configured term matched ("Download", "Subscribe")
   matched_text: { type: String },                  // the actual button text the visitor clicked
   matched_element: { type: String },               // tag name + a couple identifiers for forensics
+  matched_href: { type: String },                  // for <a> tags - href value, useful for tel: and mailto:
   page_url: { type: String },                      // where the click happened
 
   raw_payload: mongoose.Schema.Types.Mixed,

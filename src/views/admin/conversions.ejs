@@ -150,7 +150,9 @@
           <td>
             <% if (c.matched_term) { %>
               <code><%= c.matched_term %></code>
-              <% if (c.matched_text) { %>
+              <% if (c.matched_href && c.matched_href.startsWith('tel:')) { %>
+                <br><small class="muted">📞 <%= c.matched_href.replace('tel:', '') %></small>
+              <% } else if (c.matched_text) { %>
                 <br><small class="muted" title="<%= c.matched_text %>">on: "<%= c.matched_text.length > 30 ? c.matched_text.slice(0, 30) + '…' : c.matched_text %>"</small>
               <% } %>
             <% } else { %>–<% } %>

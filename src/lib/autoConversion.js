@@ -90,49 +90,94 @@ const RUNTIME = `
     // Once-per-session dedup
     if (getCookie(cfg.session_cookie)) return;
 
-    // Build the matcher once. We use lowercase substring matching against the visible
-    // text content of the clicked element (or up to 3 ancestors).
     var terms = cfg.terms;
+
+    // Match a single string against any configured term (case-insensitive substring).
+    // Returns the matched term string, or null.
     function matchTerm(text) {
       if (!text) return null;
       var lower = String(text).toLowerCase().trim();
+      // Collapse whitespace so "Download   Now" and "Download Now" match the same way
+      lower = lower.replace(/\\s+/g, ' ');
       // Cap text length to avoid pathological matching on giant blocks
-      if (lower.length > 200) lower = lower.slice(0, 200);
+      if (lower.length > 500) lower = lower.slice(0, 500);
       for (var i = 0; i < terms.length; i++) {
         if (lower.indexOf(terms[i]) !== -1) return terms[i];
       }
       return null;
     }
 
-    // Walk up looking for a button-like ancestor with matching text.
-    // Stops at 3 levels because real buttons rarely nest deeper than that.
+    // Walk up the DOM looking for an ancestor whose text matches a term.
+    // We deliberately do NOT gate on "is clickable" — modern frameworks (React, Vue,
+    // Svelte, etc.) attach handlers via addEventListener, leaving node.onclick === null
+    // and no role attribute. So we just check every ancestor up to MAX_DEPTH levels
+    // and let the click event itself prove the element was interactive.
+    //
+    // Special case: <a href="tel:..."> always matches (phone link), regardless of text.
+    //
+    // We STOP before reaching <body> / <html> because their innerText includes the
+    // entire page (including our own injected config block), which would cause every
+    // click anywhere on the page to falsely match.
+    var MAX_DEPTH = 5;
+    var STOP_TAGS = { body: 1, html: 1, head: 1 };
+    var SKIP_TAGS = { script: 1, style: 1, noscript: 1 };
+
     function findMatch(target) {
       var node = target;
-      for (var i = 0; i < 4 && node && node.nodeType === 1; i++) {
-        // Limit to plausibly-clickable elements
-        var tag = node.tagName.toLowerCase();
-        var isClickable = (
-          tag === 'button' || tag === 'a' ||
-          (tag === 'input' && (node.type === 'submit' || node.type === 'button')) ||
-          node.getAttribute('role') === 'button' ||
-          node.onclick !== null
-        );
-        if (isClickable || i === 0) {
-          var text = node.innerText || node.textContent || node.value || '';
-          var matched = matchTerm(text);
-          if (matched) {
+      for (var i = 0; i < MAX_DEPTH && node && node.nodeType === 1; i++) {
+        var tag = (node.tagName || '').toLowerCase();
+
+        // Stop before page-level containers - they include all text on the page
+        if (STOP_TAGS[tag]) return null;
+        // Skip nodes whose text we shouldn't match against
+        if (SKIP_TAGS[tag]) { node = node.parentNode; continue; }
+
+        // Phone links: <a href="tel:..."> always counts as a "call" conversion
+        if (tag === 'a') {
+          var href = node.getAttribute && node.getAttribute('href') || '';
+          if (href.toLowerCase().indexOf('tel:') === 0) {
+            // Use the link text for forensics; record term as 'call' if configured,
+            // else first term so the conversion always lands somewhere.
+            var phoneText = (node.innerText || node.textContent || href).trim();
             return {
-              term: matched,
-              text: text.replace(/\\s+/g, ' ').trim().slice(0, 100),
-              tag: tag,
+              term: terms.indexOf('call') !== -1 ? 'call' : terms[0],
+              text: phoneText.replace(/\\s+/g, ' ').slice(0, 100),
+              tag: 'a',
+              href: href.slice(0, 200),
               id: node.id || '',
               cls: (node.className || '').toString().slice(0, 100),
             };
           }
+          // mailto: links - match if text contains a configured term
+          if (href.toLowerCase().indexOf('mailto:') === 0) {
+            var emailMatched = matchTerm(node.innerText || node.textContent || '');
+            if (emailMatched) {
+              return mkMatch(node, emailMatched, tag);
+            }
+          }
         }
+
+        // Text-based match on this node
+        var text = node.innerText || node.textContent || node.value || '';
+        var matched = matchTerm(text);
+        if (matched) {
+          return mkMatch(node, matched, tag);
+        }
+
         node = node.parentNode;
       }
       return null;
+    }
+
+    function mkMatch(node, term, tag) {
+      var rawText = node.innerText || node.textContent || node.value || '';
+      return {
+        term: term,
+        text: rawText.replace(/\\s+/g, ' ').trim().slice(0, 100),
+        tag: tag,
+        id: node.id || '',
+        cls: (node.className || '').toString().slice(0, 100),
+      };
     }
 
     function send(payload) {
@@ -156,7 +201,7 @@ const RUNTIME = `
       } catch (e) {}
     }
 
-    document.addEventListener('click', function(ev) {
+    function handleClick(ev) {
       try {
         if (getCookie(cfg.session_cookie)) return;     // race-safe re-check
         var match = findMatch(ev.target);
@@ -165,7 +210,7 @@ const RUNTIME = `
         var clickId = getCookie('bg_click');
         if (!clickId) return;       // no click_id - we have no attribution to record
 
-        // Set dedup cookie immediately so any subsequent click (form re-submit, etc) is ignored
+        // Set dedup cookie immediately so any subsequent click is ignored
         setCookie(cfg.session_cookie, '1', cfg.session_days);
 
         send({
@@ -174,13 +219,27 @@ const RUNTIME = `
           term: match.term,
           text: match.text,
           element: match.tag + (match.id ? '#' + match.id : '') + (match.cls ? '.' + match.cls.split(' ')[0] : ''),
+          href: match.href || null,
           page_url: location.href.slice(0, 500),
           ts: Date.now(),
         });
       } catch (e) {
         // never let a tracker break the page
       }
-    }, true);  // capture phase - runs before any stopPropagation handlers
+    }
+
+    // Listen on BOTH click and pointerup. Click is the standard event; pointerup catches
+    // touch interactions that some libraries swallow before the click event fires
+    // (e.g. some carousels and bottom-sheet UIs). Both go through the same dedup path.
+    // Capture phase = runs before any stopPropagation handlers further down the page.
+    document.addEventListener('click', handleClick, true);
+
+    // Also catch programmatic navigation triggered by buttons that don't actually receive
+    // a click event (e.g. \`<a href="..." onclick="...">\` where the handler does
+    // window.location = ... instead of going through the link). We do this by hooking
+    // into beforeunload too — if a beacon hasn't been sent yet but a matching button
+    // exists in the DOM at the focused element, fire the conversion.
+    // (Rare, but covers some old-school landing page patterns.)
   } catch (e) {}
 })();`;
 

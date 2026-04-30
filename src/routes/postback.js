@@ -99,6 +99,7 @@ router.post('/auto-conv', async (req, res) => {
     const term = sanitizeShort(data.term);
     const text = sanitizeShort(data.text, 200);
     const element = sanitizeShort(data.element, 200);
+    const href = sanitizeShort(data.href, 200);
     const pageUrl = sanitizeShort(data.page_url, 500);
     const eventName = sanitizeShort(data.event_name) || 'auto_click';
 
@@ -113,6 +114,7 @@ router.post('/auto-conv', async (req, res) => {
       matched_term: term,
       matched_text: text,
       matched_element: element,
+      matched_href: href,
       page_url: pageUrl,
       raw_payload: data,
     });
