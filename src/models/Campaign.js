@@ -9,18 +9,6 @@ const CampaignSchema = new mongoose.Schema({
   landing_page_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
   safe_page_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
 
-  // Per-device-class page overrides. When set, these win over landing_page_id / safe_page_id
-  // for that specific device class. When unset, the campaign-level defaults are used.
-  // Device classes: 'iphone' | 'android' | 'windows' | 'mac' | 'linux' | 'other'
-  device_pages: {
-    iphone:  { offer: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' }, safe: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' } },
-    android: { offer: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' }, safe: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' } },
-    windows: { offer: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' }, safe: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' } },
-    mac:     { offer: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' }, safe: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' } },
-    linux:   { offer: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' }, safe: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' } },
-    other:   { offer: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' }, safe: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' } },
-  },
-
   // Which profile to apply for scoring
   source_profile: {
     type: String,

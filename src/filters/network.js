@@ -25,7 +25,7 @@ const { detectPrefetcher } = require('../lib/prefetchers');
  *     overrides: { force_decision?, force_flag? }
  *   }
  */
-async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
+async function networkFilter({ ip, userAgent, workspaceId }) {
   const flags = [];
   let score = 0;
   const enrichment = {};
@@ -83,33 +83,6 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
     }
   } else {
     flags.push('no_ip');
-  }
-
-  // Cloudflare provides geo headers for free - use them as a fallback when ProxyCheck
-  // didn't give us a country (no key, lookup failed, IPv6 quirks, etc).
-  // CF-IPCountry: ISO alpha-2 code. Special value 'XX' = unknown, 'T1' = Tor exit.
-  if (!enrichment.country && headers['cf-ipcountry']) {
-    const cfCountry = String(headers['cf-ipcountry']).toUpperCase();
-    if (cfCountry === 'T1') {
-      // Cloudflare flagged as Tor - merge into proxy verdict if not already set
-      enrichment.country = null;
-      if (!enrichment.is_proxy) {
-        enrichment.is_proxy = true;
-        enrichment.proxy_type = 'TOR';
-        flags.push('cf_tor_flagged');
-        score += 100;
-      }
-    } else if (cfCountry !== 'XX' && /^[A-Z]{2}$/.test(cfCountry)) {
-      enrichment.country = cfCountry;
-      flags.push('cf_country_fallback');
-    }
-  }
-  // CF-IPCity / CF-Region (Cloudflare Enterprise plans only - silently no-op otherwise)
-  if (!enrichment.city && headers['cf-ipcity']) {
-    enrichment.city = String(headers['cf-ipcity']);
-  }
-  if (!enrichment.region && headers['cf-region']) {
-    enrichment.region = String(headers['cf-region']);
   }
 
   // --- 2. ASN blacklist overlay (the ProxyCheck gap fix) ---

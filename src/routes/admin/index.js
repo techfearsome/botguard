@@ -2,8 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { resolveSlug } = require('../../lib/slug');
-const cache = require('../../lib/cache');
-const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist, SitePage } = require('../../models');
+const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist } = require('../../models');
 const { invalidateCache } = require('../../lib/asnLookup');
 const { DEFAULT_SLUG } = require('../../lib/bootstrap');
 const { replay } = require('../../lib/replay');
@@ -18,13 +17,6 @@ router.get('/logout', logout);
 
 // --- Everything below this gate requires authentication ---
 router.use(requireAdmin);
-
-// Admin pages must never be cached (would leak session-specific data via shared CDN cache)
-router.use((req, res, next) => {
-  res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');
-  res.set('CDN-Cache-Control', 'no-store');
-  next();
-});
 
 // Resolve workspace - week 1 single tenant, defaults to env var workspace
 async function resolveWorkspace(req) {
@@ -108,9 +100,6 @@ router.post('/campaigns', async (req, res) => {
     // Proxy gate config
     const proxyGate = parseProxyGate(body);
 
-    // Per-device pages
-    const devicePages = parseDevicePages(body.device_pages);
-
     await Campaign.create({
       workspace_id: ws._id,
       slug,
@@ -118,7 +107,6 @@ router.post('/campaigns', async (req, res) => {
       status: body.status || 'active',
       landing_page_id: body.landing_page_id || null,
       safe_page_id: body.safe_page_id || null,
-      device_pages: devicePages,
       source_profile: body.source_profile || 'mixed',
       filter_config: {
         threshold: Number(body.threshold) || 70,
@@ -190,43 +178,6 @@ function clamp(n, min, max, fallback) {
   return Math.max(min, Math.min(max, n));
 }
 
-// Parse the device_pages nested form input: { iphone: { offer: id, safe: id }, ... }
-// Empty strings (—use default—) are converted to null so Mongoose stores nothing for them.
-function parseDevicePages(input) {
-  const out = {};
-  const validClasses = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
-  if (!input || typeof input !== 'object') return out;
-  for (const cls of validClasses) {
-    const entry = input[cls];
-    if (!entry || typeof entry !== 'object') continue;
-    const offer = entry.offer && entry.offer.trim() ? entry.offer : null;
-    const safe = entry.safe && entry.safe.trim() ? entry.safe : null;
-    if (offer || safe) {
-      out[cls] = {};
-      if (offer) out[cls].offer = offer;
-      if (safe) out[cls].safe = safe;
-    }
-  }
-  return out;
-}
-
-// Parse auto-conversion settings from the page form. Terms come in as a textarea
-// (one term per line). We strip whitespace, drop empties, dedupe, and limit to 50 terms
-// to prevent abuse where someone pastes a 10MB file.
-function parseAutoConversion(body) {
-  const enabled = body.auto_conversion_enabled === 'on' || body.auto_conversion_enabled === 'true';
-  let terms = [];
-  if (typeof body.auto_conversion_terms === 'string' && body.auto_conversion_terms.trim()) {
-    terms = body.auto_conversion_terms
-      .split(/[\r\n]+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0 && s.length <= 50);
-    terms = Array.from(new Set(terms)).slice(0, 50);
-  }
-  const eventName = (body.auto_conversion_event_name || 'auto_click').trim().slice(0, 50) || 'auto_click';
-  return { enabled, terms, event_name: eventName };
-}
-
 router.get('/campaigns/:id/edit', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
@@ -259,7 +210,6 @@ router.post('/campaigns/:id', async (req, res) => {
     };
     const countryGate = parseCountryGate(body);
     const proxyGate = parseProxyGate(body);
-    const devicePages = parseDevicePages(body.device_pages);
 
     await Campaign.updateOne(
       { _id: req.params.id, workspace_id: ws._id },
@@ -270,7 +220,6 @@ router.post('/campaigns/:id', async (req, res) => {
           status: body.status,
           landing_page_id: body.landing_page_id || null,
           safe_page_id: body.safe_page_id || null,
-          device_pages: devicePages,
           source_profile: body.source_profile,
           'filter_config.threshold': Number(body.threshold) || 70,
           'filter_config.mode': body.mode,
@@ -282,9 +231,6 @@ router.post('/campaigns/:id', async (req, res) => {
         },
       }
     );
-    // Invalidate both old and new slug to handle slug renames
-    await cache.invalidateCampaign(ws._id, existing.slug);
-    if (slug !== existing.slug) await cache.invalidateCampaign(ws._id, slug);
     res.redirect('/admin/campaigns');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -293,9 +239,7 @@ router.post('/campaigns/:id', async (req, res) => {
 
 router.post('/campaigns/:id/delete', async (req, res) => {
   const ws = await resolveWorkspace(req);
-  const camp = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).select('slug').lean();
   await Campaign.deleteOne({ _id: req.params.id, workspace_id: ws._id });
-  if (camp) await cache.invalidateCampaign(ws._id, camp.slug);
   res.redirect('/admin/campaigns');
 });
 
@@ -325,9 +269,7 @@ router.post('/pages', async (req, res) => {
       name: body.name,
       kind: body.kind || 'offer',
       html_template: body.html_template || '',
-      auto_conversion: parseAutoConversion(body),
     });
-    // Invalidate any campaigns whose render path might cache this page (cache is on campaign-by-slug)
     res.redirect('/admin/pages');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -365,7 +307,6 @@ router.post('/pages/:id', async (req, res) => {
           name: body.name,
           kind: body.kind,
           html_template: body.html_template || '',
-          auto_conversion: parseAutoConversion(body),
         },
       }
     );
@@ -483,61 +424,6 @@ router.post('/settings/api-keys/:key/delete', async (req, res) => {
     { $pull: { api_keys: { key: req.params.key } } }
   );
   res.redirect('/admin/settings');
-});
-
-// ---------- Site pages (homepage, privacy, terms, etc.) ----------
-router.get('/site', async (req, res) => {
-  const ws = await resolveWorkspace(req);
-  const pages = await SitePage.find({ workspace_id: ws._id }).sort({ slug: 1 }).lean();
-  // Pre-load the well-known slugs even if they don't exist yet, so the UI shows them
-  const knownSlugs = ['home', 'privacy', 'terms'];
-  const bySlug = Object.fromEntries(pages.map((p) => [p.slug, p]));
-  const enriched = knownSlugs
-    .map((slug) => bySlug[slug] || { slug, title: '', html: '', enabled: false, _placeholder: true })
-    .concat(pages.filter((p) => !knownSlugs.includes(p.slug)));
-  res.render('admin/site', { ws, pages: enriched, page: 'site' });
-});
-
-router.get('/site/:slug/edit', async (req, res) => {
-  const ws = await resolveWorkspace(req);
-  const slug = String(req.params.slug || '').toLowerCase();
-  let sp = await SitePage.findOne({ workspace_id: ws._id, slug }).lean();
-  if (!sp) {
-    sp = { slug, title: '', html: '', enabled: true, meta: {}, _new: true };
-  }
-  res.render('admin/site_form', { ws, sp, page: 'site' });
-});
-
-router.post('/site/:slug', async (req, res) => {
-  const ws = await resolveWorkspace(req);
-  const slug = String(req.params.slug || '').toLowerCase().trim();
-  if (!/^[a-z0-9-]+$/.test(slug)) return res.status(400).send('Invalid slug');
-
-  const body = req.body || {};
-  const update = {
-    title: body.title || '',
-    html: body.html || '',
-    enabled: body.enabled === 'on' || body.enabled === 'true',
-    meta: {
-      description: body.meta_description || '',
-      og_image: body.meta_og_image || '',
-      noindex: body.meta_noindex === 'on',
-    },
-  };
-
-  await SitePage.updateOne(
-    { workspace_id: ws._id, slug },
-    { $set: update, $setOnInsert: { workspace_id: ws._id, slug, created_at: new Date() } },
-    { upsert: true }
-  );
-  res.redirect('/admin/site');
-});
-
-router.post('/site/:slug/delete', async (req, res) => {
-  const ws = await resolveWorkspace(req);
-  const slug = String(req.params.slug || '').toLowerCase();
-  await SitePage.deleteOne({ workspace_id: ws._id, slug });
-  res.redirect('/admin/site');
 });
 
 // ---------- Click detail ----------

@@ -42,7 +42,6 @@
       <th>Device</th>
       <th>UA</th>
       <th>InApp</th>
-      <th>Conv</th>
       <th>Decision</th>
     </tr>
     <% clicks.forEach(c => { %>
@@ -77,14 +76,6 @@
           <% if (c.ua_parsed?.is_bot) { %><br><span class="badge badge-warn">bot-ish</span><% } %>
         </td>
         <td><%= c.in_app_browser || '–' %></td>
-        <td>
-          <% if (c.conversion_count > 0) { %>
-            <span class="badge badge-allow"><%= c.conversion_count %></span>
-            <% if (c.auto_conversion_count > 0) { %>
-              <br><small class="muted" title="<%= c.auto_conversion_count %> auto-detected">auto</small>
-            <% } %>
-          <% } else { %>–<% } %>
-        </td>
         <td><span class="badge badge-<%= c.decision %>"><%= c.decision %></span></td>
       </tr>
     <% }) %>

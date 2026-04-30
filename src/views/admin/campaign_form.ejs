@@ -35,99 +35,29 @@
     <small class="muted">Determines how filter scores are weighted. Pick the dominant traffic source for this campaign.</small>
   </div>
 
-  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
-    <legend style="font-weight:600; padding:0 6px;">Default Pages</legend>
-    <p class="muted" style="margin-top:0;">
-      Used when no per-device override is set below. The Offer page is shown to allowed visitors;
-      the Safe page is shown when a gate fires (UTM / country / proxy / score).
-    </p>
+  <div class="form-row">
+    <label>Landing Page (offer)</label>
+    <select name="landing_page_id">
+      <option value="">– None (renders stub) –</option>
+      <% pages.filter(p => p.kind !== 'safe').forEach(p => { %>
+        <option value="<%= p._id %>" <%= campaign?.landing_page_id?.toString() === p._id.toString() ? 'selected' : '' %>>
+          <%= p.name %>
+        </option>
+      <% }) %>
+    </select>
+  </div>
 
-    <div class="grid-2">
-      <div class="form-row">
-        <label>Offer page (default)</label>
-        <select name="landing_page_id">
-          <option value="">– None (renders stub) –</option>
-          <% pages.filter(p => p.kind !== 'safe').forEach(p => { %>
-            <option value="<%= p._id %>" <%= campaign?.landing_page_id?.toString() === p._id.toString() ? 'selected' : '' %>>
-              <%= p.name %>
-            </option>
-          <% }) %>
-        </select>
-      </div>
-
-      <div class="form-row">
-        <label>Safe page (default)</label>
-        <select name="safe_page_id">
-          <option value="">– None –</option>
-          <% pages.filter(p => p.kind === 'safe').forEach(p => { %>
-            <option value="<%= p._id %>" <%= campaign?.safe_page_id?.toString() === p._id.toString() ? 'selected' : '' %>>
-              <%= p.name %>
-            </option>
-          <% }) %>
-        </select>
-      </div>
-    </div>
-  </fieldset>
-
-  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
-    <legend style="font-weight:600; padding:0 6px;">Per-Device Pages (optional)</legend>
-    <p class="muted" style="margin-top:0;">
-      Override the default Offer / Safe page per device class. Useful for app campaigns that
-      want to deep-link to App Store on iPhone, Play Store on Android, etc. Leave any cell as
-      "use default" to fall back to the campaign-wide default above.
-    </p>
-
-    <%
-      const dp = campaign?.device_pages || {};
-      const deviceClasses = [
-        { key: 'iphone',  label: 'iPhone' },
-        { key: 'android', label: 'Android' },
-        { key: 'windows', label: 'Windows' },
-        { key: 'mac',     label: 'Mac' },
-        { key: 'linux',   label: 'Linux' },
-        { key: 'other',   label: 'Other (iPad, TV, unknown)' },
-      ];
-      const offerPages = pages.filter(p => p.kind !== 'safe');
-      const safePages  = pages.filter(p => p.kind === 'safe');
-    %>
-
-    <table class="table table-dense" style="margin-top:8px;">
-      <thead>
-        <tr>
-          <th>Device class</th>
-          <th>Offer page</th>
-          <th>Safe page</th>
-        </tr>
-      </thead>
-      <tbody>
-        <% deviceClasses.forEach(d => { %>
-          <tr>
-            <td><strong><%= d.label %></strong></td>
-            <td>
-              <select name="device_pages[<%= d.key %>][offer]" style="width:100%;">
-                <option value="">— use default —</option>
-                <% offerPages.forEach(p => { %>
-                  <option value="<%= p._id %>" <%= dp[d.key]?.offer?.toString() === p._id.toString() ? 'selected' : '' %>>
-                    <%= p.name %>
-                  </option>
-                <% }) %>
-              </select>
-            </td>
-            <td>
-              <select name="device_pages[<%= d.key %>][safe]" style="width:100%;">
-                <option value="">— use default —</option>
-                <% safePages.forEach(p => { %>
-                  <option value="<%= p._id %>" <%= dp[d.key]?.safe?.toString() === p._id.toString() ? 'selected' : '' %>>
-                    <%= p.name %>
-                  </option>
-                <% }) %>
-              </select>
-            </td>
-          </tr>
-        <% }) %>
-      </tbody>
-    </table>
-  </fieldset>
+  <div class="form-row">
+    <label>Safe Page (shown to filtered traffic)</label>
+    <select name="safe_page_id">
+      <option value="">– None –</option>
+      <% pages.filter(p => p.kind === 'safe').forEach(p => { %>
+        <option value="<%= p._id %>" <%= campaign?.safe_page_id?.toString() === p._id.toString() ? 'selected' : '' %>>
+          <%= p.name %>
+        </option>
+      <% }) %>
+    </select>
+  </div>
 
   <div class="form-row">
     <label>Filter Threshold (0–100)</label>

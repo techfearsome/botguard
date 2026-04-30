@@ -195,8 +195,6 @@ async function requireApiKey(req, res, next) {
 
 // Login route handlers
 function loginPage(req, res) {
-  res.set('Cache-Control', 'private, no-store');
-  res.set('CDN-Cache-Control', 'no-store');
   const error = req.query.error;
   const next_url = req.query.next || '/admin';
   res.send(`<!DOCTYPE html>
