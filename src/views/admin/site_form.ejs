@@ -8,6 +8,8 @@
         Served at <code>/</code> (your root domain).
       <% } else if (['privacy','terms'].includes(sp.slug)) { %>
         Served at <code>/<%= sp.slug %></code>.
+      <% } else if (sp.slug === '404') { %>
+        Served as the 404 page for any unknown URL on your domain.
       <% } else { %>
         Served at <code>/p/<%= sp.slug %></code>.
       <% } %>

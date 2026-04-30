@@ -5,10 +5,13 @@ const { Workspace, Campaign, LandingPage, Click } = require('../models');
 const { buildClickDoc, writeClick } = require('../lib/click');
 const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
+const { resolvePageForDevice } = require('../lib/pageResolver');
+const cache = require('../lib/cache');
 const { utmGateCheck } = require('../filters/utmGate');
 const { countryGateCheck } = require('../filters/countryGate');
 const { proxyGateCheck } = require('../filters/proxyGate');
 const { hashFingerprint, behaviorFilter } = require('../filters/behavior');
+const { buildInjection } = require('../lib/autoConversion');
 const { decide } = require('../scoring/decide');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
 const logger = require('../lib/logger');
@@ -28,18 +31,23 @@ function injectChallenge(html) {
 
 async function handleClick(req, res, workspaceSlug, campaignSlug) {
   try {
-    const workspace = await Workspace.findOne({ slug: workspaceSlug });
+    const workspace = await cache.getWorkspaceBySlug(workspaceSlug, () =>
+      Workspace.findOne({ slug: workspaceSlug }).lean()
+    );
     if (!workspace) return res.status(404).send('Campaign not found');
 
-    const campaign = await Campaign.findOne({
-      workspace_id: workspace._id,
-      slug: campaignSlug,
-      status: { $ne: 'archived' },
-    });
+    const campaign = await cache.getCampaignBySlug(workspace._id, campaignSlug, () =>
+      Campaign.findOne({
+        workspace_id: workspace._id,
+        slug: campaignSlug,
+        status: { $ne: 'archived' },
+      }).lean()
+    );
     if (!campaign) return res.status(404).send('Campaign not found');
 
     // Build base click record
     const doc = buildClickDoc({ req, workspace, campaign });
+    const deviceClass = doc.ua_parsed?.device_class || 'other';
 
     // --- UTM gate (runs BEFORE the filter chain so we don't waste a ProxyCheck call) ---
     const gateResult = utmGateCheck({ utm: doc.utm, campaign });
@@ -56,11 +64,11 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       doc.mode_at_decision = 'enforce';   // gate is always enforcing - it's not a score
       doc.page_rendered = 'safe';
 
-      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
     }
 
     // Run the filter chain
@@ -113,10 +121,10 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       doc.mode_at_decision = 'enforce';   // gate is always enforcing
       doc.page_rendered = 'safe';
 
-      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
     }
     // Append the pass flag for visibility
     doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
@@ -134,10 +142,10 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       doc.mode_at_decision = 'enforce';
       doc.page_rendered = 'safe';
 
-      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
     }
     doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
 
@@ -150,10 +158,9 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       return res.status(410).send('This campaign is currently paused.');
     }
 
-    // Resolve which page to show
+    // Resolve which page to show (per-device override applies)
     const showSafePage = (doc.decision === 'block');
-    const pageId = showSafePage ? campaign.safe_page_id : campaign.landing_page_id;
-    const targetPage = pageId ? await LandingPage.findById(pageId) : null;
+    const targetPage = await resolvePageForDevice(campaign, deviceClass, showSafePage ? 'safe' : 'offer');
 
     let html, variantName;
     if (targetPage) {
@@ -161,6 +168,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       html = variant ? variant.html : targetPage.html_template;
       variantName = variant?.name || 'default';
       doc.page_rendered = showSafePage ? 'safe' : 'offer';
+      doc.landing_page_id = targetPage._id;
     } else if (showSafePage) {
       html = renderSafeFallback();
       doc.page_rendered = 'safe';
@@ -184,6 +192,16 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
     // Inject challenge - only on offer pages, never on safe pages
     if (doc.page_rendered === 'offer') {
       html = injectChallenge(html);
+
+      // Auto-conversion tracking - only when explicitly enabled on the page that's actually rendering.
+      // Safe pages never get this injection (we don't want auto-conversions on blocked traffic).
+      if (targetPage?.auto_conversion?.enabled) {
+        const injection = buildInjection({
+          terms: targetPage.auto_conversion.terms,
+          eventName: targetPage.auto_conversion.event_name || 'auto_click',
+        });
+        html = injectBeforeBodyEnd(html, injection);
+      }
     }
 
     // Cookie
@@ -193,6 +211,12 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       sameSite: 'lax',
       secure: req.secure,
     });
+
+    // CRITICAL: never cache /go responses at any layer.
+    // - Each visit must get a fresh click_id cookie
+    // - Cloudflare will cache HTML by default if cookies aren't on the request
+    // - 'private' tells the browser only it can cache; 's-maxage=0' tells CDNs not to
+    setNoCacheHeaders(res);
 
     // Persist click (non-blocking)
     writeClick(doc).catch((err) => {
@@ -212,6 +236,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
  * and re-runs the behavior filter so the score reflects post-load signals.
  */
 async function handleFingerprint(req, res) {
+  res.set('Cache-Control', 'no-store');
   try {
     const body = req.body || {};
     const cid = body.cid;
@@ -297,6 +322,38 @@ function pickVariantHtml(landingPage) {
   if (!landingPage) return '';
   const variant = pickVariant(landingPage);
   return variant ? variant.html : (landingPage.html_template || '');
+}
+
+/**
+ * Inject HTML right before the closing </body> tag, or append to the document
+ * if no </body> is present. Case-insensitive on the tag.
+ *
+ * Used for auto-conversion script and challenge - we want them to load AFTER
+ * the page's own content so they don't block render.
+ */
+function injectBeforeBodyEnd(html, injection) {
+  if (!html) return injection;
+  const m = html.match(/<\/body\s*>/i);
+  if (m) {
+    return html.slice(0, m.index) + injection + html.slice(m.index);
+  }
+  return html + injection;
+}
+
+/**
+ * Set headers that prevent caching at every layer:
+ *   - Browser: must-revalidate, no-store
+ *   - Cloudflare: CDN-Cache-Control: no-store overrides any cache rule
+ *   - Other CDNs: Surrogate-Control header for Fastly/Varnish
+ *
+ * Apply to every /go response and gate-blocked safe-page response.
+ */
+function setNoCacheHeaders(res) {
+  res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
+  res.set('CDN-Cache-Control', 'no-store');
+  res.set('Surrogate-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
 }
 
 function renderSafeFallback() {

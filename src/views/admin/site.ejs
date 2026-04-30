@@ -17,12 +17,14 @@
       <tr><th>Slug</th><th>Public URL</th><th>Title</th><th>Status</th><th></th></tr>
     </thead>
     <tbody>
-      <% pages.filter(p => ['home','privacy','terms'].includes(p.slug)).forEach(p => { %>
+      <% pages.filter(p => ['home','privacy','terms','404'].includes(p.slug)).forEach(p => { %>
         <tr>
           <td><code><%= p.slug %></code></td>
           <td>
             <% if (p.slug === 'home') { %>
               <code>/</code>
+            <% } else if (p.slug === '404') { %>
+              <em class="muted">any unknown URL</em>
             <% } else { %>
               <code>/<%= p.slug %></code>
             <% } %>

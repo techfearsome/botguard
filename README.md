@@ -70,16 +70,20 @@ Even though week 1 is single-tenant, every collection has `workspace_id` and the
 ## Week 3 status
 
 **Done in week 3 (this build):**
-- **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name (lowercase, accented characters normalized, special chars dropped, max 60 chars)
-- **Slug collision handling** — if the derived (or provided) slug already exists, a random 4-digit suffix is appended; suffix length grows with persistent collisions
-- **UTM gate filter** — per-campaign toggle; when on, visits missing required UTM keys (configurable: source/medium/campaign by default, plus optional term/content) are routed to the safe page without burning a ProxyCheck call
-- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict (ISO 3166-1 alpha-2 codes). Configurable `on_unknown` behavior for ProxyCheck-unavailable cases.
-- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection. Per-category toggles (block_vpn / block_tor / block_public_proxy / block_compromised / block_hosting) plus a separate risk-score threshold.
-- **ProxyCheck.io v3 API client fixed** — the previous implementation used the wrong endpoint format (query param `?ips=` instead of path `/v3/<ip>`) and the wrong response shape (flat instead of nested under `network`/`location`/`detections`). Fixed in this build along with new fields surfaced: `organisation`, `country_name`, `operator`, `hosting`, `scraper`, `confidence`.
-- **Safe-page fallback** — if a gate fires but no `safe_page_id` is configured, a built-in "Page not available" message is shown
-- All gates show their status on the campaigns list with a single "Gates" column showing UTM / CTRY+ / CTRY- / PROXY badges
-- Gate ordering: UTM (cheapest, no I/O) → network filter → country gate → proxy gate → remaining filters. Each gate short-circuits to safe page on failure.
-- Click detail page now shows organisation, operator, country_name, hosting/scraper flags
+- **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name
+- **Slug collision handling** — random suffix appended on collision
+- **UTM gate filter** — per-campaign toggle; failed visits routed to safe page without burning ProxyCheck quota
+- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict
+- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection with per-category toggles
+- **ProxyCheck.io v3 API client fixed** — endpoint format and response shape both corrected, operator field handles rich object
+- **Per-device page routing** — six device classes (iphone/android/windows/mac/linux/other), per-campaign offer + safe overrides
+- **Site pages** — homepage, privacy policy, terms, and `/p/<slug>` pages managed under admin Settings → Site
+- **Responsive admin panel** — mobile-friendly nav, full-width inputs, horizontally-scrolling tables on mobile
+- **Cloudflare-aware** — `TRUST_PROXY=cloudflare` mode whitelists Cloudflare's IP ranges; `Cache-Control: no-store` on all dynamic routes prevents CDN caching of click responses; `CF-IPCountry` / `CF-IPCity` / `CF-Region` headers used as geo fallback when ProxyCheck unavailable; static assets get aggressive `max-age=86400` caching
+- **Redis-backed campaign cache** — `/go/:slug` hot path caches workspace + campaign for 60s, drops Mongo load by 90%+ on repeat traffic; auto-invalidates on admin update/delete; in-memory fallback when Redis unavailable
+- **Auto-conversion tracking** — per-page toggle that injects a small JS snippet matching button-text terms (Download / Subscribe / Place Order / etc., configurable). Fires `/cb/auto-conv` POST on click. 30-day session-cookie dedup enforced both client-side and server-side. Conversions show with an "auto" badge in the click log and click detail page. Never injected on safe pages, so blocked traffic can't fire fake conversions.
+- **Conversions admin route** at `/admin/conversions` — full table of all conversions with campaign, click ID, IP, country, provider, device, offer page name, page URL, event name, source, value, and matched term. Filterable by campaign / source / event / date range / auto-only. CSV export available.
+- **Configurable 404 page** — define a SitePage with slug `404` under Settings → Site. It's served for any unknown URL on your domain (with status 404, no caching, X-Robots-Tag noindex). When not configured, falls back to a hardcoded "Page not found" HTML. JSON clients still receive `{"error":"not_found"}` based on the Accept header.
 
 **Not yet (week 4+):**
 - FB CAPI / Google Enhanced Conversions outbound conversion forwarding

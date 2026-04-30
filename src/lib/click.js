@@ -5,6 +5,7 @@ const { Click } = require('../models');
 const { getClientIp, hashIp } = require('./ip');
 const { parseUtm, parseExternalIds } = require('./utm');
 const { detectInAppBrowser } = require('./inapp');
+const { classifyDeviceClass } = require('./deviceClass');
 
 // 22-char URL-safe ID, ~131 bits of entropy
 const generateClickId = customAlphabet(
@@ -104,6 +105,7 @@ function buildClickDoc({ req, workspace, campaign }) {
       os_version: uaResult.os?.version,
       device_type: classifyDevice(uaResult),
       device_label: deviceLabel(uaResult),
+      device_class: classifyDeviceClass(uaResult),
       device_vendor: uaResult.device?.vendor || null,
       device_model: uaResult.device?.model || null,
       is_bot: isObviousBot(ua),

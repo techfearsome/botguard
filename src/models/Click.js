@@ -41,6 +41,7 @@ const ClickSchema = new mongoose.Schema({
     os_version: String,
     device_type: String,    // 'desktop' | 'mobile' | 'tablet' | 'bot'
     device_label: String,   // human-readable: 'iPhone', 'Android phone', 'Windows', 'Mac', etc.
+    device_class: String,   // routing key: 'iphone'|'android'|'windows'|'mac'|'linux'|'other'
     device_vendor: String,  // 'Apple', 'Samsung', etc. (when known)
     device_model: String,   // 'iPhone', 'SM-G991B', etc. (when known)
     is_bot: Boolean,
@@ -89,7 +90,10 @@ const ClickSchema = new mongoose.Schema({
     flags: [String],       // human-readable flags: 'datacenter_asn', 'missing_accept_lang', etc.
   },
 
-  // Decision
+  // Conversion tracking - denormalized counters so the click log can show badges without joining
+  conversion_count: { type: Number, default: 0 },        // total conversions for this click_id
+  auto_conversion_count: { type: Number, default: 0 },   // subset that came from the auto-injection
+  last_conversion_at: Date,
   decision: { type: String, enum: ['allow', 'block', 'would_block'], default: 'allow' },
   decision_reason: String,
   mode_at_decision: String,  // 'log_only' or 'enforce' - so we can replay
@@ -97,6 +101,7 @@ const ClickSchema = new mongoose.Schema({
   // What happened
   variant_shown: String,
   page_rendered: String,     // 'offer' | 'safe' | 'redirect'
+  landing_page_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
   redirect_url: String,
 
   // Session linkage

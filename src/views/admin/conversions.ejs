@@ -1,0 +1,167 @@
+<%- include('../partials/header', { ws, page, title: 'Conversions - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Conversions</h1>
+    <p class="muted">All recorded conversions across pixel, postback, and auto-detected sources.</p>
+  </div>
+  <div>
+    <a href="/admin/conversions.csv?<%= new URLSearchParams(query).toString() %>" class="btn">Export CSV</a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-label">Total (filtered)</div>
+    <div class="stat-value"><%= stats.totalCount %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Auto-detected</div>
+    <div class="stat-value"><%= stats.autoCount %></div>
+    <% if (stats.totalCount > 0) { %>
+      <small class="muted"><%= Math.round(stats.autoCount / stats.totalCount * 100) %>% of total</small>
+    <% } %>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total value</div>
+    <div class="stat-value"><%= stats.totalValue.toFixed(2) %></div>
+  </div>
+</div>
+
+<form method="GET" action="/admin/conversions" class="filter-bar">
+  <select name="campaign">
+    <option value="">All campaigns</option>
+    <% campaigns.forEach(c => { %>
+      <option value="<%= c._id %>" <%= query.campaign === c._id.toString() ? 'selected' : '' %>>
+        <%= c.name %>
+      </option>
+    <% }) %>
+  </select>
+
+  <select name="source">
+    <option value="">All sources</option>
+    <% ['auto', 'pixel', 'postback', 'api'].forEach(s => { %>
+      <option value="<%= s %>" <%= query.source === s ? 'selected' : '' %>><%= s %></option>
+    <% }) %>
+  </select>
+
+  <input type="text" name="event" placeholder="event_name" value="<%= query.event || '' %>">
+
+  <input type="date" name="from" value="<%= query.from || '' %>">
+  <input type="date" name="to" value="<%= query.to || '' %>">
+
+  <label style="font-weight:normal;">
+    <input type="checkbox" name="auto" value="1" <%= query.auto === '1' ? 'checked' : '' %>>
+    Auto-detected only
+  </label>
+
+  <button type="submit" class="btn btn-primary">Filter</button>
+  <a href="/admin/conversions" class="btn">Reset</a>
+</form>
+
+<% if (conversions.length === 0) { %>
+  <div class="empty-state">
+    <p>No conversions found for the selected filters.</p>
+  </div>
+<% } else { %>
+  <section class="panel">
+    <table class="table table-dense">
+      <tr>
+        <th>Time</th>
+        <th>Campaign</th>
+        <th>Click ID</th>
+        <th>IP</th>
+        <th>Country</th>
+        <th>Provider</th>
+        <th>Device</th>
+        <th>Offer Page</th>
+        <th>Page URL</th>
+        <th>Event</th>
+        <th>Source</th>
+        <th>Value</th>
+        <th>Match</th>
+      </tr>
+      <% conversions.forEach(c => { %>
+        <tr>
+          <td>
+            <%= new Date(c.ts).toLocaleString() %>
+            <% if (c.click && c.click.ts) { %>
+              <% const lag = Math.round((new Date(c.ts) - new Date(c.click.ts)) / 1000); %>
+              <% if (lag >= 0) { %>
+                <small class="muted" title="Time from click to conversion">+<%= lag %>s</small>
+              <% } %>
+            <% } %>
+          </td>
+          <td>
+            <% if (c.campaign_id) { %>
+              <strong><%= c.campaign_id.name %></strong>
+              <small class="muted">/<%= c.campaign_id.slug %></small>
+            <% } else { %>–<% } %>
+          </td>
+          <td>
+            <a href="/admin/clicks/<%= c.click_id %>"><code><%= c.click_id.slice(0, 12) %>…</code></a>
+          </td>
+          <td><code><%= c.click?.ip || '–' %></code></td>
+          <td>
+            <%= c.click?.country || '–' %>
+            <% if (c.click?.country_name) { %>
+              <small class="muted"><%= c.click.country_name %></small>
+            <% } %>
+          </td>
+          <td title="<%= c.click?.organisation || '' %>">
+            <%= c.click?.asn_org || '–' %>
+            <% if (c.click?.is_proxy) { %>
+              <br><span class="badge badge-block"><%= (c.click.proxy_type || 'PROXY').toLowerCase() %></span>
+            <% } %>
+          </td>
+          <td>
+            <%= c.click?.ua_parsed?.device_label || c.click?.ua_parsed?.device_type || '–' %>
+            <% if (c.click?.in_app_browser) { %>
+              <small class="muted">(<%= c.click.in_app_browser %>)</small>
+            <% } %>
+          </td>
+          <td>
+            <% if (c.click?.landing_page_id) { %>
+              <%= c.click.landing_page_id.name %>
+              <small class="muted">/<%= c.click.landing_page_id.slug %></small>
+            <% } else if (c.click?.page_rendered) { %>
+              <em class="muted"><%= c.click.page_rendered %></em>
+            <% } else { %>–<% } %>
+          </td>
+          <td>
+            <% if (c.page_url) { %>
+              <a href="<%= c.page_url %>" target="_blank" rel="noopener" title="<%= c.page_url %>">
+                <%= c.page_url.length > 40 ? c.page_url.slice(0, 40) + '…' : c.page_url %>
+              </a>
+            <% } else { %>–<% } %>
+          </td>
+          <td><%= c.event_name || '–' %></td>
+          <td>
+            <%= c.source %>
+            <% if (c.auto_detected) { %>
+              <span class="badge badge-allow">auto</span>
+            <% } %>
+          </td>
+          <td>
+            <% if (c.value > 0) { %>
+              <%= c.value.toFixed(2) %> <small class="muted"><%= c.currency || 'USD' %></small>
+            <% } else { %>–<% } %>
+          </td>
+          <td>
+            <% if (c.matched_term) { %>
+              <code><%= c.matched_term %></code>
+              <% if (c.matched_text) { %>
+                <br><small class="muted" title="<%= c.matched_text %>">on: "<%= c.matched_text.length > 30 ? c.matched_text.slice(0, 30) + '…' : c.matched_text %>"</small>
+              <% } %>
+            <% } else { %>–<% } %>
+          </td>
+        </tr>
+      <% }) %>
+    </table>
+    <% if (conversions.length === 200) { %>
+      <p class="muted" style="margin-top:8px;">Showing latest 200. Use filters or CSV export to see more.</p>
+    <% } %>
+  </section>
+<% } %>
+
+<%- include('../partials/footer') %>

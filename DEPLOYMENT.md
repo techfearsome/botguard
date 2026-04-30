@@ -63,6 +63,74 @@ Visit `/admin/login`, log in with your credentials, then go to **Settings** to:
 
 ---
 
+## Running behind Cloudflare
+
+BotGuard is designed to run behind Cloudflare. A few config items matter for correct behavior:
+
+### Required environment variables
+
+```
+TRUST_PROXY=cloudflare
+```
+
+This restricts trust to Cloudflare's documented IP ranges. Without it, `req.ip` would show the Cloudflare edge IP instead of the visitor's real IP, and the entire filter chain would score one bot signal (datacenter IP) instead of the actual visitor's signals.
+
+### Cloudflare dashboard configuration
+
+**SSL/TLS mode:** Set to **Full (strict)**. Your origin should have a real cert (Coolify auto-provisions Let's Encrypt; Heroku and Azure handle it automatically).
+
+**Caching rules:** BotGuard sets `Cache-Control: no-store` and `CDN-Cache-Control: no-store` on every dynamic response (`/go/*`, `/px/*`, `/cb/*`, `/admin/*`), so Cloudflare's default caching behavior is correct out of the box. **Do not** create a Page Rule that caches `/go/*` — every visitor must get a fresh `click_id` cookie.
+
+If you're using a Cloudflare Page Rule for static assets at `/static/*`, you can safely set:
+- Cache Level: **Standard** or **Cache Everything**
+- Edge Cache TTL: **1 day** or longer
+
+The app already sends `Cache-Control: public, max-age=86400` for static files.
+
+**Bot Fight Mode:** Leave it OFF. Cloudflare's bot challenges interfere with the JS challenge in BotGuard's behavioral fingerprinting. If you want Cloudflare-level protection, use **Super Bot Fight Mode** with the "Definitely automated" rule set to "Block" — that catches the obvious-bot category before BotGuard sees them, which lowers your ProxyCheck quota usage.
+
+**Rocket Loader / Auto Minify:** Disable for `/go/*` paths. They modify HTML inline, which can break landing page tracking pixels embedded by clients.
+
+### Country detection without ProxyCheck quota
+
+When you don't have a ProxyCheck API key (or your quota is exhausted), BotGuard automatically falls back to Cloudflare's `CF-IPCountry` header for country information. This is free with any Cloudflare plan and gets you country-level filtering without any external API calls.
+
+Cities and regions require Cloudflare Enterprise (`CF-IPCity`, `CF-Region` headers) and are also used as fallback when present.
+
+The special `CF-IPCountry: T1` value (Tor exit) is honored — it flips the proxy verdict to TOR even when ProxyCheck didn't catch it.
+
+### Real visitor IP
+
+Cloudflare sets `CF-Connecting-IP` on every request with the visitor's real IP. BotGuard uses this as the highest-priority IP source, falling back to `X-Real-IP` and then `req.ip`. With `TRUST_PROXY=cloudflare`, Express trusts these headers only when the upstream connection comes from a Cloudflare edge IP — preventing header spoofing from anyone bypassing Cloudflare and hitting your origin directly.
+
+For maximum security, also configure your hosting provider's firewall to **only accept connections from Cloudflare IP ranges** on port 443. Coolify supports this via Traefik labels; on Heroku and Azure it requires custom WAF rules.
+
+### Performance with Redis
+
+When `REDIS_URL` is set, BotGuard uses Redis for:
+- **Rate limiting** (per IP, per ASN, per fingerprint counters) — required for the pattern filter to function
+- **Campaign and workspace caching** — the `/go/:slug` hot path caches the workspace + campaign lookups for 60 seconds, dramatically reducing Mongo query load on traffic spikes
+- **ProxyCheck verdict caching** — IP lookups are cached for 6 hours, so repeat visitors don't burn ProxyCheck quota
+
+Without Redis, the system still works:
+- Rate limiting silently no-ops (no per-IP throttling)
+- Campaign cache falls back to in-memory (per-instance, doesn't share across replicas)
+- ProxyCheck cache falls back to in-memory
+
+For a single-instance deployment behind Cloudflare, you can run without Redis and still handle a few hundred clicks/sec because Cloudflare absorbs most of the traffic. If you scale to multiple instances or expect sustained high traffic, run Redis.
+
+**Capacity estimate for a single t3.small/CX22-class instance:**
+
+| With Redis | Without Redis |
+|---|---|
+| ~200-500 clicks/sec sustained | ~50-100 clicks/sec sustained |
+| Mongo writes are the bottleneck | Mongo reads + writes are the bottleneck |
+| Rate limiting works correctly | No rate limiting |
+
+Past those numbers, scale horizontally (multiple BotGuard instances behind the same Cloudflare hostname) and run Redis as a shared cache.
+
+---
+
 ## Path 1: Coolify (recommended)
 
 Coolify is a self-hosted PaaS — like Heroku/Render but you run it on your own VPS. For BotGuard's use case (stateful Mongo, Redis, full filesystem access), it's a much better fit than Heroku and roughly 1/10 the cost.

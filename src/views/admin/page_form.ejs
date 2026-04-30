@@ -29,6 +29,45 @@
     <small class="muted">Available placeholders: <code>{{click_id}}</code>, <code>{{utm_source}}</code>, <code>{{utm_medium}}</code>, <code>{{utm_campaign}}</code></small>
   </div>
 
+  <% if ((lp?.kind || 'offer') !== 'safe') { %>
+    <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+      <legend style="font-weight:600; padding:0 6px;">Auto-Conversion Tracking</legend>
+      <p class="muted" style="margin-top:0;">
+        Inject a small JS snippet into this page that automatically fires a conversion when
+        the visitor clicks a button matching one of the terms below. Useful when the offer
+        owner won't or can't add a postback. Dedupes per session for 30 days.
+      </p>
+
+      <%
+        const ac = lp?.auto_conversion || {};
+        const acTerms = Array.isArray(ac.terms) ? ac.terms.join('\n') : '';
+      %>
+
+      <div class="form-row">
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="auto_conversion_enabled" <%= ac.enabled ? 'checked' : '' %>>
+          Enable auto-conversion tracking on this page
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label>Detection terms <span class="muted">(one per line, case-insensitive substring match)</span></label>
+        <textarea name="auto_conversion_terms" rows="6" placeholder="Download&#10;Submit&#10;Place Order&#10;Subscribe&#10;Sign Up&#10;Call&#10;Buy&#10;Get Started&#10;Continue&#10;Install"><%= acTerms %></textarea>
+        <small class="muted">
+          Leave blank to use the default list:
+          <em>Download, Submit, Place Order, Subscribe, Sign Up, Sign In, Call, Buy, Get Started, Continue, Install, Order Now, Add to Cart, Checkout, Get the App, Open App</em>.
+          Matches against the visible text of buttons, links, and elements with role=button.
+        </small>
+      </div>
+
+      <div class="form-row">
+        <label>Event name <span class="muted">(stored on the conversion record)</span></label>
+        <input type="text" name="auto_conversion_event_name" value="<%= ac.event_name || 'auto_click' %>" placeholder="auto_click" maxlength="50">
+        <small class="muted">e.g. <code>install</code>, <code>signup</code>, <code>purchase</code> — use this to differentiate when the same offer pays per type.</small>
+      </div>
+    </fieldset>
+  <% } %>
+
   <div class="form-actions">
     <button type="submit" class="btn btn-primary"><%= lp ? 'Save changes' : 'Create page' %></button>
     <a href="/admin/pages" class="btn">Cancel</a>

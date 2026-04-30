@@ -20,12 +20,19 @@ require.cache[modelsPath + '.js'] = require.cache[modelsPath + '/index.js'] = {
 
 let stubState;
 function makeStubModels() {
+  // Helper: Mongoose Query objects support .lean(). Our stubs need to too.
+  // Return a thenable that also has .lean() returning the same thenable.
+  const queryLike = (value) => {
+    const p = Promise.resolve(value);
+    p.lean = () => p;
+    return p;
+  };
   return {
     Workspace: {
-      findOne: async (q) => stubState.workspace,
+      findOne: (q) => queryLike(stubState.workspace),
     },
     Campaign: {
-      findOne: async (q) => stubState.campaign,
+      findOne: (q) => queryLike(stubState.campaign),
     },
     LandingPage: {
       findById: async (id) => stubState.pages?.[id] || null,
@@ -39,6 +46,7 @@ function makeStubModels() {
 
 // Now require the go route - it will use our stubs
 const goRouter = require(path.resolve(__dirname, '../src/routes/go'));
+const cache = require(path.resolve(__dirname, '../src/lib/cache'));
 
 const app = express();
 app.set('trust proxy', true);
@@ -74,6 +82,7 @@ function fetch(server, urlPath) {
   const safePageId = 'page-safe';
 
   await test('Gate disabled → offer page rendered even without UTMs', async () => {
+    cache.clearAll();
     stubState = {
       workspace: { _id: wsId, slug: 'techfirio' },
       campaign: {
@@ -96,6 +105,7 @@ function fetch(server, urlPath) {
   });
 
   await test('Gate enabled, UTMs missing → safe page, click marked blocked, no filter scoring', async () => {
+    cache.clearAll();
     stubState = {
       workspace: { _id: wsId, slug: 'techfirio' },
       campaign: {
@@ -128,6 +138,7 @@ function fetch(server, urlPath) {
   });
 
   await test('Gate enabled, partial UTMs → safe page, only missing keys flagged', async () => {
+    cache.clearAll();
     stubState = {
       workspace: { _id: wsId, slug: 'techfirio' },
       campaign: {
@@ -157,6 +168,7 @@ function fetch(server, urlPath) {
   });
 
   await test('Gate enabled, all UTMs present → offer page rendered (gate passes)', async () => {
+    cache.clearAll();
     stubState = {
       workspace: { _id: wsId, slug: 'techfirio' },
       campaign: {
@@ -182,6 +194,7 @@ function fetch(server, urlPath) {
   });
 
   await test('Gate enabled, no safe_page_id configured → falls back to built-in safe message', async () => {
+    cache.clearAll();
     stubState = {
       workspace: { _id: wsId, slug: 'techfirio' },
       campaign: {

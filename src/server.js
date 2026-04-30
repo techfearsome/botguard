@@ -15,12 +15,37 @@ const goRoutes = require('./routes/go');
 const pixelRoutes = require('./routes/pixel');
 const postbackRoutes = require('./routes/postback');
 const adminRoutes = require('./routes/admin');
+const siteRoutes = require('./routes/site');
 
 const app = express();
 
-// Trust proxy for correct IP detection behind Cloudflare/nginx
-if (process.env.TRUST_PROXY) {
-  app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+// Trust proxy for correct IP detection behind Cloudflare/nginx.
+// Two modes:
+//   - TRUST_PROXY=cloudflare (recommended): only trust Cloudflare's documented IP ranges +
+//     the loopback (for nginx/Traefik between Cloudflare and us). Prevents header spoofing
+//     because untrusted upstreams can't set X-Forwarded-For / CF-Connecting-IP themselves.
+//   - TRUST_PROXY=<n> (number): trust the n-th hop. Use 1 if there's only one reverse proxy.
+//   - TRUST_PROXY=true: trust everything (NOT recommended outside dev).
+const trustProxyEnv = process.env.TRUST_PROXY;
+if (trustProxyEnv === 'cloudflare') {
+  // Cloudflare's published IPv4+IPv6 ranges from https://www.cloudflare.com/ips/
+  // (last reviewed Apr 2026 - update if Cloudflare adds new ranges).
+  app.set('trust proxy', [
+    'loopback', 'linklocal', 'uniquelocal',
+    // IPv4
+    '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+    '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+    '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+    '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+    // IPv6
+    '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+    '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+  ]);
+  logger.info('trust_proxy_cloudflare_enabled');
+} else if (trustProxyEnv === 'true') {
+  app.set('trust proxy', true);
+} else if (trustProxyEnv) {
+  app.set('trust proxy', Number(trustProxyEnv) || 1);
 }
 
 // View engine
@@ -39,7 +64,20 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-app.use('/static', express.static(path.join(__dirname, '..', 'public')));
+// Static assets - cached aggressively at the Cloudflare edge.
+// 1 day max-age + immutable for files that effectively never change (CSS, JS, images).
+// If you change the content, bust by either changing the path or purging Cloudflare.
+app.use('/static', express.static(path.join(__dirname, '..', 'public'), {
+  maxAge: '1d',
+  immutable: false,           // keep false unless you fingerprint filenames
+  setHeaders: (res, filePath) => {
+    // Allow Cloudflare to cache; allow browser to cache but revalidate after a day.
+    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    // Hint to Cloudflare it's safe to cache regardless of cookies on the request.
+    // (Cloudflare normally bypasses cache when request has cookies; CDN-Cache-Control overrides that.)
+    res.setHeader('CDN-Cache-Control', 'public, max-age=86400');
+  },
+}));
 
 // --- Hot path routes (the actual landing page traffic) ---
 app.use('/go', goRoutes);
@@ -49,14 +87,21 @@ app.use('/cb', postbackRoutes);
 // --- Admin panel (scoped per workspace, multi-tenant ready) ---
 app.use('/admin', adminRoutes);
 
-// Root → admin
-app.get('/', (req, res) => res.redirect('/admin'));
+// --- Public site pages (homepage, privacy, terms, /p/:slug) ---
+// Mounted AFTER /admin so /admin doesn't get caught by the / handler.
+// When no SitePage is configured, these fall through to a real 404 (not the admin login).
+app.use('/', siteRoutes);
 
 // Health check
 app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// 404
+// 404 handler. For browser requests (Accept: text/html) we render the configured
+// SitePage with slug='404'. For API/JSON requests we keep returning JSON.
 app.use((req, res) => {
+  // If the client asked for HTML, give them the styled 404 page
+  if (req.accepts('html')) {
+    return siteRoutes.render404(req, res);
+  }
   res.status(404).json({ error: 'not_found' });
 });
 

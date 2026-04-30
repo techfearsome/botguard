@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 
 const { resolveSlug } = require('../../lib/slug');
-const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist } = require('../../models');
+const cache = require('../../lib/cache');
+const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist, SitePage } = require('../../models');
 const { invalidateCache } = require('../../lib/asnLookup');
 const { DEFAULT_SLUG } = require('../../lib/bootstrap');
 const { replay } = require('../../lib/replay');
@@ -17,6 +18,13 @@ router.get('/logout', logout);
 
 // --- Everything below this gate requires authentication ---
 router.use(requireAdmin);
+
+// Admin pages must never be cached (would leak session-specific data via shared CDN cache)
+router.use((req, res, next) => {
+  res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+  res.set('CDN-Cache-Control', 'no-store');
+  next();
+});
 
 // Resolve workspace - week 1 single tenant, defaults to env var workspace
 async function resolveWorkspace(req) {
@@ -100,6 +108,9 @@ router.post('/campaigns', async (req, res) => {
     // Proxy gate config
     const proxyGate = parseProxyGate(body);
 
+    // Per-device pages
+    const devicePages = parseDevicePages(body.device_pages);
+
     await Campaign.create({
       workspace_id: ws._id,
       slug,
@@ -107,6 +118,7 @@ router.post('/campaigns', async (req, res) => {
       status: body.status || 'active',
       landing_page_id: body.landing_page_id || null,
       safe_page_id: body.safe_page_id || null,
+      device_pages: devicePages,
       source_profile: body.source_profile || 'mixed',
       filter_config: {
         threshold: Number(body.threshold) || 70,
@@ -178,6 +190,43 @@ function clamp(n, min, max, fallback) {
   return Math.max(min, Math.min(max, n));
 }
 
+// Parse the device_pages nested form input: { iphone: { offer: id, safe: id }, ... }
+// Empty strings (—use default—) are converted to null so Mongoose stores nothing for them.
+function parseDevicePages(input) {
+  const out = {};
+  const validClasses = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
+  if (!input || typeof input !== 'object') return out;
+  for (const cls of validClasses) {
+    const entry = input[cls];
+    if (!entry || typeof entry !== 'object') continue;
+    const offer = entry.offer && entry.offer.trim() ? entry.offer : null;
+    const safe = entry.safe && entry.safe.trim() ? entry.safe : null;
+    if (offer || safe) {
+      out[cls] = {};
+      if (offer) out[cls].offer = offer;
+      if (safe) out[cls].safe = safe;
+    }
+  }
+  return out;
+}
+
+// Parse auto-conversion settings from the page form. Terms come in as a textarea
+// (one term per line). We strip whitespace, drop empties, dedupe, and limit to 50 terms
+// to prevent abuse where someone pastes a 10MB file.
+function parseAutoConversion(body) {
+  const enabled = body.auto_conversion_enabled === 'on' || body.auto_conversion_enabled === 'true';
+  let terms = [];
+  if (typeof body.auto_conversion_terms === 'string' && body.auto_conversion_terms.trim()) {
+    terms = body.auto_conversion_terms
+      .split(/[\r\n]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && s.length <= 50);
+    terms = Array.from(new Set(terms)).slice(0, 50);
+  }
+  const eventName = (body.auto_conversion_event_name || 'auto_click').trim().slice(0, 50) || 'auto_click';
+  return { enabled, terms, event_name: eventName };
+}
+
 router.get('/campaigns/:id/edit', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
@@ -210,6 +259,7 @@ router.post('/campaigns/:id', async (req, res) => {
     };
     const countryGate = parseCountryGate(body);
     const proxyGate = parseProxyGate(body);
+    const devicePages = parseDevicePages(body.device_pages);
 
     await Campaign.updateOne(
       { _id: req.params.id, workspace_id: ws._id },
@@ -220,6 +270,7 @@ router.post('/campaigns/:id', async (req, res) => {
           status: body.status,
           landing_page_id: body.landing_page_id || null,
           safe_page_id: body.safe_page_id || null,
+          device_pages: devicePages,
           source_profile: body.source_profile,
           'filter_config.threshold': Number(body.threshold) || 70,
           'filter_config.mode': body.mode,
@@ -231,6 +282,9 @@ router.post('/campaigns/:id', async (req, res) => {
         },
       }
     );
+    // Invalidate both old and new slug to handle slug renames
+    await cache.invalidateCampaign(ws._id, existing.slug);
+    if (slug !== existing.slug) await cache.invalidateCampaign(ws._id, slug);
     res.redirect('/admin/campaigns');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -239,7 +293,9 @@ router.post('/campaigns/:id', async (req, res) => {
 
 router.post('/campaigns/:id/delete', async (req, res) => {
   const ws = await resolveWorkspace(req);
+  const camp = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).select('slug').lean();
   await Campaign.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+  if (camp) await cache.invalidateCampaign(ws._id, camp.slug);
   res.redirect('/admin/campaigns');
 });
 
@@ -269,7 +325,9 @@ router.post('/pages', async (req, res) => {
       name: body.name,
       kind: body.kind || 'offer',
       html_template: body.html_template || '',
+      auto_conversion: parseAutoConversion(body),
     });
+    // Invalidate any campaigns whose render path might cache this page (cache is on campaign-by-slug)
     res.redirect('/admin/pages');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -307,6 +365,7 @@ router.post('/pages/:id', async (req, res) => {
           name: body.name,
           kind: body.kind,
           html_template: body.html_template || '',
+          auto_conversion: parseAutoConversion(body),
         },
       }
     );
@@ -340,6 +399,142 @@ router.get('/clicks', async (req, res) => {
 
   res.render('admin/clicks', { ws, clicks, campaigns, query: req.query, page: 'clicks' });
 });
+
+// ---------- Conversions ----------
+router.get('/conversions', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = { workspace_id: ws._id };
+
+  if (req.query.campaign) filter.campaign_id = req.query.campaign;
+  if (req.query.source) filter.source = req.query.source;       // 'auto'|'pixel'|'postback'|'api'
+  if (req.query.event) filter.event_name = req.query.event;
+  if (req.query.auto === '1') filter.auto_detected = true;
+
+  // Optional date range filter
+  if (req.query.from || req.query.to) {
+    filter.ts = {};
+    if (req.query.from) filter.ts.$gte = new Date(req.query.from);
+    if (req.query.to) {
+      // Treat 'to' as end-of-day inclusive
+      const t = new Date(req.query.to);
+      t.setHours(23, 59, 59, 999);
+      filter.ts.$lte = t;
+    }
+  }
+
+  const conversions = await Conversion.find(filter)
+    .sort({ ts: -1 })
+    .limit(200)
+    .populate('campaign_id', 'name slug')
+    .lean();
+
+  // Hydrate each conversion with key click + page details so the table can show them
+  // without a join in the view. We do this in one batched query for efficiency.
+  const clickIds = Array.from(new Set(conversions.map((c) => c.click_id)));
+  const clicks = clickIds.length
+    ? await Click.find({ workspace_id: ws._id, click_id: { $in: clickIds } })
+        .select('click_id ip country country_name asn_org organisation ua_parsed in_app_browser is_proxy proxy_type ip_type page_rendered landing_page_id ts utm')
+        .populate('landing_page_id', 'name slug')
+        .lean()
+    : [];
+  const clickMap = Object.fromEntries(clicks.map((c) => [c.click_id, c]));
+  conversions.forEach((c) => { c.click = clickMap[c.click_id] || null; });
+
+  // Dropdown data
+  const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
+
+  // Aggregate counters - shown above the table
+  const totalCount = conversions.length;
+  const autoCount = conversions.filter((c) => c.auto_detected).length;
+  const totalValue = conversions.reduce((s, c) => s + (Number(c.value) || 0), 0);
+
+  res.render('admin/conversions', {
+    ws,
+    conversions,
+    campaigns,
+    query: req.query,
+    stats: { totalCount, autoCount, totalValue },
+    page: 'conversions',
+  });
+});
+
+// CSV export of the same filtered conversions
+router.get('/conversions.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = { workspace_id: ws._id };
+  if (req.query.campaign) filter.campaign_id = req.query.campaign;
+  if (req.query.source) filter.source = req.query.source;
+  if (req.query.event) filter.event_name = req.query.event;
+  if (req.query.auto === '1') filter.auto_detected = true;
+  if (req.query.from || req.query.to) {
+    filter.ts = {};
+    if (req.query.from) filter.ts.$gte = new Date(req.query.from);
+    if (req.query.to) {
+      const t = new Date(req.query.to);
+      t.setHours(23, 59, 59, 999);
+      filter.ts.$lte = t;
+    }
+  }
+
+  const conversions = await Conversion.find(filter)
+    .sort({ ts: -1 })
+    .limit(10000)         // higher limit for export, still capped
+    .populate('campaign_id', 'name slug')
+    .lean();
+
+  const clickIds = Array.from(new Set(conversions.map((c) => c.click_id)));
+  const clicks = clickIds.length
+    ? await Click.find({ workspace_id: ws._id, click_id: { $in: clickIds } })
+        .select('click_id ip country asn_org page_rendered utm')
+        .lean()
+    : [];
+  const clickMap = Object.fromEntries(clicks.map((c) => [c.click_id, c]));
+
+  const headers = [
+    'ts', 'click_id', 'campaign', 'campaign_slug',
+    'event_name', 'source', 'auto_detected', 'value', 'currency',
+    'matched_term', 'matched_text', 'matched_element', 'page_url',
+    'ip', 'country', 'provider',
+    'utm_source', 'utm_medium', 'utm_campaign',
+  ];
+  const rows = [headers.join(',')];
+  for (const c of conversions) {
+    const click = clickMap[c.click_id] || {};
+    rows.push([
+      c.ts ? new Date(c.ts).toISOString() : '',
+      c.click_id,
+      c.campaign_id?.name || '',
+      c.campaign_id?.slug || '',
+      c.event_name || '',
+      c.source || '',
+      c.auto_detected ? 'true' : 'false',
+      c.value ?? 0,
+      c.currency || 'USD',
+      c.matched_term || '',
+      c.matched_text || '',
+      c.matched_element || '',
+      c.page_url || '',
+      click.ip || '',
+      click.country || '',
+      click.asn_org || '',
+      click.utm?.source || '',
+      click.utm?.medium || '',
+      click.utm?.campaign || '',
+    ].map(csvEscape).join(','));
+  }
+
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="conversions-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(rows.join('\n'));
+});
+
+function csvEscape(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  // Quote if contains comma, quote, or newline
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
 
 // ---------- ASN blacklist ----------
 router.get('/asn', async (req, res) => {
@@ -424,6 +619,61 @@ router.post('/settings/api-keys/:key/delete', async (req, res) => {
     { $pull: { api_keys: { key: req.params.key } } }
   );
   res.redirect('/admin/settings');
+});
+
+// ---------- Site pages (homepage, privacy, terms, etc.) ----------
+router.get('/site', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const pages = await SitePage.find({ workspace_id: ws._id }).sort({ slug: 1 }).lean();
+  // Pre-load the well-known slugs even if they don't exist yet, so the UI shows them
+  const knownSlugs = ['home', 'privacy', 'terms', '404'];
+  const bySlug = Object.fromEntries(pages.map((p) => [p.slug, p]));
+  const enriched = knownSlugs
+    .map((slug) => bySlug[slug] || { slug, title: '', html: '', enabled: false, _placeholder: true })
+    .concat(pages.filter((p) => !knownSlugs.includes(p.slug)));
+  res.render('admin/site', { ws, pages: enriched, page: 'site' });
+});
+
+router.get('/site/:slug/edit', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const slug = String(req.params.slug || '').toLowerCase();
+  let sp = await SitePage.findOne({ workspace_id: ws._id, slug }).lean();
+  if (!sp) {
+    sp = { slug, title: '', html: '', enabled: true, meta: {}, _new: true };
+  }
+  res.render('admin/site_form', { ws, sp, page: 'site' });
+});
+
+router.post('/site/:slug', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const slug = String(req.params.slug || '').toLowerCase().trim();
+  if (!/^[a-z0-9-]+$/.test(slug)) return res.status(400).send('Invalid slug');
+
+  const body = req.body || {};
+  const update = {
+    title: body.title || '',
+    html: body.html || '',
+    enabled: body.enabled === 'on' || body.enabled === 'true',
+    meta: {
+      description: body.meta_description || '',
+      og_image: body.meta_og_image || '',
+      noindex: body.meta_noindex === 'on',
+    },
+  };
+
+  await SitePage.updateOne(
+    { workspace_id: ws._id, slug },
+    { $set: update, $setOnInsert: { workspace_id: ws._id, slug, created_at: new Date() } },
+    { upsert: true }
+  );
+  res.redirect('/admin/site');
+});
+
+router.post('/site/:slug/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const slug = String(req.params.slug || '').toLowerCase();
+  await SitePage.deleteOne({ workspace_id: ws._id, slug });
+  res.redirect('/admin/site');
 });
 
 // ---------- Click detail ----------

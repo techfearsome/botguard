@@ -25,25 +25,58 @@ async function resolveWorkspace() {
 async function renderSitePage(req, res, slug) {
   try {
     const ws = await resolveWorkspace();
-    if (!ws) return next();    // no workspace yet - let other routes handle
+    if (!ws) return res.status(404).type('html').send(notFoundHtml(slug));
 
     const page = await SitePage.findOne({ workspace_id: ws._id, slug, enabled: true }).lean();
     if (!page) {
-      // No page configured - return a friendly 404 so the user knows they hit a real route
-      // (better than redirecting to admin login which would be confusing)
-      res.status(404).type('html').send(notFoundHtml(slug));
-      return;
+      // No page configured for this slug. If we're already trying to render the 404 itself,
+      // fall back to the hardcoded HTML to avoid an infinite loop. Otherwise delegate
+      // to render404 so a configured 404 page is shown.
+      if (slug === '404') {
+        return res.status(404).type('html').send(notFoundHtml(slug));
+      }
+      return render404(req, res);
     }
 
+    const status = slug === '404' ? 404 : 200;
+    res.status(status);
     res.set('Cache-Control', 'public, max-age=300');     // 5min - static pages can cache
     if (page.meta?.noindex) {
       res.set('X-Robots-Tag', 'noindex, nofollow');
     }
-    res.status(200).type('html').send(renderPageWrapper(page));
+    res.type('html').send(renderPageWrapper(page));
   } catch (err) {
     logger.error('site_page_error', { slug, err: err.message });
     res.status(500).send('Internal error');
   }
+}
+
+/**
+ * Public 404 renderer. Tries to serve the SitePage with slug='404' if configured;
+ * otherwise falls back to the hardcoded "Page not found" HTML.
+ *
+ * Used both by the site router (for unknown /p/ slugs) and the global 404 handler in server.js
+ * (for any unmatched route on the domain).
+ */
+async function render404(req, res) {
+  try {
+    const ws = await resolveWorkspace();
+    if (ws) {
+      const page = await SitePage.findOne({ workspace_id: ws._id, slug: '404', enabled: true }).lean();
+      if (page) {
+        res.status(404);
+        res.set('Cache-Control', 'no-store');     // 404 from unknown URL - don't cache
+        if (page.meta?.noindex !== false) {
+          // 404 pages should always be noindex by default
+          res.set('X-Robots-Tag', 'noindex, nofollow');
+        }
+        return res.type('html').send(renderPageWrapper(page));
+      }
+    }
+  } catch (err) {
+    logger.error('render_404_error', { err: err.message });
+  }
+  res.status(404).type('html').send(notFoundHtml('404'));
 }
 
 function renderPageWrapper(page) {
@@ -95,4 +128,6 @@ router.get('/p/:slug', (req, res) => {
   return renderSitePage(req, res, slug);
 });
 
-module.exports = router;
+// Router is the default export. render404 is exposed as a property on the router
+// so server.js can call it from the app-wide 404 fallback handler.
+module.exports = Object.assign(router, { render404 });
