@@ -24,7 +24,7 @@ async function test(name, fn) {
 }
 
 /**
- * Build a jsdom environment with our injection script loaded, the bg_click cookie set,
+ * Build a jsdom environment with our injection script loaded, the bg_cid cookie set,
  * and fetch/sendBeacon stubbed to capture outgoing payloads.
  *
  * @param {object} opts
@@ -34,12 +34,12 @@ async function test(name, fn) {
  */
 async function setupPage({ terms, bodyHtml }) {
   const injection = buildInjection({ terms });
-  // We have to set the bg_click cookie BEFORE the runtime executes, otherwise
+  // We have to set the bg_cid cookie BEFORE the runtime executes, otherwise
   // the runtime sees no click_id and bails. Use an inline <script> at the top.
   const html = `<!DOCTYPE html>
     <html><head>
       <script>
-        document.cookie = 'bg_click=CLICK_TEST_123; path=/';
+        document.cookie = 'bg_cid=CLICK_TEST_123; path=/';
         // Stub sendBeacon (jsdom doesn't implement it) - capture into window.__beacons
         window.__beacons = [];
         navigator.sendBeacon = function(url, blob) {
@@ -248,13 +248,13 @@ async function clickAndWait(dom, target) {
     assert.strictEqual(beacons.length, 1);
   });
 
-  await test('Click before bg_click cookie set → does NOT fire', async () => {
+  await test('Click before bg_cid cookie set → does NOT fire', async () => {
     const { dom, beacons } = await setupPage({
       terms: ['download'],
       bodyHtml: '<button id="cta">Download</button>',
     });
     // Wipe the click cookie
-    dom.window.document.cookie = 'bg_click=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+    dom.window.document.cookie = 'bg_cid=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
     await clickAndWait(dom, dom.window.document.getElementById('cta'));
     assert.strictEqual(beacons.length, 0, 'should not fire without click_id attribution');
   });
@@ -264,7 +264,7 @@ async function clickAndWait(dom, target) {
     const injection = buildInjection({ terms: ['download'] });
     const html = `<!DOCTYPE html><html><head>
       <script>
-        document.cookie = 'bg_click=X; path=/';
+        document.cookie = 'bg_cid=X; path=/';
         document.cookie = 'bg_conv=1; path=/';
         window.__beacons = [];
         navigator.sendBeacon = function() { window.__beacons.push({}); return true; };

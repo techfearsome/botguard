@@ -9,7 +9,7 @@
  *   - sendBeacon when available (works mid-navigation; falls back to fetch keepalive)
  *   - 30-day session dedup cookie set client-side AND verified server-side (defense in depth)
  *   - Wrapped in try/catch top-to-bottom - if anything throws, the page still works
- *   - Reads click_id from the bg_click cookie (set by /go) - never trusts URL params
+ *   - Reads click_id from the bg_cid cookie (set by /go) - never trusts URL params
  *   - Captures the actual visible text (not innerHTML) so we don't mistake nested icons for matches
  *   - Walks up to 3 ancestors to handle <button><span>Subscribe</span></button> patterns
  *
@@ -75,7 +75,7 @@ const RUNTIME = `
     var cfg = JSON.parse(cfgEl.textContent || cfgEl.innerText || '{}');
     if (!cfg.terms || !cfg.terms.length) return;
 
-    // Read click_id from the bg_click cookie set by /go.
+    // Read click_id from the bg_cid cookie set by /go.
     function getCookie(name) {
       var m = ('; ' + document.cookie).split('; ' + name + '=');
       return m.length === 2 ? decodeURIComponent(m.pop().split(';').shift()) : null;
@@ -87,8 +87,21 @@ const RUNTIME = `
       } catch (e) {}
     }
 
+    // Debug mode: ?bg_debug=1 in the URL turns on console logging so you can
+    // diagnose tracking issues live without redeploying. Logs are prefixed [bg].
+    var DEBUG = false;
+    try { DEBUG = location.search.indexOf('bg_debug=1') !== -1; } catch (e) {}
+    function dbg() {
+      if (!DEBUG) return;
+      try { console.log.apply(console, ['[bg]'].concat([].slice.call(arguments))); } catch (e) {}
+    }
+    dbg('runtime starting, terms:', cfg.terms, 'click_id cookie:', getCookie('bg_cid'));
+
     // Once-per-session dedup
-    if (getCookie(cfg.session_cookie)) return;
+    if (getCookie(cfg.session_cookie)) {
+      dbg('bg_conv cookie already set - script bailing (visitor already converted this session)');
+      return;
+    }
 
     var terms = cfg.terms;
 
@@ -236,17 +249,28 @@ const RUNTIME = `
 
     function handleClick(ev) {
       try {
-        if (getCookie(cfg.session_cookie)) return;     // race-safe re-check
+        dbg('click on', ev.target && ev.target.tagName, ev.target && ev.target.className);
+        if (getCookie(cfg.session_cookie)) {
+          dbg('  → ignored: session already converted');
+          return;
+        }
         var match = findMatch(ev.target);
-        if (!match) return;
+        if (!match) {
+          dbg('  → no match: no plausibly-clickable ancestor or text did not match terms');
+          return;
+        }
+        dbg('  → MATCHED:', match);
 
-        var clickId = getCookie('bg_click');
-        if (!clickId) return;       // no click_id - we have no attribution to record
+        var clickId = getCookie('bg_cid');
+        if (!clickId) {
+          dbg('  → ignored: no bg_cid cookie - cannot attribute conversion');
+          return;
+        }
 
         // Set dedup cookie immediately so any subsequent click is ignored
         setCookie(cfg.session_cookie, '1', cfg.session_days);
 
-        send({
+        var payload = {
           click_id: clickId,
           event_name: cfg.event_name,
           term: match.term,
@@ -255,9 +279,11 @@ const RUNTIME = `
           href: match.href || null,
           page_url: location.href.slice(0, 500),
           ts: Date.now(),
-        });
+        };
+        dbg('  → sending to', cfg.endpoint, payload);
+        send(payload);
       } catch (e) {
-        // never let a tracker break the page
+        dbg('  → handler error:', e && e.message);
       }
     }
 

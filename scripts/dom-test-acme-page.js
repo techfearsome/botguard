@@ -30,9 +30,9 @@ function loadPage({ terms, clearConvCookie = true }) {
     '<script>window.lucide={createIcons:function(){}};</script>'
   );
 
-  // Pre-script: set bg_click cookie + stub APIs the page uses
+  // Pre-script: set bg_cid cookie + stub APIs the page uses
   const preScript = `<script>
-    document.cookie = 'bg_click=CLICK_TEST; path=/';
+    document.cookie = 'bg_cid=CLICK_TEST; path=/';
     ${clearConvCookie ? "document.cookie = 'bg_conv=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';" : ''}
     window.__beacons = [];
     navigator.sendBeacon = function(u, b) {

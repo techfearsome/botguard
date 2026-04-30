@@ -121,7 +121,7 @@ test('Runtime script reads cookie, matches text, sends beacon - smoke check', ()
   // Runtime should mention the key APIs we depend on
   assert.match(html, /document\.addEventListener.*click/);
   assert.match(html, /sendBeacon|fetch/);
-  assert.match(html, /bg_click/);          // reads click_id
+  assert.match(html, /bg_cid/);          // reads click_id
   assert.match(html, /bg_conv/);           // session dedup cookie
 });
 
