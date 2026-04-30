@@ -6,6 +6,7 @@ const { buildClickDoc, writeClick } = require('../lib/click');
 const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
 const { resolvePageForDevice } = require('../lib/pageResolver');
+const cache = require('../lib/cache');
 const { utmGateCheck } = require('../filters/utmGate');
 const { countryGateCheck } = require('../filters/countryGate');
 const { proxyGateCheck } = require('../filters/proxyGate');
@@ -29,14 +30,18 @@ function injectChallenge(html) {
 
 async function handleClick(req, res, workspaceSlug, campaignSlug) {
   try {
-    const workspace = await Workspace.findOne({ slug: workspaceSlug });
+    const workspace = await cache.getWorkspaceBySlug(workspaceSlug, () =>
+      Workspace.findOne({ slug: workspaceSlug }).lean()
+    );
     if (!workspace) return res.status(404).send('Campaign not found');
 
-    const campaign = await Campaign.findOne({
-      workspace_id: workspace._id,
-      slug: campaignSlug,
-      status: { $ne: 'archived' },
-    });
+    const campaign = await cache.getCampaignBySlug(workspace._id, campaignSlug, () =>
+      Campaign.findOne({
+        workspace_id: workspace._id,
+        slug: campaignSlug,
+        status: { $ne: 'archived' },
+      }).lean()
+    );
     if (!campaign) return res.status(404).send('Campaign not found');
 
     // Build base click record
@@ -62,7 +67,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
     }
 
     // Run the filter chain
@@ -118,7 +123,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
     }
     // Append the pass flag for visibility
     doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
@@ -139,7 +144,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      return res.status(200).type('html').send(html);
+      setNoCacheHeaders(res); return res.status(200).type('html').send(html);
     }
     doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
 
@@ -195,6 +200,12 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       secure: req.secure,
     });
 
+    // CRITICAL: never cache /go responses at any layer.
+    // - Each visit must get a fresh click_id cookie
+    // - Cloudflare will cache HTML by default if cookies aren't on the request
+    // - 'private' tells the browser only it can cache; 's-maxage=0' tells CDNs not to
+    setNoCacheHeaders(res);
+
     // Persist click (non-blocking)
     writeClick(doc).catch((err) => {
       logger.error('click_write_failed', { err: err.message, click_id: doc.click_id });
@@ -213,6 +224,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
  * and re-runs the behavior filter so the score reflects post-load signals.
  */
 async function handleFingerprint(req, res) {
+  res.set('Cache-Control', 'no-store');
   try {
     const body = req.body || {};
     const cid = body.cid;
@@ -298,6 +310,22 @@ function pickVariantHtml(landingPage) {
   if (!landingPage) return '';
   const variant = pickVariant(landingPage);
   return variant ? variant.html : (landingPage.html_template || '');
+}
+
+/**
+ * Set headers that prevent caching at every layer:
+ *   - Browser: must-revalidate, no-store
+ *   - Cloudflare: CDN-Cache-Control: no-store overrides any cache rule
+ *   - Other CDNs: Surrogate-Control header for Fastly/Varnish
+ *
+ * Apply to every /go response and gate-blocked safe-page response.
+ */
+function setNoCacheHeaders(res) {
+  res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
+  res.set('CDN-Cache-Control', 'no-store');
+  res.set('Surrogate-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
 }
 
 function renderSafeFallback() {

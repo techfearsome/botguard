@@ -70,16 +70,17 @@ Even though week 1 is single-tenant, every collection has `workspace_id` and the
 ## Week 3 status
 
 **Done in week 3 (this build):**
-- **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name (lowercase, accented characters normalized, special chars dropped, max 60 chars)
-- **Slug collision handling** — if the derived (or provided) slug already exists, a random 4-digit suffix is appended; suffix length grows with persistent collisions
-- **UTM gate filter** — per-campaign toggle; when on, visits missing required UTM keys are routed to the safe page without burning a ProxyCheck call
-- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict (ISO 3166-1 alpha-2 codes)
-- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection. Per-category toggles plus risk-score threshold.
-- **ProxyCheck.io v3 API client fixed** — endpoint format and response shape both corrected. `operator` field handles both string and rich-object responses (VPN Unlimited returns a full object with anonymity/protocols/policies)
-- **Per-device page routing** — campaigns can now serve different offer / safe pages per device class. Six classes: `iphone`, `android`, `windows`, `mac`, `linux`, `other` (iPad, smart TV, unknown UAs). Falls back to campaign default when no per-device override is set.
-- **Site pages** — homepage, privacy policy, terms of service, and arbitrary `/p/<slug>` pages managed under admin Settings → Site. The bare domain (`/`) is no longer an admin-login redirect; it shows your homepage if configured, otherwise a real 404.
-- **Responsive admin panel** — stacked nav with horizontal-scroll menu on mobile, full-width form inputs (≥16px font to prevent iOS zoom-on-focus), stat grid collapses to 2 columns, tables scroll horizontally inside their panels
-- **Click log shows IP, provider, type (proxy/residential/hosting/etc.), country, and device label** with rich operator details on the click detail page
+- **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name
+- **Slug collision handling** — random suffix appended on collision
+- **UTM gate filter** — per-campaign toggle; failed visits routed to safe page without burning ProxyCheck quota
+- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict
+- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection with per-category toggles
+- **ProxyCheck.io v3 API client fixed** — endpoint format and response shape both corrected, operator field handles rich object
+- **Per-device page routing** — six device classes (iphone/android/windows/mac/linux/other), per-campaign offer + safe overrides
+- **Site pages** — homepage, privacy policy, terms, and `/p/<slug>` pages managed under admin Settings → Site
+- **Responsive admin panel** — mobile-friendly nav, full-width inputs, horizontally-scrolling tables on mobile
+- **Cloudflare-aware** — `TRUST_PROXY=cloudflare` mode whitelists Cloudflare's IP ranges; `Cache-Control: no-store` on all dynamic routes prevents CDN caching of click responses; `CF-IPCountry` / `CF-IPCity` / `CF-Region` headers used as geo fallback when ProxyCheck unavailable; static assets get aggressive `max-age=86400` caching
+- **Redis-backed campaign cache** — `/go/:slug` hot path caches workspace + campaign for 60s, drops Mongo load by 90%+ on repeat traffic; auto-invalidates on admin update/delete; in-memory fallback when Redis unavailable
 
 **Not yet (week 4+):**
 - FB CAPI / Google Enhanced Conversions outbound conversion forwarding

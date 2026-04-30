@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { resolveSlug } = require('../../lib/slug');
+const cache = require('../../lib/cache');
 const { Workspace, Campaign, LandingPage, Click, Conversion, AsnBlacklist, SitePage } = require('../../models');
 const { invalidateCache } = require('../../lib/asnLookup');
 const { DEFAULT_SLUG } = require('../../lib/bootstrap');
@@ -17,6 +18,13 @@ router.get('/logout', logout);
 
 // --- Everything below this gate requires authentication ---
 router.use(requireAdmin);
+
+// Admin pages must never be cached (would leak session-specific data via shared CDN cache)
+router.use((req, res, next) => {
+  res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+  res.set('CDN-Cache-Control', 'no-store');
+  next();
+});
 
 // Resolve workspace - week 1 single tenant, defaults to env var workspace
 async function resolveWorkspace(req) {
@@ -257,6 +265,9 @@ router.post('/campaigns/:id', async (req, res) => {
         },
       }
     );
+    // Invalidate both old and new slug to handle slug renames
+    await cache.invalidateCampaign(ws._id, existing.slug);
+    if (slug !== existing.slug) await cache.invalidateCampaign(ws._id, slug);
     res.redirect('/admin/campaigns');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -265,7 +276,9 @@ router.post('/campaigns/:id', async (req, res) => {
 
 router.post('/campaigns/:id/delete', async (req, res) => {
   const ws = await resolveWorkspace(req);
+  const camp = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).select('slug').lean();
   await Campaign.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+  if (camp) await cache.invalidateCampaign(ws._id, camp.slug);
   res.redirect('/admin/campaigns');
 });
 

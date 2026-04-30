@@ -33,7 +33,7 @@ async function runFilterChain({
 
   // --- Network (async, may hit ProxyCheck + ASN blacklist Mongo lookup) ---
   try {
-    const r = await networkFilter({ ip, userAgent, workspaceId });
+    const r = await networkFilter({ ip, userAgent, headers, workspaceId });
     layerScores.network = r.score;
     layerFlags.network = r.flags;
     enrichment = r.enrichment || {};

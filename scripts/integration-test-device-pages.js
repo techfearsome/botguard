@@ -11,11 +11,15 @@ const http = require('http');
 // Stub models
 const modelsPath = path.resolve(__dirname, '../src/models');
 let stubState;
+const queryLike = (value) => { const p = Promise.resolve(value); p.lean = () => p; return p; };
 require.cache[modelsPath + '.js'] = require.cache[modelsPath + '/index.js'] = {
   id: modelsPath, filename: modelsPath, loaded: true,
   exports: {
-    Workspace: { findOne: async () => stubState.workspace },
-    Campaign: { findOne: async () => stubState.campaign, findById: async () => stubState.campaign },
+    Workspace: { findOne: () => queryLike(stubState.workspace) },
+    Campaign: {
+      findOne: () => queryLike(stubState.campaign),
+      findById: async () => stubState.campaign,
+    },
     LandingPage: { findById: async (id) => stubState.pages?.[id] || null },
     Click: {
       findOne: async () => null,
@@ -33,6 +37,7 @@ require.cache[proxycheckPath + '.js'] = {
 };
 
 const goRouter = require(path.resolve(__dirname, '../src/routes/go'));
+const cache = require(path.resolve(__dirname, '../src/lib/cache'));
 const app = express();
 app.set('trust proxy', true);
 app.use(cookieParser());
@@ -62,6 +67,7 @@ function fetchWithUA(server, urlPath, ua) {
   console.log('Per-device page routing:');
 
   function makeState({ devicePages = {}, defaultOffer = 'p_default_offer', defaultSafe = 'p_default_safe' } = {}) {
+    cache.clearAll();    // ensure each test sees fresh campaign config
     return {
       workspace: { _id: 'ws1', slug: 'techfirio' },
       campaign: {

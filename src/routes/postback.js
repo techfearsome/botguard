@@ -14,6 +14,10 @@ const logger = require('../lib/logger');
  * Optional: value, currency, event, txn_id
  */
 async function handlePostback(req, res) {
+  // Postbacks should never be cached - each one represents a unique conversion event
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('CDN-Cache-Control', 'no-store');
+
   const data = { ...(req.query || {}), ...(req.body || {}) };
 
   const clickId = data.cid || data.click_id;
