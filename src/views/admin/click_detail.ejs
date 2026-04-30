@@ -77,13 +77,30 @@
       <tr><td>Region / City</td><td><%= click.region || '–' %> / <%= click.city || '–' %></td></tr>
       <tr><td>IP type</td>
         <td>
-          <%= click.ua_parsed?.device_type || '–' %>
+          <% if (click.is_proxy) { %>
+            <span class="badge badge-block"><%= click.proxy_type || 'PROXY' %></span>
+          <% } %>
+          <%= click.ip_type || '–' %>
           <% if (click.hosting) { %><span class="badge badge-warn">hosting</span><% } %>
           <% if (click.scraper) { %><span class="badge badge-block">scraper</span><% } %>
+          <% if (typeof click.risk_score === 'number') { %>
+            <small class="muted"> · risk <%= click.risk_score %>/100</small>
+          <% } %>
         </td>
       </tr>
       <tr><td>UA</td><td><small><%= click.user_agent || '–' %></small></td></tr>
-      <tr><td>Browser</td><td><%= click.ua_parsed?.browser || '–' %> / <%= click.ua_parsed?.os || '–' %> / <%= click.ua_parsed?.device_type || '–' %></td></tr>
+      <tr><td>Browser / OS</td><td><%= click.ua_parsed?.browser || '–' %> <%= click.ua_parsed?.browser_version || '' %> / <%= click.ua_parsed?.os || '–' %> <%= click.ua_parsed?.os_version || '' %></td></tr>
+      <tr><td>Device</td>
+        <td>
+          <strong><%= click.ua_parsed?.device_label || click.ua_parsed?.device_type || '–' %></strong>
+          <% if (click.ua_parsed?.device_vendor || click.ua_parsed?.device_model) { %>
+            <small class="muted">
+              (<%= click.ua_parsed?.device_vendor || '' %>
+              <%= click.ua_parsed?.device_model || '' %>)
+            </small>
+          <% } %>
+        </td>
+      </tr>
       <tr><td>In-app</td><td><%= click.in_app_browser || '–' %></td></tr>
     </table>
   </section>

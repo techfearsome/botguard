@@ -46,7 +46,11 @@ router.get('/', async (req, res) => {
       { $sort: { count: -1 } },
       { $limit: 10 },
     ]),
-    Click.find({ workspace_id: ws._id }).sort({ ts: -1 }).limit(20).lean(),
+    Click.find({ workspace_id: ws._id })
+      .sort({ ts: -1 })
+      .limit(20)
+      .populate('campaign_id', 'name slug')
+      .lean(),
   ]);
 
   res.render('admin/dashboard', {

@@ -18,8 +18,12 @@ const ClickSchema = new mongoose.Schema({
   country_name: String,    // human-readable
   region: String,
   city: String,
+  ip_type: String,         // ProxyCheck network.type: 'hosting'|'residential'|'business'|'mobile'|'wireless'|...
+  is_proxy: Boolean,       // ANY of {proxy, vpn, tor, compromised, anonymous}
+  proxy_type: String,      // 'TOR' | 'VPN' | 'PUB' | 'COM' | null
   hosting: Boolean,        // ProxyCheck detection.hosting (separate from is_proxy)
   scraper: Boolean,        // ProxyCheck detection.scraper
+  risk_score: Number,      // ProxyCheck risk 0-100
 
   // Device / UA
   user_agent: String,
@@ -28,7 +32,10 @@ const ClickSchema = new mongoose.Schema({
     browser_version: String,
     os: String,
     os_version: String,
-    device_type: String,   // 'desktop' | 'mobile' | 'tablet' | 'bot'
+    device_type: String,    // 'desktop' | 'mobile' | 'tablet' | 'bot'
+    device_label: String,   // human-readable: 'iPhone', 'Android phone', 'Windows', 'Mac', etc.
+    device_vendor: String,  // 'Apple', 'Samsung', etc. (when known)
+    device_model: String,   // 'iPhone', 'SM-G991B', etc. (when known)
     is_bot: Boolean,
   },
 

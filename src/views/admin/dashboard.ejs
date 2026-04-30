@@ -64,11 +64,15 @@
   <% if (recentClicks.length === 0) { %>
     <p class="muted">No clicks recorded yet. Send traffic to <code>/go/&lt;campaign-slug&gt;</code> to get started.</p>
   <% } else { %>
-    <table class="table">
+    <table class="table table-dense">
       <tr>
         <th>Time</th>
         <th>Click ID</th>
+        <th>Campaign</th>
         <th>Source / Medium</th>
+        <th>IP</th>
+        <th>Provider</th>
+        <th>Type</th>
         <th>Country</th>
         <th>Device</th>
         <th>Decision</th>
@@ -76,10 +80,34 @@
       <% recentClicks.forEach(c => { %>
         <tr>
           <td><%= new Date(c.ts).toLocaleString() %></td>
-          <td><code><%= c.click_id.slice(0, 10) %>…</code></td>
+          <td><a href="/admin/clicks/<%= c.click_id %>"><code><%= c.click_id.slice(0, 10) %>…</code></a></td>
+          <td>
+            <% if (c.campaign_id) { %>
+              <strong><%= c.campaign_id.name %></strong>
+              <small class="muted">/<%= c.campaign_id.slug %></small>
+            <% } else { %>–<% } %>
+          </td>
           <td><%= c.utm?.source || '–' %> / <%= c.utm?.medium || '–' %></td>
+          <td><code><%= c.ip || '–' %></code></td>
+          <td title="<%= c.organisation || '' %>">
+            <% if (c.asn_org) { %>
+              <%= c.asn_org %>
+              <% if (c.asn) { %><small class="muted">AS<%= c.asn %></small><% } %>
+            <% } else { %>–<% } %>
+          </td>
+          <td>
+            <% if (c.is_proxy) { %>
+              <span class="badge badge-block"><%= (c.proxy_type || 'PROXY').toLowerCase() %></span>
+            <% } else if (c.ip_type) { %>
+              <span class="badge badge-status-archived"><%= c.ip_type %></span>
+            <% } else { %>–<% } %>
+            <% if (c.hosting && !c.is_proxy) { %><small class="muted"> hosting</small><% } %>
+          </td>
           <td><%= c.country || '–' %></td>
-          <td><%= c.ua_parsed?.device_type || '–' %><%= c.in_app_browser ? ' (' + c.in_app_browser + ')' : '' %></td>
+          <td>
+            <%= c.ua_parsed?.device_label || c.ua_parsed?.device_type || '–' %>
+            <% if (c.in_app_browser) { %><small class="muted"> (<%= c.in_app_browser %>)</small><% } %>
+          </td>
           <td><span class="badge badge-<%= c.decision %>"><%= c.decision %></span></td>
         </tr>
       <% }) %>

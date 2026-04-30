@@ -35,6 +35,9 @@
       <th>Click ID</th>
       <th>Campaign</th>
       <th>UTM Source / Medium / Campaign</th>
+      <th>IP</th>
+      <th>Provider</th>
+      <th>Type</th>
       <th>Country</th>
       <th>Device</th>
       <th>UA</th>
@@ -49,11 +52,28 @@
         <td>
           <%= c.utm?.source || '–' %> / <%= c.utm?.medium || '–' %> / <%= c.utm?.campaign || '–' %>
         </td>
+        <td><code><%= c.ip || '–' %></code></td>
+        <td title="<%= c.organisation || '' %>">
+          <% if (c.asn_org) { %>
+            <%= c.asn_org %>
+            <% if (c.asn) { %><br><small class="muted">AS<%= c.asn %></small><% } %>
+          <% } else { %>–<% } %>
+        </td>
+        <td>
+          <% if (c.is_proxy) { %>
+            <span class="badge badge-block"><%= (c.proxy_type || 'PROXY').toLowerCase() %></span>
+          <% } else if (c.ip_type) { %>
+            <span class="badge badge-status-archived"><%= c.ip_type %></span>
+          <% } else { %>–<% } %>
+          <% if (c.hosting && !c.is_proxy) { %><br><small class="muted">hosting</small><% } %>
+        </td>
         <td><%= c.country || '–' %></td>
-        <td><%= c.ua_parsed?.device_type || '–' %></td>
+        <td>
+          <%= c.ua_parsed?.device_label || c.ua_parsed?.device_type || '–' %>
+        </td>
         <td title="<%= c.user_agent %>">
           <%= c.ua_parsed?.browser || '–' %> / <%= c.ua_parsed?.os || '–' %>
-          <% if (c.ua_parsed?.is_bot) { %><span class="badge badge-warn">bot-ish</span><% } %>
+          <% if (c.ua_parsed?.is_bot) { %><br><span class="badge badge-warn">bot-ish</span><% } %>
         </td>
         <td><%= c.in_app_browser || '–' %></td>
         <td><span class="badge badge-<%= c.decision %>"><%= c.decision %></span></td>
