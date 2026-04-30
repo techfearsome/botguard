@@ -31,6 +31,32 @@ const CampaignSchema = new mongoose.Schema({
         default: ['source', 'medium', 'campaign'],
       },
     },
+
+    // Country gate: cross-check ProxyCheck's country verdict against an allowlist or blocklist.
+    // Stored as ISO 3166-1 alpha-2 codes (e.g. 'US', 'GB', 'IN').
+    country_gate: {
+      enabled: { type: Boolean, default: false },
+      mode: { type: String, enum: ['whitelist', 'blacklist'], default: 'whitelist' },
+      countries: { type: [String], default: [] },
+      // What to do when ProxyCheck doesn't return a country (lookup failed, no key, etc.)
+      // 'allow' = treat as pass (permissive), 'block' = treat as fail (strict)
+      on_unknown: { type: String, enum: ['allow', 'block'], default: 'allow' },
+    },
+
+    // Proxy gate: tighter version of network scoring - hard route to safe page on detection.
+    // Reads from the network filter's enrichment (ProxyCheck verdict + ASN/term blacklist match).
+    proxy_gate: {
+      enabled: { type: Boolean, default: false },
+      // Which kinds of proxies to block - finer-grained than just "is_proxy"
+      block_vpn: { type: Boolean, default: true },
+      block_tor: { type: Boolean, default: true },
+      block_public_proxy: { type: Boolean, default: true },
+      block_compromised: { type: Boolean, default: true },
+      // Datacenter/hosting IPs are a softer signal - not always bad (corporate VPNs, etc.)
+      block_hosting: { type: Boolean, default: false },
+      // Use ProxyCheck's own risk score (0-100) as a separate threshold
+      max_risk_score: { type: Number, default: 100, min: 0, max: 100 },
+    },
   },
 
   // Conversion tracking

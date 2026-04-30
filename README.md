@@ -73,10 +73,12 @@ Even though week 1 is single-tenant, every collection has `workspace_id` and the
 - **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name (lowercase, accented characters normalized, special chars dropped, max 60 chars)
 - **Slug collision handling** — if the derived (or provided) slug already exists, a random 4-digit suffix is appended; suffix length grows with persistent collisions
 - **UTM gate filter** — per-campaign toggle; when on, visits missing required UTM keys (configurable: source/medium/campaign by default, plus optional term/content) are routed to the safe page without burning a ProxyCheck call
-- **Safe-page fallback** — if a campaign has the UTM gate on but no `safe_page_id` configured, a built-in "Page not available" message is shown
-- UTM gate state shown on the campaigns list with required keys
-- 26 new unit tests (slug + UTM gate logic) and 14 integration tests (route handlers with stubbed Mongo)
-- Seed script now creates a `/go/gated` campaign demonstrating the UTM gate
+- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict (ISO 3166-1 alpha-2 codes). Configurable `on_unknown` behavior for ProxyCheck-unavailable cases.
+- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection. Per-category toggles (block_vpn / block_tor / block_public_proxy / block_compromised / block_hosting) plus a separate risk-score threshold.
+- **Safe-page fallback** — if a gate fires but no `safe_page_id` is configured, a built-in "Page not available" message is shown
+- All gates show their status on the campaigns list with a single "Gates" column showing UTM / CTRY+ / CTRY- / PROXY badges
+- Gate ordering: UTM (cheapest, no I/O) → network filter → country gate → proxy gate → remaining filters. Each gate short-circuits to safe page on failure.
+- 51 new unit tests + 19 integration tests covering all three gates and their ordering
 
 **Not yet (week 4+):**
 - FB CAPI / Google Enhanced Conversions outbound conversion forwarding

@@ -90,6 +90,12 @@ router.post('/campaigns', async (req, res) => {
       required_keys: parseRequiredUtmKeys(body.utm_required_keys),
     };
 
+    // Country gate config
+    const countryGate = parseCountryGate(body);
+
+    // Proxy gate config
+    const proxyGate = parseProxyGate(body);
+
     await Campaign.create({
       workspace_id: ws._id,
       slug,
@@ -102,6 +108,8 @@ router.post('/campaigns', async (req, res) => {
         threshold: Number(body.threshold) || 70,
         mode: body.mode || 'log_only',
         utm_gate: utmGate,
+        country_gate: countryGate,
+        proxy_gate: proxyGate,
       },
       postback_url: body.postback_url || '',
       notes: body.notes || '',
@@ -125,6 +133,45 @@ function parseRequiredUtmKeys(input) {
     keys = ['source', 'medium', 'campaign'];   // sensible default
   }
   return keys.filter((k) => valid.has(k));
+}
+
+// Parse country gate config from form body.
+// `country_list` arrives as a comma/newline-separated textarea; we sanitize to ISO codes.
+function parseCountryGate(body) {
+  const raw = String(body.country_list || '');
+  const codes = raw
+    .split(/[\s,;]+/)
+    .map((c) => c.trim().toUpperCase())
+    .filter((c) => /^[A-Z]{2}$/.test(c));    // ISO 3166-1 alpha-2 only
+  // Dedupe
+  const unique = Array.from(new Set(codes));
+  return {
+    enabled: body.country_gate_enabled === 'on' || body.country_gate_enabled === 'true',
+    mode: body.country_gate_mode === 'blacklist' ? 'blacklist' : 'whitelist',
+    countries: unique,
+    on_unknown: body.country_gate_on_unknown === 'block' ? 'block' : 'allow',
+  };
+}
+
+function parseProxyGate(body) {
+  // For checkboxes: present in body = checked, absent = unchecked.
+  // We default the toggles ON (common case is to block these), so the form must
+  // explicitly send empty values for OFF. We handle this by checking for a sentinel
+  // hidden field that's always present alongside each checkbox.
+  return {
+    enabled: body.proxy_gate_enabled === 'on' || body.proxy_gate_enabled === 'true',
+    block_vpn: body.proxy_block_vpn === 'on',
+    block_tor: body.proxy_block_tor === 'on',
+    block_public_proxy: body.proxy_block_public_proxy === 'on',
+    block_compromised: body.proxy_block_compromised === 'on',
+    block_hosting: body.proxy_block_hosting === 'on',
+    max_risk_score: clamp(Number(body.proxy_max_risk_score), 0, 100, 100),
+  };
+}
+
+function clamp(n, min, max, fallback) {
+  if (typeof n !== 'number' || Number.isNaN(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 router.get('/campaigns/:id/edit', async (req, res) => {
@@ -157,6 +204,8 @@ router.post('/campaigns/:id', async (req, res) => {
       enabled: body.utm_gate_enabled === 'on' || body.utm_gate_enabled === 'true',
       required_keys: parseRequiredUtmKeys(body.utm_required_keys),
     };
+    const countryGate = parseCountryGate(body);
+    const proxyGate = parseProxyGate(body);
 
     await Campaign.updateOne(
       { _id: req.params.id, workspace_id: ws._id },
@@ -171,6 +220,8 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.threshold': Number(body.threshold) || 70,
           'filter_config.mode': body.mode,
           'filter_config.utm_gate': utmGate,
+          'filter_config.country_gate': countryGate,
+          'filter_config.proxy_gate': proxyGate,
           postback_url: body.postback_url || '',
           notes: body.notes || '',
         },

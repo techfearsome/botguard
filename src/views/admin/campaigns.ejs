@@ -20,7 +20,7 @@
       <th>Slug / URL</th>
       <th>Profile</th>
       <th>Mode</th>
-      <th>UTM Gate</th>
+      <th>Gates</th>
       <th>Status</th>
       <th>Landing Page</th>
       <th></th>
@@ -32,11 +32,20 @@
         <td><%= c.source_profile %></td>
         <td><span class="badge badge-mode-<%= c.filter_config?.mode %>"><%= c.filter_config?.mode || 'log_only' %></span></td>
         <td>
-          <% if (c.filter_config?.utm_gate?.enabled) { %>
-            <span class="badge badge-allow">on</span>
-            <small class="muted"><%= (c.filter_config.utm_gate.required_keys || []).join(', ') %></small>
-          <% } else { %>
-            <span class="badge badge-status-archived">off</span>
+          <% const fc = c.filter_config || {}; %>
+          <% if (fc.utm_gate?.enabled) { %>
+            <span class="badge badge-allow" title="Required: <%= (fc.utm_gate.required_keys || []).join(', ') %>">UTM</span>
+          <% } %>
+          <% if (fc.country_gate?.enabled) { %>
+            <span class="badge badge-allow" title="<%= fc.country_gate.mode %>: <%= (fc.country_gate.countries || []).join(', ') %>">
+              <%= fc.country_gate.mode === 'blacklist' ? 'CTRY-' : 'CTRY+' %>
+            </span>
+          <% } %>
+          <% if (fc.proxy_gate?.enabled) { %>
+            <span class="badge badge-allow" title="Blocks: vpn=<%= fc.proxy_gate.block_vpn %> tor=<%= fc.proxy_gate.block_tor %> hosting=<%= fc.proxy_gate.block_hosting %>">PROXY</span>
+          <% } %>
+          <% if (!fc.utm_gate?.enabled && !fc.country_gate?.enabled && !fc.proxy_gate?.enabled) { %>
+            <span class="muted">—</span>
           <% } %>
         </td>
         <td><span class="badge badge-status-<%= c.status %>"><%= c.status %></span></td>

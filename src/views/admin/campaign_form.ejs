@@ -106,6 +106,118 @@
     </div>
   </fieldset>
 
+  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+    <legend style="font-weight:600; padding:0 6px;">Country Gate</legend>
+    <p class="muted" style="margin-top:0;">
+      Cross-checks ProxyCheck's country verdict against your list. Whitelist mode = only listed
+      countries pass. Blacklist mode = listed countries blocked.
+      Requires <code>PROXYCHECK_API_KEY</code> to be set; otherwise <code>on_unknown</code> decides.
+    </p>
+
+    <%
+      const cg = campaign?.filter_config?.country_gate || {};
+      const cgList = Array.isArray(cg.countries) ? cg.countries.join(', ') : '';
+    %>
+
+    <div class="form-row">
+      <label style="font-weight:normal;">
+        <input type="checkbox" name="country_gate_enabled" <%= cg.enabled ? 'checked' : '' %>>
+        Enable country gate
+      </label>
+    </div>
+
+    <div class="grid-2">
+      <div class="form-row">
+        <label>Mode</label>
+        <select name="country_gate_mode">
+          <option value="whitelist" <%= cg.mode !== 'blacklist' ? 'selected' : '' %>>
+            whitelist — only listed countries pass
+          </option>
+          <option value="blacklist" <%= cg.mode === 'blacklist' ? 'selected' : '' %>>
+            blacklist — listed countries blocked
+          </option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>If country unknown</label>
+        <select name="country_gate_on_unknown">
+          <option value="allow" <%= cg.on_unknown !== 'block' ? 'selected' : '' %>>
+            allow (permissive — pass through)
+          </option>
+          <option value="block" <%= cg.on_unknown === 'block' ? 'selected' : '' %>>
+            block (strict — show safe page)
+          </option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Country list (ISO 3166-1 alpha-2 codes, comma-separated)</label>
+      <textarea name="country_list" rows="3" placeholder="US, CA, GB, AU, DE, FR"><%= cgList %></textarea>
+      <small class="muted">
+        Two-letter codes only. Common: US (United States), GB (United Kingdom), CA (Canada),
+        AU (Australia), DE (Germany), FR (France), IN (India). Case insensitive; invalid entries are dropped.
+      </small>
+    </div>
+  </fieldset>
+
+  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+    <legend style="font-weight:600; padding:0 6px;">Proxy Gate</legend>
+    <p class="muted" style="margin-top:0;">
+      Hard route to safe page on proxy/VPN/Tor detection. Reads ProxyCheck verdict +
+      ASN/term blacklist. Tighter than score-based filtering — when this fires the visit
+      is blocked regardless of other layers.
+    </p>
+
+    <%
+      const pg = campaign?.filter_config?.proxy_gate || {};
+      // Defaults align with model defaults: VPN/Tor/public/compromised ON, hosting OFF
+      const defaultBool = (v, def) => v === undefined ? def : !!v;
+    %>
+
+    <div class="form-row">
+      <label style="font-weight:normal;">
+        <input type="checkbox" name="proxy_gate_enabled" <%= pg.enabled ? 'checked' : '' %>>
+        Enable proxy gate
+      </label>
+    </div>
+
+    <div class="form-row">
+      <label>Block on detection of:</label>
+      <div style="display:flex; gap:14px; flex-wrap:wrap;">
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="proxy_block_vpn" <%= defaultBool(pg.block_vpn, true) ? 'checked' : '' %>>
+          VPN
+        </label>
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="proxy_block_tor" <%= defaultBool(pg.block_tor, true) ? 'checked' : '' %>>
+          Tor
+        </label>
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="proxy_block_public_proxy" <%= defaultBool(pg.block_public_proxy, true) ? 'checked' : '' %>>
+          Public proxy
+        </label>
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="proxy_block_compromised" <%= defaultBool(pg.block_compromised, true) ? 'checked' : '' %>>
+          Compromised
+        </label>
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="proxy_block_hosting" <%= defaultBool(pg.block_hosting, false) ? 'checked' : '' %>>
+          Datacenter / hosting
+        </label>
+      </div>
+      <small class="muted">
+        "Datacenter" is off by default because corporate VPNs land in those ranges and you'll false-positive real users.
+      </small>
+    </div>
+
+    <div class="form-row">
+      <label>Max risk score (ProxyCheck's own 0–100 score)</label>
+      <input type="number" name="proxy_max_risk_score" min="0" max="100" value="<%= pg.max_risk_score ?? 100 %>">
+      <small class="muted">Block when ProxyCheck's risk score exceeds this. 100 = disabled.</small>
+    </div>
+  </fieldset>
+
   <div class="form-row">
     <label>S2S Postback URL <span class="muted">(optional)</span></label>
     <input type="text" name="postback_url" value="<%= campaign?.postback_url || '' %>" placeholder="https://your-tracker.example.com/postback?clickid={click_id}">

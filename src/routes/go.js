@@ -6,6 +6,8 @@ const { buildClickDoc, writeClick } = require('../lib/click');
 const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
 const { utmGateCheck } = require('../filters/utmGate');
+const { countryGateCheck } = require('../filters/countryGate');
+const { proxyGateCheck } = require('../filters/proxyGate');
 const { hashFingerprint, behaviorFilter } = require('../filters/behavior');
 const { decide } = require('../scoring/decide');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
@@ -88,6 +90,45 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       decision_reason: result.decision_reason,
       mode_at_decision: result.mode_at_decision,
     });
+
+    // --- Country gate (post-network, has ProxyCheck country verdict) ---
+    const countryResult = countryGateCheck({ country: doc.country, campaign });
+    if (countryResult.blocked) {
+      doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
+      doc.decision = 'block';
+      doc.decision_reason = countryResult.country
+        ? `country_gate:${countryResult.mode}_block_${countryResult.country}`
+        : `country_gate:${countryResult.mode}_unknown`;
+      doc.mode_at_decision = 'enforce';   // gate is always enforcing
+      doc.page_rendered = 'safe';
+
+      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
+      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+      return res.status(200).type('html').send(html);
+    }
+    // Append the pass flag for visibility
+    doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
+
+    // --- Proxy gate (post-network, has ProxyCheck verdict + ASN/term blacklist match) ---
+    const proxyResult = proxyGateCheck({
+      enrichment: result.enrichment,
+      networkFlags: doc.scores.flags || [],
+      campaign,
+    });
+    if (proxyResult.blocked) {
+      doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
+      doc.decision = 'block';
+      doc.decision_reason = `proxy_gate:${proxyResult.reason}`;
+      doc.mode_at_decision = 'enforce';
+      doc.page_rendered = 'safe';
+
+      const safePage = campaign.safe_page_id ? await LandingPage.findById(campaign.safe_page_id) : null;
+      const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
+      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+      return res.status(200).type('html').send(html);
+    }
+    doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
 
     // Handle paused campaigns
     if (campaign.status === 'paused') {
