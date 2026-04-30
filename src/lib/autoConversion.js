@@ -97,10 +97,14 @@ const RUNTIME = `
     }
     dbg('runtime starting, terms:', cfg.terms, 'click_id cookie:', getCookie('bg_cid'));
 
-    // Once-per-session dedup
-    if (getCookie(cfg.session_cookie)) {
+    // Once-per-session dedup. Skipped in debug mode so QA can test repeatedly
+    // without having to manually clear the bg_conv cookie between attempts.
+    if (!DEBUG && getCookie(cfg.session_cookie)) {
       dbg('bg_conv cookie already set - script bailing (visitor already converted this session)');
       return;
+    }
+    if (DEBUG && getCookie(cfg.session_cookie)) {
+      dbg('bg_conv cookie present but DEBUG mode is ON - dedup BYPASSED for this session');
     }
 
     var terms = cfg.terms;
@@ -250,7 +254,7 @@ const RUNTIME = `
     function handleClick(ev) {
       try {
         dbg('click on', ev.target && ev.target.tagName, ev.target && ev.target.className);
-        if (getCookie(cfg.session_cookie)) {
+        if (!DEBUG && getCookie(cfg.session_cookie)) {
           dbg('  → ignored: session already converted');
           return;
         }

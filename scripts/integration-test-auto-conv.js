@@ -45,16 +45,21 @@ async function test(name, fn) {
 }
 
 function postJson(server, urlPath, body, cookies = '') {
+  return postJsonWithReferer(server, urlPath, body, cookies, '');
+}
+
+function postJsonWithReferer(server, urlPath, body, cookies, referer) {
   return new Promise((resolve, reject) => {
     const port = server.address().port;
     const data = JSON.stringify(body);
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data),
+      'Cookie': cookies,
+    };
+    if (referer) headers['Referer'] = referer;
     const req = http.request({
-      host: '127.0.0.1', port, path: urlPath, method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-        'Cookie': cookies,
-      },
+      host: '127.0.0.1', port, path: urlPath, method: 'POST', headers,
     }, (res) => {
       let resBody = '';
       res.on('data', (c) => resBody += c);
@@ -211,6 +216,32 @@ function postJson(server, urlPath, body, cookies = '') {
     await postJson(server, '/cb/auto-conv', { click_id: 'CLICK123', term: 'download' });
     const conv = stubState.conversions[0];
     assert.strictEqual(conv.event_name, 'auto_click');
+  });
+
+  await test('Debug mode (Referer contains bg_debug=1) bypasses dedup cookie', async () => {
+    stubState = makeState();
+    // Has bg_conv cookie set (would normally cause dedup) BUT referer says debug mode
+    const r = await postJsonWithReferer(server, '/cb/auto-conv',
+      { click_id: 'CLICK123', term: 'download' },
+      'bg_conv=1',
+      'https://example.com/go/demo?bg_debug=1');
+    assert.strictEqual(r.status, 200);
+    const json = JSON.parse(r.body);
+    assert.strictEqual(json.ok, true);
+    assert.notStrictEqual(json.dedup, true, 'should NOT be deduped in debug mode');
+    assert.strictEqual(stubState.conversions.length, 1, 'conversion should be recorded');
+  });
+
+  await test('Debug mode does NOT apply when bg_debug not in referer', async () => {
+    stubState = makeState();
+    const r = await postJsonWithReferer(server, '/cb/auto-conv',
+      { click_id: 'CLICK123', term: 'download' },
+      'bg_conv=1',
+      'https://example.com/go/demo');     // no bg_debug
+    assert.strictEqual(r.status, 200);
+    const json = JSON.parse(r.body);
+    assert.strictEqual(json.dedup, true, 'should still dedup without debug flag');
+    assert.strictEqual(stubState.conversions.length, 0);
   });
 
   server.close();

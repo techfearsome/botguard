@@ -84,7 +84,18 @@ router.post('/auto-conv', async (req, res) => {
   // bg_conv cookie, treat as duplicate. This protects against:
   //   - Malicious clients clearing the cookie and re-sending
   //   - Race condition between cookie set + click event firing twice
-  if (req.cookies && req.cookies[AUTO_CONV_SESSION_COOKIE]) {
+  //
+  // EXCEPTION: when the request originates from a page with ?bg_debug=1 in the
+  // URL, we skip this dedup so QA can test repeatedly without clearing cookies.
+  // We check the Referer header — bg_debug=1 cannot be spoofed in the body
+  // because we don't read it from the body.
+  var debugMode = false;
+  try {
+    var ref = req.get('referer') || '';
+    debugMode = ref.indexOf('bg_debug=1') !== -1;
+  } catch (e) {}
+
+  if (!debugMode && req.cookies && req.cookies[AUTO_CONV_SESSION_COOKIE]) {
     return res.json({ ok: true, dedup: true });
   }
 
