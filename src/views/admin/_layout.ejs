@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= typeof title !== 'undefined' ? title : 'BotGuard' %></title>
+  <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-brand">
+      <strong>BotGuard</strong>
+      <span class="ws-badge"><%= ws.slug %></span>
+    </div>
+    <div class="nav-links">
+      <a href="/admin" class="<%= page === 'dashboard' ? 'active' : '' %>">Dashboard</a>
+      <a href="/admin/campaigns" class="<%= page === 'campaigns' ? 'active' : '' %>">Campaigns</a>
+      <a href="/admin/pages" class="<%= page === 'pages' ? 'active' : '' %>">Pages</a>
+      <a href="/admin/clicks" class="<%= page === 'clicks' ? 'active' : '' %>">Click Log</a>
+      <a href="/admin/asn" class="<%= page === 'asn' ? 'active' : '' %>">ASN Blacklist</a>
+    </div>
+  </nav>
+
+  <main class="container">
+    <%- body %>
+  </main>
+</body>
+</html>

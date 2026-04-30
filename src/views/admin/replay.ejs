@@ -1,0 +1,103 @@
+<%- include('../partials/header', { ws, page, title: 'Decision Replay - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Decision Replay</h1>
+    <p class="muted">
+      Re-score historical clicks against new threshold/profile/mode settings to see what would have changed.
+      Uses stored network &amp; pattern scores; recomputes headers, behavior, and referer from saved data.
+    </p>
+  </div>
+</div>
+
+<section class="panel">
+  <h3>Replay Parameters</h3>
+  <form method="POST" action="/admin/replay" class="form" style="max-width:none;">
+    <div class="grid-2">
+      <div>
+        <div class="form-row">
+          <label>Campaign</label>
+          <select name="campaign">
+            <option value="">All campaigns</option>
+            <% campaigns.forEach(c => { %>
+              <option value="<%= c._id %>" <%= query.campaign === c._id.toString() ? 'selected' : '' %>><%= c.name %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>From (date)</label>
+          <input type="datetime-local" name="from" value="<%= query.from || '' %>">
+        </div>
+        <div class="form-row">
+          <label>To (date)</label>
+          <input type="datetime-local" name="to" value="<%= query.to || '' %>">
+        </div>
+      </div>
+      <div>
+        <div class="form-row">
+          <label>Hypothetical threshold</label>
+          <input type="number" name="threshold" min="0" max="100" value="<%= query.threshold || 70 %>">
+          <small class="muted">Block when total ≥ this value</small>
+        </div>
+        <div class="form-row">
+          <label>Hypothetical profile</label>
+          <select name="profile">
+            <option value="">– Use original campaign profile –</option>
+            <% profiles.forEach(p => { %>
+              <option value="<%= p %>" <%= query.profile === p ? 'selected' : '' %>><%= p %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Hypothetical mode</label>
+          <select name="mode">
+            <option value="enforce" <%= query.mode === 'enforce' ? 'selected' : '' %>>enforce</option>
+            <option value="log_only" <%= query.mode === 'log_only' ? 'selected' : '' %>>log_only</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Replay</button>
+    </div>
+  </form>
+</section>
+
+<% if (result) { %>
+  <section class="panel">
+    <h3>Result · <%= result.scanned.toLocaleString() %> clicks scanned</h3>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-label">Allow</div><div class="stat-value"><%= result.summary.allow.toLocaleString() %></div></div>
+      <div class="stat-card"><div class="stat-label">Block</div><div class="stat-value"><%= result.summary.block.toLocaleString() %></div></div>
+      <div class="stat-card"><div class="stat-label">Would Block</div><div class="stat-value"><%= result.summary.would_block.toLocaleString() %></div></div>
+    </div>
+
+    <h4>Deltas vs original decisions</h4>
+    <table class="table">
+      <tr><th>Outcome</th><th>Count</th><th>%</th></tr>
+      <tr><td>Stayed the same</td><td><%= result.deltas.stayed_same.toLocaleString() %></td><td><%= result.scanned > 0 ? ((result.deltas.stayed_same/result.scanned)*100).toFixed(1) : 0 %>%</td></tr>
+      <tr><td>Became <span class="badge badge-block">block</span></td><td><%= result.deltas.became_block.toLocaleString() %></td><td><%= result.scanned > 0 ? ((result.deltas.became_block/result.scanned)*100).toFixed(1) : 0 %>%</td></tr>
+      <tr><td>Became <span class="badge badge-allow">allow</span></td><td><%= result.deltas.became_allow.toLocaleString() %></td><td><%= result.scanned > 0 ? ((result.deltas.became_allow/result.scanned)*100).toFixed(1) : 0 %>%</td></tr>
+      <tr><td>Became <span class="badge badge-would_block">would_block</span></td><td><%= result.deltas.became_would_block.toLocaleString() %></td><td><%= result.scanned > 0 ? ((result.deltas.became_would_block/result.scanned)*100).toFixed(1) : 0 %>%</td></tr>
+    </table>
+
+    <% if (result.samples.length > 0) { %>
+      <h4>Sample of changed clicks (first <%= result.samples.length %>)</h4>
+      <table class="table table-dense">
+        <tr><th>Time</th><th>Click ID</th><th>Was</th><th>Now</th><th>Score Was → Now</th></tr>
+        <% result.samples.forEach(s => { %>
+          <tr>
+            <td><%= new Date(s.ts).toLocaleString() %></td>
+            <td><a href="/admin/clicks/<%= s.click_id %>"><code><%= s.click_id.slice(0,12) %>…</code></a></td>
+            <td><span class="badge badge-<%= s.was %>"><%= s.was %></span></td>
+            <td><span class="badge badge-<%= s.now %>"><%= s.now %></span></td>
+            <td><%= s.total_was %> → <%= s.total_now %></td>
+          </tr>
+        <% }) %>
+      </table>
+    <% } %>
+  </section>
+<% } %>
+
+<%- include('../partials/footer') %>

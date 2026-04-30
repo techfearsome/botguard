@@ -1,0 +1,36 @@
+<%- include('../partials/header', { ws, page, title: 'Landing Pages - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Landing Pages</h1>
+    <p class="muted">HTML templates rendered by the /go route. Use <code>{{click_id}}</code>, <code>{{utm_source}}</code> etc. as placeholders.</p>
+  </div>
+  <a href="/admin/pages/new" class="btn btn-primary">+ New Page</a>
+</div>
+
+<% if (pages.length === 0) { %>
+  <div class="empty-state">
+    <p>No landing pages yet.</p>
+    <a href="/admin/pages/new" class="btn btn-primary">Create your first page</a>
+  </div>
+<% } else { %>
+  <table class="table">
+    <tr><th>Name</th><th>Slug</th><th>Kind</th><th>Updated</th><th></th></tr>
+    <% pages.forEach(p => { %>
+      <tr>
+        <td><strong><%= p.name %></strong></td>
+        <td><code><%= p.slug %></code></td>
+        <td><%= p.kind %></td>
+        <td><%= new Date(p.updated_at).toLocaleString() %></td>
+        <td>
+          <a href="/admin/pages/<%= p._id %>/edit" class="btn btn-small">Edit</a>
+          <form method="POST" action="/admin/pages/<%= p._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this page?')">
+            <button type="submit" class="btn btn-small btn-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+    <% }) %>
+  </table>
+<% } %>
+
+<%- include('../partials/footer') %>

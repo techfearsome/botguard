@@ -1,0 +1,178 @@
+<%- include('../partials/header', { ws, page, title: 'Blacklist - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Provider Blacklist</h1>
+    <p class="muted">
+      Catches what ProxyCheck.io misses. Two rule types:
+      <strong>ASN rules</strong> (exact match against the ASN number ProxyCheck returns) and
+      <strong>Term rules</strong> (substring match against the provider/organization name).
+      Term rules are powerful — <code>m247</code> catches every ASN M247 ever registers,
+      <code>vpn</code> catches every provider with "VPN" in the name.
+    </p>
+  </div>
+</div>
+
+<section class="panel">
+  <h3>Add Rule</h3>
+  <form method="POST" action="/admin/asn" class="form" style="max-width:none;">
+
+    <div class="form-row">
+      <label>Rule Type</label>
+      <div style="display:flex; gap:16px; align-items:center;">
+        <label style="font-weight:normal;">
+          <input type="radio" name="rule_type" value="asn" checked onchange="toggleRuleType()"> ASN (number)
+        </label>
+        <label style="font-weight:normal;">
+          <input type="radio" name="rule_type" value="term" onchange="toggleRuleType()"> Term (provider/org match)
+        </label>
+      </div>
+    </div>
+
+    <div id="asn-fields">
+      <div class="grid-2">
+        <div class="form-row">
+          <label>ASN</label>
+          <input type="number" name="asn" placeholder="e.g. 60729">
+        </div>
+        <div class="form-row">
+          <label>Org name (optional, descriptive)</label>
+          <input type="text" name="asn_org" placeholder="e.g. M247 Europe">
+        </div>
+      </div>
+    </div>
+
+    <div id="term-fields" style="display:none;">
+      <div class="grid-2">
+        <div class="form-row">
+          <label>Term (case-insensitive substring)</label>
+          <input type="text" name="term" placeholder="e.g. vpn, m247, hosting, tor exit">
+          <small class="muted">Matched against the provider/org name returned by ProxyCheck.</small>
+        </div>
+        <div class="form-row">
+          <label>Match field</label>
+          <select name="term_field">
+            <option value="any">any (provider OR asn_org)</option>
+            <option value="provider">provider only</option>
+            <option value="asn_org">asn_org only</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div>
+        <div class="form-row">
+          <label>Category</label>
+          <select name="category" required>
+            <option value="">– Select –</option>
+            <option value="tor">tor</option>
+            <option value="vpn">vpn</option>
+            <option value="proxy">proxy</option>
+            <option value="datacenter">datacenter</option>
+            <option value="hosting">hosting</option>
+            <option value="scraper">scraper</option>
+            <option value="spam">spam</option>
+            <option value="other">other</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Severity</label>
+          <select name="severity">
+            <option value="hard_block">hard_block</option>
+            <option value="high" selected>high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <div class="form-row">
+          <label>Score weight (0–100)</label>
+          <input type="number" name="score_weight" value="50" min="0" max="100">
+        </div>
+        <div class="form-row">
+          <label>Scope</label>
+          <select name="scope">
+            <option value="workspace">This workspace</option>
+            <option value="global">Global (all workspaces)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Notes (optional)</label>
+      <input type="text" name="notes" placeholder="Why this rule exists">
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Add rule</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <h3>Active Rules (<%= entries.length %>)</h3>
+  <table class="table table-dense">
+    <tr>
+      <th>Type</th>
+      <th>Match</th>
+      <th>Field</th>
+      <th>Org</th>
+      <th>Category</th>
+      <th>Severity</th>
+      <th>Score</th>
+      <th>Scope</th>
+      <th>Hits</th>
+      <th>Status</th>
+      <th></th>
+    </tr>
+    <% entries.forEach(e => { %>
+      <tr class="<%= e.active ? '' : 'row-inactive' %>">
+        <td>
+          <% if (e.asn) { %><span class="badge badge-cat-other">ASN</span>
+          <% } else if (e.term) { %><span class="badge badge-cat-proxy">TERM</span>
+          <% } else { %>–<% } %>
+        </td>
+        <td>
+          <% if (e.asn) { %><code>AS<%= e.asn %></code>
+          <% } else if (e.term) { %><code><%= e.term %></code>
+          <% } %>
+        </td>
+        <td>
+          <% if (e.term) { %><small><%= e.term_field || 'any' %></small>
+          <% } else { %>–<% } %>
+        </td>
+        <td><small><%= e.asn_org || '–' %></small></td>
+        <td><span class="badge badge-cat-<%= e.category %>"><%= e.category %></span></td>
+        <td><%= e.severity %></td>
+        <td><%= e.score_weight %></td>
+        <td><%= e.workspace_id ? 'workspace' : 'global' %></td>
+        <td><%= e.hit_count || 0 %></td>
+        <td>
+          <% if (e.active) { %><span class="badge badge-allow">active</span>
+          <% } else { %><span class="badge badge-block">inactive</span><% } %>
+        </td>
+        <td>
+          <form method="POST" action="/admin/asn/<%= e._id %>/toggle" style="display:inline">
+            <button type="submit" class="btn btn-small"><%= e.active ? 'Disable' : 'Enable' %></button>
+          </form>
+          <form method="POST" action="/admin/asn/<%= e._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this rule?')">
+            <button type="submit" class="btn btn-small btn-danger">×</button>
+          </form>
+        </td>
+      </tr>
+    <% }) %>
+  </table>
+</section>
+
+<script>
+  function toggleRuleType() {
+    var type = document.querySelector('input[name="rule_type"]:checked').value;
+    document.getElementById('asn-fields').style.display  = type === 'asn'  ? '' : 'none';
+    document.getElementById('term-fields').style.display = type === 'term' ? '' : 'none';
+  }
+</script>
+
+<%- include('../partials/footer') %>

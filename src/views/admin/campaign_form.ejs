@@ -1,0 +1,91 @@
+<%- include('../partials/header', { ws, page, title: (campaign ? 'Edit' : 'New') + ' Campaign - BotGuard' }) %>
+
+<div class="page-header">
+  <h1><%= campaign ? 'Edit Campaign' : 'New Campaign' %></h1>
+</div>
+
+<form method="POST" action="<%= campaign ? '/admin/campaigns/' + campaign._id : '/admin/campaigns' %>" class="form">
+  <div class="form-row">
+    <label>Name</label>
+    <input type="text" name="name" value="<%= campaign?.name || '' %>" required>
+  </div>
+
+  <div class="form-row">
+    <label>Slug <span class="muted">(used in URL: /go/&lt;slug&gt;)</span></label>
+    <input type="text" name="slug" value="<%= campaign?.slug || '' %>" pattern="[a-z0-9-]+" required>
+  </div>
+
+  <div class="form-row">
+    <label>Status</label>
+    <select name="status">
+      <% ['active', 'paused', 'archived'].forEach(s => { %>
+        <option value="<%= s %>" <%= campaign?.status === s ? 'selected' : '' %>><%= s %></option>
+      <% }) %>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label>Source Profile</label>
+    <select name="source_profile">
+      <% ['mixed', 'email', 'paid_ads', 'organic', 'affiliate'].forEach(s => { %>
+        <option value="<%= s %>" <%= campaign?.source_profile === s ? 'selected' : '' %>><%= s %></option>
+      <% }) %>
+    </select>
+    <small class="muted">Determines how filter scores are weighted. Pick the dominant traffic source for this campaign.</small>
+  </div>
+
+  <div class="form-row">
+    <label>Landing Page (offer)</label>
+    <select name="landing_page_id">
+      <option value="">– None (renders stub) –</option>
+      <% pages.filter(p => p.kind !== 'safe').forEach(p => { %>
+        <option value="<%= p._id %>" <%= campaign?.landing_page_id?.toString() === p._id.toString() ? 'selected' : '' %>>
+          <%= p.name %>
+        </option>
+      <% }) %>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label>Safe Page (shown to filtered traffic)</label>
+    <select name="safe_page_id">
+      <option value="">– None –</option>
+      <% pages.filter(p => p.kind === 'safe').forEach(p => { %>
+        <option value="<%= p._id %>" <%= campaign?.safe_page_id?.toString() === p._id.toString() ? 'selected' : '' %>>
+          <%= p.name %>
+        </option>
+      <% }) %>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label>Filter Threshold (0–100)</label>
+    <input type="number" name="threshold" min="0" max="100" value="<%= campaign?.filter_config?.threshold ?? 70 %>">
+    <small class="muted">Block when total bot score reaches this value. Higher = more permissive.</small>
+  </div>
+
+  <div class="form-row">
+    <label>Mode</label>
+    <select name="mode">
+      <option value="log_only" <%= campaign?.filter_config?.mode === 'log_only' ? 'selected' : '' %>>log_only — log decisions but always render offer</option>
+      <option value="enforce" <%= campaign?.filter_config?.mode === 'enforce' ? 'selected' : '' %>>enforce — actually block bad traffic</option>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label>S2S Postback URL <span class="muted">(optional)</span></label>
+    <input type="text" name="postback_url" value="<%= campaign?.postback_url || '' %>" placeholder="https://your-tracker.example.com/postback?clickid={click_id}">
+  </div>
+
+  <div class="form-row">
+    <label>Notes</label>
+    <textarea name="notes" rows="3"><%= campaign?.notes || '' %></textarea>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary"><%= campaign ? 'Save changes' : 'Create campaign' %></button>
+    <a href="/admin/campaigns" class="btn">Cancel</a>
+  </div>
+</form>
+
+<%- include('../partials/footer') %>

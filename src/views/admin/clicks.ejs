@@ -1,0 +1,65 @@
+<%- include('../partials/header', { ws, page, title: 'Click Log - BotGuard' }) %>
+
+<div class="page-header">
+  <h1>Click Log</h1>
+  <p class="muted">Last 200 clicks. Use filters to narrow down.</p>
+</div>
+
+<form method="GET" class="filter-bar">
+  <select name="campaign">
+    <option value="">All campaigns</option>
+    <% campaigns.forEach(c => { %>
+      <option value="<%= c._id %>" <%= query.campaign === c._id.toString() ? 'selected' : '' %>><%= c.name %></option>
+    <% }) %>
+  </select>
+
+  <select name="decision">
+    <option value="">All decisions</option>
+    <% ['allow', 'block', 'would_block'].forEach(d => { %>
+      <option value="<%= d %>" <%= query.decision === d ? 'selected' : '' %>><%= d %></option>
+    <% }) %>
+  </select>
+
+  <input type="text" name="source" placeholder="utm_source" value="<%= query.source || '' %>">
+
+  <button type="submit" class="btn">Filter</button>
+  <a href="/admin/clicks" class="btn">Reset</a>
+</form>
+
+<% if (clicks.length === 0) { %>
+  <div class="empty-state"><p>No clicks match these filters.</p></div>
+<% } else { %>
+  <table class="table table-dense">
+    <tr>
+      <th>Time</th>
+      <th>Click ID</th>
+      <th>Campaign</th>
+      <th>UTM Source / Medium / Campaign</th>
+      <th>Country</th>
+      <th>Device</th>
+      <th>UA</th>
+      <th>InApp</th>
+      <th>Decision</th>
+    </tr>
+    <% clicks.forEach(c => { %>
+      <tr>
+        <td><%= new Date(c.ts).toLocaleString() %></td>
+        <td><a href="/admin/clicks/<%= c.click_id %>"><code><%= c.click_id.slice(0, 12) %>…</code></a></td>
+        <td><%= c.campaign_id?.name || '–' %></td>
+        <td>
+          <%= c.utm?.source || '–' %> / <%= c.utm?.medium || '–' %> / <%= c.utm?.campaign || '–' %>
+        </td>
+        <td><%= c.country || '–' %></td>
+        <td><%= c.ua_parsed?.device_type || '–' %></td>
+        <td title="<%= c.user_agent %>">
+          <%= c.ua_parsed?.browser || '–' %> / <%= c.ua_parsed?.os || '–' %>
+          <% if (c.ua_parsed?.is_bot) { %><span class="badge badge-warn">bot-ish</span><% } %>
+        </td>
+        <td><%= c.in_app_browser || '–' %></td>
+        <td><span class="badge badge-<%= c.decision %>"><%= c.decision %></span></td>
+      </tr>
+    <% }) %>
+  </table>
+<% } %>
+
+<%- include('../partials/footer') %>

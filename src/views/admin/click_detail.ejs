@@ -1,0 +1,128 @@
+<%- include('../partials/header', { ws, page, title: 'Click Detail - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Click <code><%= click.click_id %></code></h1>
+    <p class="muted">
+      <%= new Date(click.ts).toLocaleString() %> ·
+      Campaign: <strong><%= click.campaign_id?.name || '–' %></strong> ·
+      Profile: <%= click.scores?.profile_used || '–' %>
+    </p>
+  </div>
+  <a href="/admin/clicks" class="btn">← Back to log</a>
+</div>
+
+<div class="grid-2">
+  <section class="panel">
+    <h3>Decision</h3>
+    <p>
+      <span class="badge badge-<%= click.decision %>" style="font-size:14px;padding:4px 12px;">
+        <%= click.decision %>
+      </span>
+      <small class="muted"> mode: <%= click.mode_at_decision %></small>
+    </p>
+    <p><strong>Reason:</strong> <code><%= click.decision_reason %></code></p>
+    <p><strong>Total score:</strong> <%= click.scores?.total ?? 0 %> / 100</p>
+  </section>
+
+  <section class="panel">
+    <h3>Layer Scores</h3>
+    <table class="table table-dense">
+      <% ['network','headers','behavior','pattern','referer'].forEach(k => { %>
+        <tr>
+          <td><%= k %></td>
+          <td><%= click.scores?.[k] ?? 0 %></td>
+          <td>
+            <div class="bar"><div class="bar-fill" style="width:<%= Math.min(100, click.scores?.[k] ?? 0) %>%"></div></div>
+          </td>
+        </tr>
+      <% }) %>
+      <tr style="border-top:2px solid #ddd; font-weight:600;">
+        <td>total</td>
+        <td><%= click.scores?.total ?? 0 %></td>
+        <td><div class="bar"><div class="bar-fill bar-total" style="width:<%= Math.min(100, click.scores?.total ?? 0) %>%"></div></div></td>
+      </tr>
+    </table>
+  </section>
+</div>
+
+<section class="panel">
+  <h3>Flags (<%= (click.scores?.flags || []).length %>)</h3>
+  <div class="flag-cloud">
+    <% (click.scores?.flags || []).forEach(f => { %>
+      <span class="flag"><%= f %></span>
+    <% }) %>
+    <% if ((click.scores?.flags || []).length === 0) { %>
+      <span class="muted">No flags raised.</span>
+    <% } %>
+  </div>
+</section>
+
+<div class="grid-2">
+  <section class="panel">
+    <h3>Network</h3>
+    <table class="table table-dense">
+      <tr><td>IP (hashed)</td><td><code><%= click.ip_hash || '–' %></code></td></tr>
+      <tr><td>ASN</td><td><%= click.asn ? 'AS' + click.asn : '–' %> <small><%= click.asn_org || '' %></small></td></tr>
+      <tr><td>Country</td><td><%= click.country || '–' %> <%= click.region ? '/ ' + click.region : '' %> <%= click.city ? '/ ' + click.city : '' %></td></tr>
+      <tr><td>UA</td><td><small><%= click.user_agent || '–' %></small></td></tr>
+      <tr><td>Browser</td><td><%= click.ua_parsed?.browser || '–' %> / <%= click.ua_parsed?.os || '–' %> / <%= click.ua_parsed?.device_type || '–' %></td></tr>
+      <tr><td>In-app</td><td><%= click.in_app_browser || '–' %></td></tr>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h3>Attribution</h3>
+    <table class="table table-dense">
+      <% ['source','medium','campaign','term','content'].forEach(k => { %>
+        <tr><td>utm_<%= k %></td><td><%= click.utm?.[k] || '–' %></td></tr>
+      <% }) %>
+      <tr><td>fbclid</td><td><%= click.external_ids?.fbclid || '–' %></td></tr>
+      <tr><td>gclid</td><td><%= click.external_ids?.gclid || '–' %></td></tr>
+      <tr><td>ttclid</td><td><%= click.external_ids?.ttclid || '–' %></td></tr>
+      <tr><td>referer</td><td><small><%= click.referer || '–' %></small></td></tr>
+    </table>
+  </section>
+</div>
+
+<section class="panel">
+  <h3>Fingerprint</h3>
+  <% if (click.fingerprint && Object.keys(click.fingerprint).length > 0) { %>
+    <table class="table table-dense">
+      <% Object.entries(click.fingerprint).forEach(([k, v]) => { %>
+        <tr><td><%= k %></td><td><code><%= typeof v === 'object' ? JSON.stringify(v) : v %></code></td></tr>
+      <% }) %>
+    </table>
+  <% } else { %>
+    <p class="muted">No fingerprint received. The JS challenge either didn't run (bot, prefetcher) or hasn't reported yet.</p>
+  <% } %>
+</section>
+
+<section class="panel">
+  <h3>Conversions (<%= conversions.length %>)</h3>
+  <% if (conversions.length === 0) { %>
+    <p class="muted">No conversions recorded for this click.</p>
+  <% } else { %>
+    <table class="table table-dense">
+      <tr><th>Time</th><th>Event</th><th>Value</th><th>Source</th></tr>
+      <% conversions.forEach(c => { %>
+        <tr>
+          <td><%= new Date(c.ts).toLocaleString() %></td>
+          <td><%= c.event_name %></td>
+          <td><%= c.value %> <%= c.currency %></td>
+          <td><%= c.source %></td>
+        </tr>
+      <% }) %>
+    </table>
+  <% } %>
+</section>
+
+<style>
+  .bar { background: #e1e4ea; height: 6px; border-radius: 3px; width: 200px; overflow: hidden; }
+  .bar-fill { background: #2d6cdf; height: 100%; transition: width .2s; }
+  .bar-total { background: #aa4a08; }
+  .flag-cloud { display: flex; flex-wrap: wrap; gap: 6px; }
+  .flag { display: inline-block; padding: 2px 8px; background: #f0f2f7; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
+</style>
+
+<%- include('../partials/footer') %>

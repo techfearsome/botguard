@@ -1,0 +1,38 @@
+<%- include('../partials/header', { ws, page, title: (lp ? 'Edit' : 'New') + ' Page - BotGuard' }) %>
+
+<div class="page-header">
+  <h1><%= lp ? 'Edit Landing Page' : 'New Landing Page' %></h1>
+</div>
+
+<form method="POST" action="<%= lp ? '/admin/pages/' + lp._id : '/admin/pages' %>" class="form">
+  <div class="form-row">
+    <label>Name</label>
+    <input type="text" name="name" value="<%= lp?.name || '' %>" required>
+  </div>
+
+  <div class="form-row">
+    <label>Slug</label>
+    <input type="text" name="slug" value="<%= lp?.slug || '' %>" pattern="[a-z0-9-]+" required>
+  </div>
+
+  <div class="form-row">
+    <label>Kind</label>
+    <select name="kind">
+      <option value="offer" <%= lp?.kind === 'offer' ? 'selected' : '' %>>offer (real landing page)</option>
+      <option value="safe" <%= lp?.kind === 'safe' ? 'selected' : '' %>>safe (shown to filtered traffic)</option>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label>HTML Template</label>
+    <textarea name="html_template" rows="20" class="code"><%= lp?.html_template || '' %></textarea>
+    <small class="muted">Available placeholders: <code>{{click_id}}</code>, <code>{{utm_source}}</code>, <code>{{utm_medium}}</code>, <code>{{utm_campaign}}</code></small>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary"><%= lp ? 'Save changes' : 'Create page' %></button>
+    <a href="/admin/pages" class="btn">Cancel</a>
+  </div>
+</form>
+
+<%- include('../partials/footer') %>

@@ -1,0 +1,90 @@
+<%- include('../partials/header', { ws, page, title: 'Dashboard - BotGuard' }) %>
+
+<div class="page-header">
+  <h1>Dashboard</h1>
+  <p class="muted">Overview of last 24 hours and 7 days</p>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-label">Clicks (24h)</div>
+    <div class="stat-value"><%= stats.clicks24h.toLocaleString() %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Clicks (7d)</div>
+    <div class="stat-value"><%= stats.clicks7d.toLocaleString() %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Conversions (24h)</div>
+    <div class="stat-value"><%= stats.conversions24h.toLocaleString() %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">CR (24h)</div>
+    <div class="stat-value">
+      <%= stats.clicks24h > 0 ? ((stats.conversions24h / stats.clicks24h) * 100).toFixed(2) + '%' : '–' %>
+    </div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <section class="panel">
+    <h3>Decision Breakdown (7d)</h3>
+    <% if (decisionBreakdown.length === 0) { %>
+      <p class="muted">No clicks yet.</p>
+    <% } else { %>
+      <table class="table">
+        <tr><th>Decision</th><th>Count</th></tr>
+        <% decisionBreakdown.forEach(d => { %>
+          <tr>
+            <td><span class="badge badge-<%= d._id %>"><%= d._id %></span></td>
+            <td><%= d.count.toLocaleString() %></td>
+          </tr>
+        <% }) %>
+      </table>
+    <% } %>
+  </section>
+
+  <section class="panel">
+    <h3>Top Sources (7d)</h3>
+    <% if (topSources.length === 0) { %>
+      <p class="muted">No source data yet.</p>
+    <% } else { %>
+      <table class="table">
+        <tr><th>utm_source</th><th>Clicks</th></tr>
+        <% topSources.forEach(s => { %>
+          <tr><td><%= s._id %></td><td><%= s.count.toLocaleString() %></td></tr>
+        <% }) %>
+      </table>
+    <% } %>
+  </section>
+</div>
+
+<section class="panel">
+  <h3>Recent Clicks</h3>
+  <% if (recentClicks.length === 0) { %>
+    <p class="muted">No clicks recorded yet. Send traffic to <code>/go/&lt;campaign-slug&gt;</code> to get started.</p>
+  <% } else { %>
+    <table class="table">
+      <tr>
+        <th>Time</th>
+        <th>Click ID</th>
+        <th>Source / Medium</th>
+        <th>Country</th>
+        <th>Device</th>
+        <th>Decision</th>
+      </tr>
+      <% recentClicks.forEach(c => { %>
+        <tr>
+          <td><%= new Date(c.ts).toLocaleString() %></td>
+          <td><code><%= c.click_id.slice(0, 10) %>…</code></td>
+          <td><%= c.utm?.source || '–' %> / <%= c.utm?.medium || '–' %></td>
+          <td><%= c.country || '–' %></td>
+          <td><%= c.ua_parsed?.device_type || '–' %><%= c.in_app_browser ? ' (' + c.in_app_browser + ')' : '' %></td>
+          <td><span class="badge badge-<%= c.decision %>"><%= c.decision %></span></td>
+        </tr>
+      <% }) %>
+    </table>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

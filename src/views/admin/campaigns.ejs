@@ -1,0 +1,46 @@
+<%- include('../partials/header', { ws, page, title: 'Campaigns - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Campaigns</h1>
+    <p class="muted">Each campaign has a unique slug used in the public URL: <code>/go/&lt;slug&gt;</code></p>
+  </div>
+  <a href="/admin/campaigns/new" class="btn btn-primary">+ New Campaign</a>
+</div>
+
+<% if (campaigns.length === 0) { %>
+  <div class="empty-state">
+    <p>No campaigns yet.</p>
+    <a href="/admin/campaigns/new" class="btn btn-primary">Create your first campaign</a>
+  </div>
+<% } else { %>
+  <table class="table">
+    <tr>
+      <th>Name</th>
+      <th>Slug / URL</th>
+      <th>Profile</th>
+      <th>Mode</th>
+      <th>Status</th>
+      <th>Landing Page</th>
+      <th></th>
+    </tr>
+    <% campaigns.forEach(c => { %>
+      <tr>
+        <td><strong><%= c.name %></strong></td>
+        <td><code>/go/<%= c.slug %></code></td>
+        <td><%= c.source_profile %></td>
+        <td><span class="badge badge-mode-<%= c.filter_config?.mode %>"><%= c.filter_config?.mode || 'log_only' %></span></td>
+        <td><span class="badge badge-status-<%= c.status %>"><%= c.status %></span></td>
+        <td><%= c.landing_page_id?.name || '–' %></td>
+        <td>
+          <a href="/admin/campaigns/<%= c._id %>/edit" class="btn btn-small">Edit</a>
+          <form method="POST" action="/admin/campaigns/<%= c._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this campaign?')">
+            <button type="submit" class="btn btn-small btn-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+    <% }) %>
+  </table>
+<% } %>
+
+<%- include('../partials/footer') %>
