@@ -232,6 +232,31 @@ const RUNTIME = `
 
     function send(payload) {
       var url = cfg.endpoint;
+
+      // In debug mode, prefer fetch over sendBeacon so we can log the response.
+      // sendBeacon is fire-and-forget and tells us nothing about server-side success.
+      if (DEBUG) {
+        try {
+          fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+            .then(function(r) { return r.json().then(function(j) { return { status: r.status, body: j }; }); })
+            .then(function(result) {
+              dbg('  → server response:', result.status, result.body);
+              if (result.status !== 200) {
+                console.warn('[bg] CONVERSION FAILED:', result);
+              } else if (result.body && result.body.debug) {
+                dbg('  → click record updated:', result.body.debug.updated_counters);
+              }
+            })
+            .catch(function(err) { dbg('  → send error:', err && err.message); });
+        } catch (e) { dbg('  → send threw:', e && e.message); }
+        return;
+      }
+
       try {
         // sendBeacon is fire-and-forget and works during page unload
         if (navigator.sendBeacon) {

@@ -100,10 +100,35 @@ router.post('/auto-conv', async (req, res) => {
   }
 
   try {
-    const click = await Click.findOne({ click_id: clickId }).lean();
+    // Find the click record. There's a race: /go is fire-and-forget on click writes,
+    // so the beacon could arrive in this endpoint before the Mongo write completes.
+    // Retry up to 3 times with short backoff to handle this gracefully.
+    let click = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      click = await Click.findOne({ click_id: clickId }).lean();
+      if (click) break;
+      // Small wait before retry - covers most race windows under typical load
+      await new Promise((r) => setTimeout(r, 50));
+    }
     if (!click) {
+      // After retries, still no click. Could be:
+      //   - genuinely unknown click_id (probing/bot)
+      //   - extreme MongoDB latency (>150ms write)
+      //   - cookie was carried over from an old, deleted click
       // Don't 404 - that would let attackers probe valid click IDs
-      return res.json({ ok: true, ignored: true });
+      logger.warn('auto_conv_click_not_found', { click_id: clickId });
+      if (debugMode) {
+        return res.json({
+          ok: true,
+          ignored: true,
+          debug: {
+            reason: 'click_not_found',
+            click_id_searched: clickId,
+            tip: 'No Click record exists with this click_id. Possible causes: (1) the click_id cookie is from an old session whose click record was deleted, (2) MongoDB write latency >150ms, (3) the click_id is being tampered with. Check that visiting /go/<your-slug> creates a click row in /admin/clicks before the auto-conv beacon fires.',
+          },
+        });
+      }
+      return res.json({ ok: true, ignored: true, reason: 'click_not_found' });
     }
 
     // Sanitize text fields - we'll display these in admin pages
