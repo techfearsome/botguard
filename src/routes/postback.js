@@ -104,13 +104,29 @@ router.post('/auto-conv', async (req, res) => {
 
   // Per-click-id dedup. The bg_conv cookie now stores the click_id it was
   // set for. We dedup ONLY when the cookie's value matches the current click_id
-  // - meaning the visitor already converted on THIS landing page session.
+  // AND a real Conversion record already exists for it - meaning the visitor
+  // genuinely converted before. We check the DB because the cookie alone is
+  // unreliable: a misbehaving client could set bg_conv=clickId on its first
+  // request, which would otherwise cause us to silently drop legitimate first
+  // conversions.
+  //
   // A different click_id in bg_conv means the visitor came back via a fresh
   // ad click and should be allowed to convert again.
   if (!debugMode && req.cookies && req.cookies[AUTO_CONV_SESSION_COOKIE]) {
     const dedupCid = req.cookies[AUTO_CONV_SESSION_COOKIE];
     if (dedupCid === clickId) {
-      return res.json({ ok: true, dedup: true, dedup_match: 'same_click_id' });
+      // Cookie matches click_id - but only consider it a true duplicate if a
+      // Conversion record actually exists. Otherwise, treat it as a fresh
+      // conversion attempt with a self-set cookie.
+      const existingConv = await Conversion.findOne({
+        click_id: clickId,
+        source: 'auto',
+      }).select('_id').lean();
+      if (existingConv) {
+        return res.json({ ok: true, dedup: true, dedup_match: 'same_click_id' });
+      }
+      // Fall through: cookie matches but no real conversion yet, so this IS the
+      // first legitimate conversion attempt. Let it proceed.
     }
     // Different click_id - this is a fresh session, let the conversion through
   }

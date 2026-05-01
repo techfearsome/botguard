@@ -36,6 +36,16 @@ require.cache[modelsPath + '.js'] = require.cache[modelsPath + '/index.js'] = {
         stubState.conversions.push(doc);
         return { _id: { toString: () => 'conv_' + stubState.conversions.length }, ...doc };
       },
+      findOne: (q) => {
+        const found = stubState.conversions.find((c) =>
+          (!q.click_id || c.click_id === q.click_id) &&
+          (!q.source || c.source === q.source)
+        );
+        return {
+          select: () => ({ lean: async () => found || null }),
+          lean: async () => found || null,
+        };
+      },
     },
   },
 };
@@ -163,17 +173,43 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     assert.ok(update.u.$set.last_conversion_at instanceof Date);
   });
 
-  await test('bg_conv cookie matching current click_id → dedup, no new conversion', async () => {
+  await test('bg_conv matches click_id AND a conversion already exists → dedup', async () => {
+    // The server now requires BOTH conditions for dedup: cookie match AND
+    // existing Conversion record in DB. This protects against self-inflicted
+    // false dedup (client setting bg_conv prematurely).
     stubState = makeState();
+    // Pre-seed a conversion record for this click_id
+    stubState.conversions.push({
+      click_id: 'CLICK123',
+      source: 'auto',
+      ts: new Date(),
+    });
     const r = await postJson(server, '/cb/auto-conv',
       { click_id: 'CLICK123', term: 'download' },
-      'bg_conv=CLICK123');     // value matches click_id → dedup
+      'bg_conv=CLICK123');
     assert.strictEqual(r.status, 200);
     const json = JSON.parse(r.body);
     assert.strictEqual(json.ok, true);
     assert.strictEqual(json.dedup, true);
-    assert.strictEqual(stubState.conversions.length, 0);
+    // Should still be just the one we pre-seeded - no new conversion
+    assert.strictEqual(stubState.conversions.length, 1);
     assert.strictEqual(stubState.clickUpdates.length, 0);
+  });
+
+  await test('bg_conv matches click_id BUT no existing conversion → fire (self-inflicted false dedup)', async () => {
+    // CRITICAL: this is the scenario that broke production. The runtime sets
+    // bg_conv = click_id BEFORE sending the beacon (was the bug we just fixed).
+    // Even with the runtime fixed, we want server-side defense against any
+    // client that somehow sends a matching cookie without a real conversion yet.
+    stubState = makeState();
+    // No existing conversion in stubState.conversions
+    const r = await postJson(server, '/cb/auto-conv',
+      { click_id: 'CLICK123', term: 'download' },
+      'bg_conv=CLICK123');     // cookie matches but no real conversion yet
+    assert.strictEqual(r.status, 200);
+    const json = JSON.parse(r.body);
+    assert.notStrictEqual(json.dedup, true, 'should NOT dedup when no real conversion exists');
+    assert.strictEqual(stubState.conversions.length, 1, 'conversion should be recorded');
   });
 
   await test('bg_conv cookie from DIFFERENT click_id → conversion fires (fresh session)', async () => {
@@ -292,6 +328,8 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
 
   await test('Debug mode does NOT apply when bg_debug not in referer', async () => {
     stubState = makeState();
+    // Pre-seed a conversion so the cookie+conversion check correctly dedups
+    stubState.conversions.push({ click_id: 'CLICK123', source: 'auto', ts: new Date() });
     const r = await postJsonWithReferer(server, '/cb/auto-conv',
       { click_id: 'CLICK123', term: 'download' },
       'bg_conv=CLICK123',
@@ -299,7 +337,8 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     assert.strictEqual(r.status, 200);
     const json = JSON.parse(r.body);
     assert.strictEqual(json.dedup, true, 'should still dedup without debug flag');
-    assert.strictEqual(stubState.conversions.length, 0);
+    // Should still have just the one we pre-seeded
+    assert.strictEqual(stubState.conversions.length, 1);
   });
 
   await test('sendBeacon-style request with text/plain content-type still works', async () => {

@@ -320,11 +320,6 @@ const RUNTIME = `
           return;
         }
 
-        // Set dedup cookie tied to this click_id. Future clicks with the same
-        // click_id will be deduped; future clicks with a different click_id
-        // (i.e., a fresh ad click) will fire a new conversion.
-        setCookie(cfg.session_cookie, clickId, cfg.session_days);
-
         var payload = {
           click_id: clickId,
           event_name: cfg.event_name,
@@ -337,6 +332,15 @@ const RUNTIME = `
         };
         dbg('  → sending to', cfg.endpoint, payload);
         send(payload);
+
+        // CRITICAL: set the dedup cookie AFTER sending the beacon, not before.
+        // If we set it first, the beacon's Cookie header would include
+        // bg_conv=<click_id>, and the server's dedup check would match
+        // (cookie value === click_id in payload) and reject the FIRST conversion.
+        // sendBeacon queues the request synchronously - by the time send() returns,
+        // the browser has already snapshotted the cookies for the in-flight request,
+        // so setting the cookie now affects only future clicks (which is what we want).
+        setCookie(cfg.session_cookie, clickId, cfg.session_days);
       } catch (e) {
         dbg('  → handler error:', e && e.message);
       }

@@ -219,6 +219,41 @@ async function clickAndWait(dom, target) {
     assert.strictEqual(beacons.length, 1, 'second click should be deduped');
   });
 
+  // Regression test for the cookie-ordering bug: dedup cookie was being set
+  // BEFORE the beacon went out, so the beacon's Cookie header included
+  // bg_conv=<click_id> and the server self-deduped the very first conversion.
+  await test('First click fires beacon WITHOUT bg_conv cookie set yet', async () => {
+    const { dom, beacons } = await setupPage({
+      terms: ['download'],
+      bodyHtml: '<button id="cta">Download</button>',
+    });
+    // CRITICAL: at the moment the beacon is sent, bg_conv must NOT yet be set.
+    // The cookie should only be set AFTER the beacon is queued, so the in-flight
+    // request does not include the dedup cookie.
+    //
+    // We test this by checking the cookie state after the click - the beacon
+    // capture happens synchronously when sendBeacon is called, so if bg_conv
+    // were set before, we'd see it in document.cookie at the same time.
+    let cookieAtBeaconTime = null;
+    const origSendBeacon = dom.window.navigator.sendBeacon;
+    dom.window.navigator.sendBeacon = function(u, b) {
+      // Record cookie state at the moment of the beacon call
+      cookieAtBeaconTime = dom.window.document.cookie;
+      return origSendBeacon.call(this, u, b);
+    };
+    await clickAndWait(dom, dom.window.document.getElementById('cta'));
+    assert.strictEqual(beacons.length, 1, 'beacon should fire');
+    assert.ok(cookieAtBeaconTime !== null, 'sendBeacon should have been called');
+    // bg_conv must NOT be present in cookies at the moment sendBeacon is called.
+    // If it is, the request would include a self-deduping bg_conv cookie.
+    assert.ok(!/(?:^|; )bg_conv=/.test(cookieAtBeaconTime),
+      `bg_conv must NOT be set yet when beacon fires. Cookie was: ${cookieAtBeaconTime}`);
+    // After the click handler completes, the cookie SHOULD be set for future click dedup
+    const cookieAfter = dom.window.document.cookie;
+    assert.ok(/bg_conv=/.test(cookieAfter),
+      `bg_conv should be set after the click handler. Cookie: ${cookieAfter}`);
+  });
+
   await test('Phone link with extra wrapping <span> still matches via ancestor walk', async () => {
     const { dom, beacons } = await setupPage({
       terms: ['call'],
