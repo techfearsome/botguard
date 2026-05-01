@@ -382,6 +382,75 @@ Under **Settings → Custom domains** in your App Service. Add your domain, vali
 - [ ] If using Coolify with internal-only Mongo: you confirmed the database is **NOT** publicly exposed
 - [ ] You changed `DEFAULT_WORKSPACE_SLUG` from the default to something specific to you (it appears in URLs like `/admin/<slug>/...`)
 
+## Capacity planning (especially for shared VPS)
+
+**At 10–100 visitors/min** (typical small-to-mid affiliate / lead-gen scale): a 4 GB shared VPS is plenty, even with other apps on the box. Realistic resource use:
+
+| Metric | Idle | Sustained 100 visits/min |
+|---|---|---|
+| Node memory (RSS) | ~150 MB | ~250 MB |
+| CPU (1 core) | <1% | <3% |
+| Mongo ops/sec | trivial | ~6 ops/sec |
+| Network out | trivial | ~150 KB/s |
+
+**At 500–2,000 visitors/min** you'll want Redis enabled (campaign/workspace cache, ~90% Mongo offload) and a dedicated 1 GB+ Mongo. ~150 visits/sec is doable on the same box if you're disciplined about resource caps.
+
+**At 2,000+ visitors/min** put BotGuard on its own box, scale Mongo separately, and put Redis on a low-latency network with the app.
+
+### Coolify-specific knobs for shared boxes
+
+If you're on a 4 GB box shared with other apps, set these to prevent any one service eating everything:
+
+1. **Per-service memory limit** in Coolify: BotGuard → Settings → Resources → Memory limit `512 MB`, Memory reservation `256 MB`. The Dockerfile already caps Node's heap at 384 MB via `NODE_OPTIONS`, so the container will never request more than 512 MB total.
+
+2. **Cap Mongo's WiredTiger cache.** Mongo defaults to 50% of system RAM, which on a 4 GB box means it'll grab 2 GB and starve everything else. In your Mongo service env: `MONGO_INITDB_DATABASE=botguard` plus a custom command:
+   ```
+   mongod --wiredTigerCacheSizeGB 0.5
+   ```
+   Or via `mongod.conf`:
+   ```yaml
+   storage:
+     wiredTiger:
+       engineConfig:
+         cacheSizeGB: 0.5
+   ```
+
+3. **Cap Redis memory.** Redis is great but can grow. Set `maxmemory 128mb` and `maxmemory-policy allkeys-lru` in its config. BotGuard uses Redis for transient caching (60s TTL), so LRU eviction is safe.
+
+4. **Add 2 GB swap** as insurance against OOM kills:
+   ```bash
+   fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+   ```
+
+5. **Restart policy: `unless-stopped`** in Coolify. Prevents flapping if a single OOM does happen.
+
+### Graceful shutdown
+
+The app installs SIGTERM/SIGINT handlers that:
+1. Stop accepting new connections
+2. Let in-flight requests finish (up to 10s)
+3. Close Mongo cleanly
+4. Exit cleanly
+
+Coolify rolling deploys won't drop visitor requests as long as your healthcheck is wired (the Dockerfile already includes `/healthz`). Make sure Coolify is configured to wait for the new container to pass healthcheck before stopping the old one (the default).
+
+### Recommended Coolify configuration
+
+In Coolify's environment variables for BotGuard:
+
+| Variable | Value | Reason |
+|---|---|---|
+| `NODE_ENV` | `production` | Disables verbose logging, enables compression |
+| `TRUST_PROXY` | `cloudflare` | Required if behind Cloudflare; otherwise `1` |
+| `MONGO_URI` | `mongodb://mongo:27017/botguard` | Internal Coolify Mongo service |
+| `REDIS_URL` | `redis://redis:6379` | Internal Coolify Redis service (optional but recommended for >50 visitors/min) |
+| `SESSION_SECRET` | (random 32+ chars) | `openssl rand -hex 32` |
+| `ADMIN_USERNAME` | (your choice) | |
+| `ADMIN_PASSWORD` | (long passphrase) | Hashed at startup; never logged |
+| `PROXYCHECK_API_KEY` | (from proxycheck.io) | Required for IP enrichment |
+| `BASE_URL` | `https://yourdomain.com` | Used in absolute URLs |
+
 ## Troubleshooting
 
 **Login redirects you back to login.** SESSION_SECRET probably isn't set or is too short (must be ≥16 chars). Check `heroku logs` / Coolify logs / Azure log stream — the server logs `login_no_credentials_configured` if `ADMIN_USERNAME`/`ADMIN_PASSWORD` env vars aren't set.

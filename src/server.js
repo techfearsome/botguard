@@ -126,9 +126,46 @@ async function start() {
   await ensureDefaultWorkspace();
 
   const port = Number(process.env.PORT) || 3000;
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     logger.info('server_started', { port, base_url: process.env.BASE_URL });
   });
+
+  // Graceful shutdown - critical for rolling deploys behind Coolify/Docker.
+  // When the orchestrator sends SIGTERM, we:
+  //   1. Stop accepting new connections
+  //   2. Let in-flight requests finish (up to 10s)
+  //   3. Close Mongo connection cleanly
+  //   4. Exit
+  // Without this, active visitors mid-request would see connection resets
+  // every time you redeploy.
+  let shuttingDown = false;
+  function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info('shutdown_started', { signal });
+
+    // Stop accepting new connections
+    server.close((err) => {
+      if (err) logger.error('server_close_error', { err: err.message });
+      else logger.info('server_closed');
+      // Close Mongo last so any in-flight click writes can complete
+      mongoose.connection.close(false).then(() => {
+        logger.info('mongo_closed');
+        process.exit(0);
+      }).catch((e) => {
+        logger.error('mongo_close_error', { err: e.message });
+        process.exit(1);
+      });
+    });
+
+    // Hard timeout - if we can't close gracefully in 10s, force exit
+    setTimeout(() => {
+      logger.error('shutdown_timeout_forcing_exit');
+      process.exit(1);
+    }, 10000).unref();
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 start().catch((err) => {
