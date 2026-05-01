@@ -231,7 +231,14 @@ const RUNTIME = `
     }
 
     function send(payload) {
+      // Build the endpoint URL. In debug mode, append ?bg_debug=1 so the server
+      // can detect debug mode even when the browser strips the Referer header
+      // (incognito mode, strict privacy settings, cross-origin scenarios all
+      // can drop or downgrade Referer).
       var url = cfg.endpoint;
+      if (DEBUG) {
+        url += (url.indexOf('?') === -1 ? '?' : '&') + 'bg_debug=1';
+      }
 
       // In debug mode, prefer fetch over sendBeacon so we can log the response.
       // sendBeacon is fire-and-forget and tells us nothing about server-side success.

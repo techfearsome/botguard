@@ -85,14 +85,21 @@ router.post('/auto-conv', async (req, res) => {
   //   - Malicious clients clearing the cookie and re-sending
   //   - Race condition between cookie set + click event firing twice
   //
-  // EXCEPTION: when the request originates from a page with ?bg_debug=1 in the
-  // URL, we skip this dedup so QA can test repeatedly without clearing cookies.
-  // We check the Referer header — bg_debug=1 cannot be spoofed in the body
-  // because we don't read it from the body.
+  // EXCEPTION: when the request is in debug mode, we skip this dedup so QA can
+  // test repeatedly without clearing cookies. We detect debug mode TWO ways:
+  //   1. ?bg_debug=1 in the request URL itself (most reliable - works in
+  //      incognito mode where browsers strip Referer)
+  //   2. bg_debug=1 in the Referer header (fallback for older clients)
+  // Either signal is enough. Both are added by the client when ?bg_debug=1 is
+  // present in the page URL.
   var debugMode = false;
   try {
-    var ref = req.get('referer') || '';
-    debugMode = ref.indexOf('bg_debug=1') !== -1;
+    if (req.query && req.query.bg_debug === '1') {
+      debugMode = true;
+    } else {
+      var ref = req.get('referer') || '';
+      debugMode = ref.indexOf('bg_debug=1') !== -1;
+    }
   } catch (e) {}
 
   if (!debugMode && req.cookies && req.cookies[AUTO_CONV_SESSION_COOKIE]) {

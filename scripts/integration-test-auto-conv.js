@@ -249,6 +249,19 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     assert.strictEqual(conv.event_name, 'auto_click');
   });
 
+  await test('Debug mode via ?bg_debug=1 query string also bypasses dedup (no Referer needed)', async () => {
+    // Critical: incognito mode strips Referer, so query string is the reliable signal
+    stubState = makeState();
+    const r = await postJsonWithReferer(server, '/cb/auto-conv?bg_debug=1',
+      { click_id: 'CLICK123', term: 'download' },
+      'bg_conv=1',
+      '');     // NO referer at all - simulates incognito mode
+    assert.strictEqual(r.status, 200);
+    const json = JSON.parse(r.body);
+    assert.notStrictEqual(json.dedup, true, 'should NOT be deduped when ?bg_debug=1 in URL');
+    assert.strictEqual(stubState.conversions.length, 1, 'conversion should be recorded');
+  });
+
   await test('Debug mode (Referer contains bg_debug=1) bypasses dedup cookie', async () => {
     stubState = makeState();
     // Has bg_conv cookie set (would normally cause dedup) BUT referer says debug mode
