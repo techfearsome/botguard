@@ -144,11 +144,12 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     assert.strictEqual(conv.event_name, 'install');
   });
 
-  await test('Conversion sets bg_conv cookie for client-side dedup', async () => {
+  await test('Conversion sets bg_conv cookie containing the click_id (per-click dedup)', async () => {
     stubState = makeState();
     const r = await postJson(server, '/cb/auto-conv', { click_id: 'CLICK123', term: 'download' });
     const setCookie = r.headers['set-cookie'] || [];
-    assert.ok(setCookie.some(c => /^bg_conv=1/.test(c)), `expected bg_conv cookie, got: ${setCookie}`);
+    // Cookie value is now the click_id, not just '1' - so dedup is per-click-id
+    assert.ok(setCookie.some(c => /^bg_conv=CLICK123/.test(c)), `expected bg_conv=CLICK123, got: ${setCookie}`);
   });
 
   await test('Click record is updated with conversion counters', async () => {
@@ -162,17 +163,30 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     assert.ok(update.u.$set.last_conversion_at instanceof Date);
   });
 
-  await test('Existing bg_conv cookie → dedup, no new conversion', async () => {
+  await test('bg_conv cookie matching current click_id → dedup, no new conversion', async () => {
     stubState = makeState();
     const r = await postJson(server, '/cb/auto-conv',
       { click_id: 'CLICK123', term: 'download' },
-      'bg_conv=1');
+      'bg_conv=CLICK123');     // value matches click_id → dedup
     assert.strictEqual(r.status, 200);
     const json = JSON.parse(r.body);
     assert.strictEqual(json.ok, true);
     assert.strictEqual(json.dedup, true);
     assert.strictEqual(stubState.conversions.length, 0);
     assert.strictEqual(stubState.clickUpdates.length, 0);
+  });
+
+  await test('bg_conv cookie from DIFFERENT click_id → conversion fires (fresh session)', async () => {
+    // Critical: stale bg_conv from a previous ad campaign must not block fresh conversions
+    stubState = makeState();
+    const r = await postJson(server, '/cb/auto-conv',
+      { click_id: 'CLICK_NEW', term: 'download' },
+      'bg_conv=CLICK_OLD');    // different click_id → not dedup
+    assert.strictEqual(r.status, 200);
+    const json = JSON.parse(r.body);
+    assert.strictEqual(json.ok, true);
+    assert.notStrictEqual(json.dedup, true, 'should NOT dedup for different click_id');
+    assert.strictEqual(stubState.conversions.length, 1);
   });
 
   await test('Missing click_id → 400', async () => {
@@ -254,7 +268,7 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     stubState = makeState();
     const r = await postJsonWithReferer(server, '/cb/auto-conv?bg_debug=1',
       { click_id: 'CLICK123', term: 'download' },
-      'bg_conv=1',
+      'bg_conv=CLICK123',     // would dedup if not for debug mode
       '');     // NO referer at all - simulates incognito mode
     assert.strictEqual(r.status, 200);
     const json = JSON.parse(r.body);
@@ -264,10 +278,10 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
 
   await test('Debug mode (Referer contains bg_debug=1) bypasses dedup cookie', async () => {
     stubState = makeState();
-    // Has bg_conv cookie set (would normally cause dedup) BUT referer says debug mode
+    // Has matching bg_conv cookie (would normally cause dedup) BUT referer says debug mode
     const r = await postJsonWithReferer(server, '/cb/auto-conv',
       { click_id: 'CLICK123', term: 'download' },
-      'bg_conv=1',
+      'bg_conv=CLICK123',
       'https://example.com/go/demo?bg_debug=1');
     assert.strictEqual(r.status, 200);
     const json = JSON.parse(r.body);
@@ -280,7 +294,7 @@ function postJsonWithReferer(server, urlPath, body, cookies, referer) {
     stubState = makeState();
     const r = await postJsonWithReferer(server, '/cb/auto-conv',
       { click_id: 'CLICK123', term: 'download' },
-      'bg_conv=1',
+      'bg_conv=CLICK123',
       'https://example.com/go/demo');     // no bg_debug
     assert.strictEqual(r.status, 200);
     const json = JSON.parse(r.body);

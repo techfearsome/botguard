@@ -97,14 +97,28 @@ const RUNTIME = `
     }
     dbg('runtime starting, terms:', cfg.terms, 'click_id cookie:', getCookie('bg_cid'));
 
-    // Once-per-session dedup. Skipped in debug mode so QA can test repeatedly
-    // without having to manually clear the bg_conv cookie between attempts.
-    if (!DEBUG && getCookie(cfg.session_cookie)) {
-      dbg('bg_conv cookie already set - script bailing (visitor already converted this session)');
+    // Per-click-id dedup. The bg_conv cookie stores the click_id it was set for.
+    // If that click_id matches our current bg_cid, the visitor already converted on
+    // THIS landing page session - block. If it doesn't match (or bg_conv is unset),
+    // the visitor is on a fresh ad click and dedup doesn't apply.
+    //
+    // This is more robust than a simple yes/no dedup flag because it handles:
+    //   - Same visitor returning via different ad campaigns (different click_id)
+    //   - Stale bg_conv cookies from unrelated previous sessions
+    //   - Cross-site tracking scenarios
+    var currentClickId = getCookie('bg_cid');
+    var dedupCookie = getCookie(cfg.session_cookie);
+    var alreadyConverted = dedupCookie && currentClickId && dedupCookie === currentClickId;
+
+    if (!DEBUG && alreadyConverted) {
+      dbg('bg_conv matches current click_id - script bailing (already converted on this click)');
       return;
     }
-    if (DEBUG && getCookie(cfg.session_cookie)) {
-      dbg('bg_conv cookie present but DEBUG mode is ON - dedup BYPASSED for this session');
+    if (DEBUG && alreadyConverted) {
+      dbg('bg_conv matches click_id but DEBUG mode is ON - dedup BYPASSED for this session');
+    }
+    if (dedupCookie && !alreadyConverted) {
+      dbg('bg_conv present but for different click_id (', dedupCookie, 'vs current', currentClickId, ') - treating as fresh session');
     }
 
     var terms = cfg.terms;
@@ -286,8 +300,11 @@ const RUNTIME = `
     function handleClick(ev) {
       try {
         dbg('click on', ev.target && ev.target.tagName, ev.target && ev.target.className);
-        if (!DEBUG && getCookie(cfg.session_cookie)) {
-          dbg('  → ignored: session already converted');
+        // Per-click-id dedup re-check (race-safe: state may have changed since IIFE start)
+        var currentCid = getCookie('bg_cid');
+        var currentDedup = getCookie(cfg.session_cookie);
+        if (!DEBUG && currentDedup && currentCid && currentDedup === currentCid) {
+          dbg('  → ignored: already converted on this click_id');
           return;
         }
         var match = findMatch(ev.target);
@@ -303,8 +320,10 @@ const RUNTIME = `
           return;
         }
 
-        // Set dedup cookie immediately so any subsequent click is ignored
-        setCookie(cfg.session_cookie, '1', cfg.session_days);
+        // Set dedup cookie tied to this click_id. Future clicks with the same
+        // click_id will be deduped; future clicks with a different click_id
+        // (i.e., a fresh ad click) will fire a new conversion.
+        setCookie(cfg.session_cookie, clickId, cfg.session_days);
 
         var payload = {
           click_id: clickId,

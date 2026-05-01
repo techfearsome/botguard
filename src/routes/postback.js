@@ -102,8 +102,17 @@ router.post('/auto-conv', async (req, res) => {
     }
   } catch (e) {}
 
+  // Per-click-id dedup. The bg_conv cookie now stores the click_id it was
+  // set for. We dedup ONLY when the cookie's value matches the current click_id
+  // - meaning the visitor already converted on THIS landing page session.
+  // A different click_id in bg_conv means the visitor came back via a fresh
+  // ad click and should be allowed to convert again.
   if (!debugMode && req.cookies && req.cookies[AUTO_CONV_SESSION_COOKIE]) {
-    return res.json({ ok: true, dedup: true });
+    const dedupCid = req.cookies[AUTO_CONV_SESSION_COOKIE];
+    if (dedupCid === clickId) {
+      return res.json({ ok: true, dedup: true, dedup_match: 'same_click_id' });
+    }
+    // Different click_id - this is a fresh session, let the conversion through
   }
 
   try {
@@ -174,11 +183,14 @@ router.post('/auto-conv', async (req, res) => {
     );
 
     // Set dedup cookie - matches the client-side cookie name
-    res.cookie(AUTO_CONV_SESSION_COOKIE, '1', {
+    // Set dedup cookie tied to this click_id. The runtime checks this on next
+    // click and bails only if the cookie value matches the current bg_cid.
+    res.cookie(AUTO_CONV_SESSION_COOKIE, clickId, {
       maxAge: AUTO_CONV_SESSION_DAYS * 86400 * 1000,
       sameSite: 'lax',
       secure: req.secure,
       httpOnly: false,
+      path: '/',
     });
 
     logger.info('auto_conversion_recorded', {

@@ -220,12 +220,15 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
     // who converted on a previous ad click would be blocked from converting on
     // this NEW click for up to 30 days. The dedup is meant to prevent multi-fire
     // on a single landing page session, not to block subsequent ad campaigns.
-    // We re-set with maxAge:0 to force expiry on the same path/domain.
-    res.cookie('bg_conv', '', {
-      maxAge: 0,
-      httpOnly: false,
+    //
+    // CRITICAL: cookie attributes (path, domain, secure, sameSite) must match
+    // the original Set-Cookie or the browser won't recognize it as the same cookie
+    // and won't delete it. We use express's clearCookie which sends Expires in the past.
+    res.clearCookie('bg_conv', {
+      path: '/',
       sameSite: 'lax',
       secure: req.secure,
+      httpOnly: false,
     });
 
     // CRITICAL: never cache /go responses at any layer.

@@ -259,13 +259,13 @@ async function clickAndWait(dom, target) {
     assert.strictEqual(beacons.length, 0, 'should not fire without click_id attribution');
   });
 
-  await test('Existing bg_conv cookie → script bails early, no listener attached', async () => {
-    // Set bg_conv BEFORE the script runs - using the same pattern as setupPage
+  await test('bg_conv matching current bg_cid → script bails (already converted on this click)', async () => {
+    // bg_conv now stores the click_id it was set for. Bail only when it matches.
     const injection = buildInjection({ terms: ['download'] });
     const html = `<!DOCTYPE html><html><head>
       <script>
-        document.cookie = 'bg_cid=X; path=/';
-        document.cookie = 'bg_conv=1; path=/';
+        document.cookie = 'bg_cid=CLICK_X; path=/';
+        document.cookie = 'bg_conv=CLICK_X; path=/';      // matches → dedup
         window.__beacons = [];
         navigator.sendBeacon = function() { window.__beacons.push({}); return true; };
         window.fetch = function() { window.__beacons.push({}); return Promise.resolve({}); };
@@ -276,7 +276,32 @@ async function clickAndWait(dom, target) {
     </body></html>`;
     const dom = new JSDOM(html, { url: 'https://example.com/', runScripts: 'dangerously' });
     await clickAndWait(dom, dom.window.document.getElementById('cta'));
-    assert.strictEqual(dom.window.__beacons.length, 0, 'script should bail when bg_conv already set');
+    assert.strictEqual(dom.window.__beacons.length, 0, 'should bail when bg_conv matches current bg_cid');
+  });
+
+  await test('bg_conv from different click_id → script DOES fire (fresh ad click)', async () => {
+    // This is the critical fix: stale bg_conv from a previous ad campaign must
+    // NOT block conversion on a new click_id.
+    const injection = buildInjection({ terms: ['download'] });
+    const html = `<!DOCTYPE html><html><head>
+      <script>
+        document.cookie = 'bg_cid=CLICK_NEW; path=/';
+        document.cookie = 'bg_conv=CLICK_OLD; path=/';    // does NOT match → fire
+        window.__beacons = [];
+        navigator.sendBeacon = function(u, b) {
+          b.text().then(t => { try { window.__beacons.push(JSON.parse(t)); } catch(e){} });
+          return true;
+        };
+        window.fetch = function(u, o) { try { window.__beacons.push(JSON.parse(o.body)); } catch(e){} return Promise.resolve({ok: true}); };
+      </script>
+    </head><body>
+      <button id="cta">Download</button>
+      ${injection}
+    </body></html>`;
+    const dom = new JSDOM(html, { url: 'https://example.com/', runScripts: 'dangerously' });
+    await clickAndWait(dom, dom.window.document.getElementById('cta'));
+    assert.strictEqual(dom.window.__beacons.length, 1, 'should fire on fresh click_id even when bg_conv exists');
+    assert.strictEqual(dom.window.__beacons[0].click_id, 'CLICK_NEW');
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);
