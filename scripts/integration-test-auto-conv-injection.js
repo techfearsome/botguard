@@ -53,7 +53,7 @@ function fetch(server, urlPath) {
     http.get(`http://127.0.0.1:${port}${urlPath}`, (res) => {
       let body = '';
       res.on('data', (c) => body += c);
-      res.on('end', () => resolve({ status: res.statusCode, body }));
+      res.on('end', () => resolve({ status: res.statusCode, body, headers: res.headers }));
     }).on('error', reject);
   });
 }
@@ -146,6 +146,37 @@ function fetch(server, urlPath) {
     assert.ok(!r.body.includes('bg-auto-conv-config'), 'CRITICAL: must not inject on safe page');
     const click = stubState.clicks[0];
     assert.strictEqual(click.decision, 'block');
+  });
+
+  // Critical for cross-campaign attribution: each new ad click must reset the dedup
+  // cookie, otherwise visitors who converted on a previous ad are blocked from
+  // converting on subsequent ads for up to 30 days.
+  await test('Each /go visit clears the bg_conv dedup cookie on the response', async () => {
+    stubState = makeState({ autoConv: { enabled: true, terms: ['Buy'], event_name: 'auto_click' } });
+    const r = await fetch(server, '/go/demo?utm_source=fb&utm_medium=cpc&utm_campaign=q4');
+    assert.strictEqual(r.status, 200);
+    const setCookies = r.headers['set-cookie'] || [];
+    // Should have set bg_cid (the click_id) AND bg_conv (cleared)
+    const hasClickId = setCookies.some((c) => /^bg_cid=/.test(c));
+    const clearsBgConv = setCookies.some((c) => /^bg_conv=;/.test(c) || /^bg_conv=$/.test(c.split(';')[0]));
+    assert.ok(hasClickId, `bg_cid not set: ${setCookies.join(' | ')}`);
+    assert.ok(clearsBgConv, `bg_conv not cleared: ${setCookies.join(' | ')}`);
+  });
+
+  await test('bg_conv clear is set on safe-page renders too (so new ad campaign can convert)', async () => {
+    stubState = makeState({ autoConv: undefined });
+    stubState.campaign.filter_config = {
+      threshold: 70, mode: 'log_only',
+      utm_gate: { enabled: true, required_keys: ['source', 'medium', 'campaign'] },
+    };
+    const r = await fetch(server, '/go/demo');     // no UTMs - safe page
+    const setCookies = r.headers['set-cookie'] || [];
+    const clearsBgConv = setCookies.some((c) => /^bg_conv=;/.test(c) || /^bg_conv=$/.test(c.split(';')[0]));
+    // Even on safe page, the click cookie is set - so bg_conv should be cleared too
+    // for consistency. Visitors hitting safe pages might come back via another ad click later.
+    if (setCookies.some((c) => /^bg_cid=/.test(c))) {
+      assert.ok(clearsBgConv, `bg_conv should be cleared even on safe-page renders: ${setCookies.join(' | ')}`);
+    }
   });
 
   server.close();

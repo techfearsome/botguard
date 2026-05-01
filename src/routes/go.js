@@ -206,9 +206,23 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       }
     }
 
-    // Cookie
+    // Cookie - assign the click_id for this visit. Each /go hit assigns a fresh
+    // click_id, even if the visitor returns from a previous campaign. This is
+    // intentional - we want each ad click to have its own attribution chain.
     res.cookie(CLICK_COOKIE, doc.click_id, {
       maxAge: CLICK_COOKIE_MAX_AGE,
+      httpOnly: false,
+      sameSite: 'lax',
+      secure: req.secure,
+    });
+
+    // Clear any previous auto-conversion dedup cookie. Without this, a visitor
+    // who converted on a previous ad click would be blocked from converting on
+    // this NEW click for up to 30 days. The dedup is meant to prevent multi-fire
+    // on a single landing page session, not to block subsequent ad campaigns.
+    // We re-set with maxAge:0 to force expiry on the same path/domain.
+    res.cookie('bg_conv', '', {
+      maxAge: 0,
       httpOnly: false,
       sameSite: 'lax',
       secure: req.secure,
