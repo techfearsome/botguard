@@ -3,6 +3,7 @@ const router = express.Router();
 
 const { Click, Conversion } = require('../models');
 const logger = require('../lib/logger');
+const { live } = require('../lib/livePresence');
 
 /**
  * GET/POST /cb/postback
@@ -216,6 +217,15 @@ router.post('/auto-conv', async (req, res) => {
       // and click log will show CONV: – even though the conversion exists.
       matched: updateResult.matchedCount,
       modified: updateResult.modifiedCount,
+    });
+
+    // Notify live presence subscribers - admin dashboards see the conversion
+    // appear instantly without polling.
+    live.converted({
+      click_id: clickId,
+      term,
+      text,
+      href,
     });
 
     // In debug mode, return verbose response so it can be inspected in DevTools.

@@ -1,0 +1,60 @@
+<%
+  const utm = v.utm || {};
+  const utmText = [utm.source, utm.medium, utm.campaign].filter(Boolean).join(' / ') || '–';
+%>
+<div class="visitor-card<%= v.converted ? ' is-converted' : '' %>"
+     data-cid="<%= v.click_id %>"
+     data-arrived="<%= v.arrived_at %>"
+     data-page="<%= v.page_type || '' %>"
+     data-converted="<%= v.converted ? '1' : '0' %>">
+
+  <div class="v-cell">
+    <div class="v-campaign"><%= v.campaign_name || '–' %></div>
+    <div class="v-cid"><%= v.click_id.slice(0, 12) %>…</div>
+  </div>
+
+  <div class="v-cell">
+    <% if (v.page_type === 'offer') { %>
+      <span class="badge badge-page-offer">offer</span>
+    <% } else if (v.page_type === 'safe') { %>
+      <span class="badge badge-page-safe">safe</span>
+    <% } else { %>
+      <span class="badge"><%= v.page_type || 'unknown' %></span>
+    <% } %>
+    <% if (v.converted) { %>
+      <span class="badge badge-converted">converted</span>
+      <% if (v.conversion_term) { %>
+        <small class="muted"> · <%= v.conversion_term %><% if (v.conversion_text) { %>: "<%= v.conversion_text.length > 30 ? v.conversion_text.slice(0, 30) + '…' : v.conversion_text %>"<% } %></small>
+      <% } %>
+    <% } else if (v.decision === 'block') { %>
+      <span class="badge badge-block">blocked</span>
+    <% } else { %>
+      <span class="badge badge-allow">active</span>
+    <% } %>
+    <div class="v-utm"><%= utmText %></div>
+  </div>
+
+  <div class="v-cell v-meta">
+    <strong><%= v.ip || '–' %></strong>
+    <% if (v.is_proxy) { %>
+      <span class="badge badge-block" style="font-size:10px;"><%= (v.proxy_type || 'PROXY').toLowerCase() %></span>
+    <% } %>
+    <br><%= v.asn_org || '–' %><% if (v.country) { %> · <%= v.country %><% } %>
+  </div>
+
+  <div class="v-cell v-meta">
+    <%= v.device_label || '–' %><% if (v.in_app_browser) { %> (<%= v.in_app_browser %>)<% } %>
+    <% if (v.ip_type) { %>
+      <br><small class="muted"><%= v.ip_type %></small>
+    <% } %>
+  </div>
+
+  <div class="v-cell v-time">
+    <% const dur = Math.max(0, Math.floor((Date.now() - v.arrived_at) / 1000)); %>
+    <% if (dur < 60) { %><%= dur %>s<% } else if (dur < 3600) { %><%= Math.floor(dur/60) %>m <%= dur%60 %>s<% } else { %><%= Math.floor(dur/3600) %>h <%= Math.floor((dur%3600)/60) %>m<% } %>
+  </div>
+
+  <div class="v-cell v-status">
+    <a href="/admin/clicks/<%= v.click_id %>" class="btn btn-small">Detail</a>
+  </div>
+</div>

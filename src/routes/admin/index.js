@@ -441,6 +441,73 @@ router.post('/pages/:id/delete', async (req, res) => {
   res.redirect('/admin/pages');
 });
 
+// ---------- Live presence ----------
+const { live } = require('../../lib/livePresence');
+
+router.get('/live', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const snapshot = live.snapshot(ws._id);
+  res.render('admin/live', { ws, snapshot, page: 'live' });
+});
+
+/**
+ * Server-Sent Events stream of live presence events.
+ *
+ * The dashboard client opens an EventSource('/admin/live/stream') and receives
+ * real-time push events as visitors arrive, heartbeat, convert, or leave.
+ *
+ * SSE chosen over Socket.io because:
+ *   - One-way is enough (server -> admin)
+ *   - Plain HTTP works through Cloudflare without WebSockets enabled
+ *   - Native EventSource auto-reconnects on disconnect
+ *   - No client library needed
+ *
+ * Events are filtered to the admin's workspace.
+ */
+router.get('/live/stream', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const wsId = String(ws._id);
+
+  // SSE headers. Critically, no Cache-Control caching since this is a long-lived
+  // connection. X-Accel-Buffering off prevents nginx from buffering the stream.
+  res.set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+
+  // Send the current snapshot first - so a freshly-opened dashboard doesn't
+  // start empty waiting for new arrivals.
+  function send(eventName, data) {
+    res.write(`event: ${eventName}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  }
+  send('snapshot', live.snapshot(wsId));
+
+  // Subscribe to subsequent events. Filter by workspace.
+  function onEvent(payload) {
+    if (!payload || !payload.visitor) return;
+    if (payload.visitor.workspace_id && String(payload.visitor.workspace_id) !== wsId) return;
+    send(payload.type, payload.visitor);
+  }
+  live.on('event', onEvent);
+
+  // Keep-alive comment every 25s. Without this, intermediate proxies (Cloudflare,
+  // nginx) may close the connection after 60-90s of silence, even though SSE
+  // is supposed to be long-lived.
+  const keepalive = setInterval(() => {
+    res.write(': keepalive\n\n');
+  }, 25000);
+
+  // Clean up when the client disconnects
+  req.on('close', () => {
+    clearInterval(keepalive);
+    live.removeListener('event', onEvent);
+  });
+});
+
 // ---------- Click log ----------
 router.get('/clicks', async (req, res) => {
   const ws = await resolveWorkspace(req);

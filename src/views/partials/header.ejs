@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title><%= typeof title !== 'undefined' ? title : 'BotGuard' %></title>
   <link rel="stylesheet" href="/static/css/admin.css">
+  <style>
+    @keyframes nav-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.7); }
+    }
+  </style>
 </head>
 <body>
   <nav class="nav">
@@ -17,6 +23,7 @@
       <a href="/admin/campaigns" class="<%= page === 'campaigns' ? 'active' : '' %>">Campaigns</a>
       <a href="/admin/pages" class="<%= page === 'pages' ? 'active' : '' %>">Pages</a>
       <a href="/admin/clicks" class="<%= page === 'clicks' ? 'active' : '' %>">Click Log</a>
+      <a href="/admin/live" class="<%= page === 'live' ? 'active' : '' %>">Live<span style="display:inline-block;width:6px;height:6px;background:#2dca5d;border-radius:50%;margin-left:4px;vertical-align:middle;animation:nav-pulse 1.4s ease-in-out infinite;"></span></a>
       <a href="/admin/conversions" class="<%= page === 'conversions' ? 'active' : '' %>">Conversions</a>
       <a href="/admin/replay" class="<%= page === 'replay' ? 'active' : '' %>">Replay</a>
       <a href="/admin/asn" class="<%= page === 'asn' ? 'active' : '' %>">Blacklist</a>

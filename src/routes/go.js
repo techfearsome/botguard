@@ -13,6 +13,8 @@ const { proxyGateCheck } = require('../filters/proxyGate');
 const { hashFingerprint, behaviorFilter } = require('../filters/behavior');
 const { buildInjection } = require('../lib/autoConversion');
 const { buildTrackingInjection } = require('../lib/tracking');
+const { buildHeartbeatInjection } = require('../lib/heartbeat');
+const { live } = require('../lib/livePresence');
 const { decide } = require('../scoring/decide');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
 const logger = require('../lib/logger');
@@ -69,7 +71,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
     // Run the filter chain
@@ -125,7 +127,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     // Append the pass flag for visibility
     doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
@@ -146,7 +148,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
 
@@ -242,6 +244,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       logger.error('click_write_failed', { err: err.message, click_id: doc.click_id });
     });
 
+    registerLiveVisitor(doc, campaign, workspace);
     res.status(200).type('html').send(applyPageTracking(html, workspace));
   } catch (err) {
     logger.error('go_route_error', { err: err.message, stack: err.stack });
@@ -360,17 +363,60 @@ function injectBeforeBodyEnd(html, injection) {
 }
 
 /**
- * Apply workspace-level tracking (Microsoft Clarity, etc.) to any page response.
- * Runs on BOTH offer pages and safe pages so the client gets recordings of all traffic.
+ * Apply workspace-level tracking + live heartbeat to any page response.
+ * Runs on BOTH offer pages and safe pages so the client gets recordings AND
+ * presence info for every visitor.
  *
- * No-op when no tracking is configured for the workspace.
+ * - Heartbeat: ALWAYS injected (small, presence is core to /admin/live)
+ * - Clarity: injected only if workspace has clarity_project_id set
  */
 function applyPageTracking(html, workspace) {
+  // Always inject heartbeat - it's tiny (~700 bytes) and powers /admin/live
+  let out = injectBeforeBodyEnd(html, buildHeartbeatInjection());
+
+  // Clarity is workspace-scoped and optional
   const trackingId = workspace?.settings?.tracking?.clarity_project_id;
-  if (!trackingId) return html;
-  const injection = buildTrackingInjection({ clarityProjectId: trackingId });
-  if (!injection) return html;
-  return injectBeforeBodyEnd(html, injection);
+  if (trackingId) {
+    const injection = buildTrackingInjection({ clarityProjectId: trackingId });
+    if (injection) out = injectBeforeBodyEnd(out, injection);
+  }
+  return out;
+}
+
+/**
+ * Register the visitor with the in-memory live presence tracker.
+ * Called from every /go render path (offer page, safe page, gate short-circuits).
+ *
+ * The dashboard uses this to show "who's on my pages right now". The visitor's
+ * heartbeat script (injected via applyPageTracking) will keep them alive in
+ * the tracker until they navigate away or the heartbeat goes stale.
+ */
+function registerLiveVisitor(doc, campaign, workspace) {
+  if (!doc || !doc.click_id) return;
+  try {
+    live.arrived({
+      click_id: doc.click_id,
+      workspace_id: workspace?._id,
+      campaign_id: campaign?._id,
+      campaign_name: campaign?.name,
+      campaign_slug: campaign?.slug,
+      page_type: doc.page_rendered,
+      ip: doc.ip,
+      country: doc.country,
+      country_name: doc.country_name,
+      asn_org: doc.asn_org,
+      is_proxy: doc.is_proxy,
+      proxy_type: doc.proxy_type,
+      ip_type: doc.ip_type,
+      device_label: doc.ua_parsed?.device_label || doc.ua_parsed?.device_type,
+      in_app_browser: doc.in_app_browser,
+      utm: doc.utm,
+      decision: doc.decision,
+    });
+  } catch (err) {
+    // Live presence is best-effort - never let it break a /go response
+    logger.warn('live_presence_register_failed', { err: err.message });
+  }
 }
 
 /**

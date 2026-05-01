@@ -14,6 +14,7 @@ const logger = require('./lib/logger');
 const goRoutes = require('./routes/go');
 const pixelRoutes = require('./routes/pixel');
 const postbackRoutes = require('./routes/postback');
+const liveRoutes = require('./routes/live');
 const adminRoutes = require('./routes/admin');
 const siteRoutes = require('./routes/site');
 
@@ -91,6 +92,7 @@ app.use('/static', express.static(path.join(__dirname, '..', 'public'), {
 app.use('/go', goRoutes);
 app.use('/px', pixelRoutes);
 app.use('/cb', postbackRoutes);
+app.use('/lv', liveRoutes);
 
 // --- Admin panel (scoped per workspace, multi-tenant ready) ---
 app.use('/admin', adminRoutes);

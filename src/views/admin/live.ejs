@@ -1,0 +1,376 @@
+<%- include('../partials/header', { ws, page, title: 'Live Visitors - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Live Visitors <span id="live-pulse" class="live-pulse" title="Live updates active">●</span></h1>
+    <p class="muted">Active visitors on your /go landing pages, updating in real-time. Visitors disappear from the list 30 seconds after their last heartbeat.</p>
+  </div>
+  <div class="muted" style="text-align:right; font-size:13px;">
+    <span id="connection-status">Connecting…</span>
+    <br><small>Last update: <span id="last-update">–</span></small>
+  </div>
+</div>
+
+<div class="stat-grid" style="margin-bottom:24px;">
+  <div class="stat-card">
+    <div class="stat-label">Active right now</div>
+    <div class="stat-value" id="stat-active"><%= snapshot.active %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">On offer pages</div>
+    <div class="stat-value" id="stat-offer" style="color:#1f6b3a;"><%= snapshot.on_offer %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">On safe pages</div>
+    <div class="stat-value" id="stat-safe" style="color:#7a5b00;"><%= snapshot.on_safe %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Converted (visible)</div>
+    <div class="stat-value" id="stat-converted" style="color:#2d6cdf;"><%= snapshot.converted_now %></div>
+  </div>
+</div>
+
+<section class="panel">
+  <h3 style="margin-bottom:12px;">Visitors</h3>
+  <div id="empty-state" class="empty-state" style="<%= snapshot.visitors.length === 0 ? '' : 'display:none;' %>">
+    <p>No active visitors right now. New visits will appear here automatically.</p>
+  </div>
+  <div id="visitor-list" style="display:flex; flex-direction:column; gap:8px;">
+    <% snapshot.visitors.forEach(v => { %>
+      <%- include('partials/_visitor_card', { v }) %>
+    <% }) %>
+  </div>
+</section>
+
+<style>
+  .live-pulse {
+    color: #2dca5d;
+    animation: live-pulse 1.4s ease-in-out infinite;
+    font-size: 0.85em;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  @keyframes live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .visitor-card {
+    background: #fff;
+    border: 1px solid #e1e4ea;
+    border-radius: 6px;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) minmax(140px, 1.5fr) minmax(120px, 1fr) minmax(80px, 0.5fr) auto;
+    gap: 14px;
+    align-items: center;
+    transition: background-color .25s, border-color .25s;
+  }
+  .visitor-card.is-new {
+    background: #ecfdf5;
+    border-color: #34d399;
+  }
+  .visitor-card.is-converted {
+    background: #eff6ff;
+    border-color: #2d6cdf;
+  }
+  .visitor-card.is-leaving {
+    opacity: 0.4;
+    background: #fef2f2;
+  }
+  .visitor-card .v-cell { min-width: 0; }
+  .visitor-card .v-cid {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: #6b7280;
+  }
+  .visitor-card .v-campaign {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .visitor-card .v-utm {
+    font-size: 12px;
+    color: #6b7280;
+  }
+  .visitor-card .v-meta {
+    font-size: 12px;
+    color: #4b5563;
+  }
+  .visitor-card .v-meta strong { color: #111; }
+  .visitor-card .v-time {
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+    color: #2d6cdf;
+    text-align: right;
+  }
+  .visitor-card .v-status .badge { white-space: nowrap; }
+  .visitor-card.is-converted .v-status .badge-converted {
+    background: #2d6cdf;
+    color: white;
+  }
+  .badge-page-offer { background: #d1fae5; color: #065f46; }
+  .badge-page-safe { background: #fef3c7; color: #7a5b00; }
+
+  @media (max-width: 900px) {
+    .visitor-card {
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .visitor-card .v-time, .visitor-card .v-status { text-align: left; }
+  }
+</style>
+
+<script>
+(function () {
+  'use strict';
+
+  // Live presence dashboard client.
+  // Subscribes to /admin/live/stream (SSE), maintains a local Map of visitors,
+  // updates the DOM in place, and ticks a "duration" counter once per second.
+
+  const visitors = new Map();             // click_id -> visitor data
+  const elements = new Map();             // click_id -> <div> in DOM
+
+  const listEl = document.getElementById('visitor-list');
+  const emptyEl = document.getElementById('empty-state');
+  const pulseEl = document.getElementById('live-pulse');
+  const statusEl = document.getElementById('connection-status');
+  const lastUpdateEl = document.getElementById('last-update');
+  const stats = {
+    active: document.getElementById('stat-active'),
+    offer: document.getElementById('stat-offer'),
+    safe: document.getElementById('stat-safe'),
+    converted: document.getElementById('stat-converted'),
+  };
+
+  // Seed local state from the EJS-rendered cards (so we have data to update durations on).
+  // The EJS template sets data attributes on each card.
+  document.querySelectorAll('.visitor-card[data-cid]').forEach(function (el) {
+    const cid = el.getAttribute('data-cid');
+    const arrived = Number(el.getAttribute('data-arrived'));
+    if (cid && !isNaN(arrived)) {
+      visitors.set(cid, {
+        click_id: cid,
+        arrived_at: arrived,
+        page_type: el.getAttribute('data-page'),
+        converted: el.getAttribute('data-converted') === '1',
+      });
+      elements.set(cid, el);
+    }
+  });
+
+  function fmtDuration(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    if (m < 60) return m + 'm ' + r + 's';
+    const h = Math.floor(m / 60);
+    return h + 'h ' + (m % 60) + 'm';
+  }
+
+  // Tick durations every second on every visible card
+  setInterval(function () {
+    const now = Date.now();
+    elements.forEach(function (el, cid) {
+      const v = visitors.get(cid);
+      if (!v) return;
+      const timeEl = el.querySelector('.v-time');
+      if (timeEl) timeEl.textContent = fmtDuration(now - v.arrived_at);
+    });
+  }, 1000);
+
+  function renderCard(v) {
+    const utm = v.utm || {};
+    const utmText = [utm.source, utm.medium, utm.campaign].filter(Boolean).join(' / ') || '–';
+    const pageBadge = v.page_type === 'offer'
+      ? '<span class="badge badge-page-offer">offer</span>'
+      : v.page_type === 'safe'
+      ? '<span class="badge badge-page-safe">safe</span>'
+      : '<span class="badge">' + (v.page_type || 'unknown') + '</span>';
+    const statusBadge = v.converted
+      ? '<span class="badge badge-converted">converted</span>'
+      : v.decision === 'block'
+      ? '<span class="badge badge-block">blocked</span>'
+      : '<span class="badge badge-allow">active</span>';
+
+    const inApp = v.in_app_browser ? ' (' + escapeHtml(v.in_app_browser) + ')' : '';
+    const proxy = v.is_proxy
+      ? ' <span class="badge badge-block" style="font-size:10px;">' + escapeHtml((v.proxy_type || 'PROXY').toLowerCase()) + '</span>'
+      : '';
+    const convDetail = v.converted && v.conversion_term
+      ? '<small class="muted"> · ' + escapeHtml(v.conversion_term) + (v.conversion_text ? ': "' + escapeHtml(truncate(v.conversion_text, 30)) + '"' : '') + '</small>'
+      : '';
+
+    return [
+      '<div class="visitor-card is-new" data-cid="', escapeHtml(v.click_id),
+        '" data-arrived="', v.arrived_at,
+        '" data-page="', escapeHtml(v.page_type || ''),
+        '" data-converted="', v.converted ? '1' : '0', '">',
+      '<div class="v-cell">',
+        '<div class="v-campaign">', escapeHtml(v.campaign_name || '–'), '</div>',
+        '<div class="v-cid">', escapeHtml(v.click_id.slice(0, 12)), '…</div>',
+      '</div>',
+      '<div class="v-cell">',
+        pageBadge, ' ', statusBadge, convDetail,
+        '<div class="v-utm">', escapeHtml(utmText), '</div>',
+      '</div>',
+      '<div class="v-cell v-meta">',
+        '<strong>', escapeHtml(v.ip || '–'), '</strong>', proxy,
+        '<br>', escapeHtml(v.asn_org || '–'),
+        v.country ? ' · ' + escapeHtml(v.country) : '',
+      '</div>',
+      '<div class="v-cell v-meta">',
+        escapeHtml(v.device_label || '–'), inApp,
+        v.ip_type ? '<br><small class="muted">' + escapeHtml(v.ip_type) + '</small>' : '',
+      '</div>',
+      '<div class="v-cell v-time">',
+        fmtDuration(Date.now() - v.arrived_at),
+      '</div>',
+      '<div class="v-cell v-status">',
+        '<a href="/admin/clicks/', escapeHtml(v.click_id), '" class="btn btn-small">Detail</a>',
+      '</div>',
+      '</div>'
+    ].join('');
+  }
+
+  function upsertVisitor(v, isNew) {
+    visitors.set(v.click_id, v);
+    let el = elements.get(v.click_id);
+    if (!el) {
+      // Create new card and prepend to list
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = renderCard(v);
+      el = wrapper.firstChild;
+      elements.set(v.click_id, el);
+      if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
+      else listEl.appendChild(el);
+      // Flash highlight then settle
+      setTimeout(function () { el.classList.remove('is-new'); }, 2500);
+    } else {
+      // Update existing - replace the inner of v-cell elements but preserve scroll position
+      const newWrapper = document.createElement('div');
+      newWrapper.innerHTML = renderCard(v);
+      const newEl = newWrapper.firstChild;
+      el.replaceWith(newEl);
+      elements.set(v.click_id, newEl);
+      if (v.converted) newEl.classList.add('is-converted');
+    }
+    emptyEl.style.display = visitors.size === 0 ? '' : 'none';
+  }
+
+  function removeVisitor(clickId) {
+    const v = visitors.get(clickId);
+    visitors.delete(clickId);
+    const el = elements.get(clickId);
+    if (el) {
+      el.classList.add('is-leaving');
+      setTimeout(function () {
+        el.remove();
+        elements.delete(clickId);
+        emptyEl.style.display = visitors.size === 0 ? '' : 'none';
+      }, 600);
+    }
+  }
+
+  function recomputeStats() {
+    let active = 0, offer = 0, safe = 0, converted = 0;
+    visitors.forEach(function (v) {
+      active += 1;
+      if (v.page_type === 'offer') offer += 1;
+      else if (v.page_type === 'safe') safe += 1;
+      if (v.converted) converted += 1;
+    });
+    stats.active.textContent = active;
+    stats.offer.textContent = offer;
+    stats.safe.textContent = safe;
+    stats.converted.textContent = converted;
+  }
+
+  function setLastUpdate() {
+    lastUpdateEl.textContent = new Date().toLocaleTimeString();
+  }
+
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]);
+    });
+  }
+  function truncate(s, n) {
+    s = String(s || '');
+    return s.length > n ? s.slice(0, n) + '…' : s;
+  }
+
+  // SSE connection
+  let evtSource;
+  function connect() {
+    statusEl.textContent = 'Connecting…';
+    pulseEl.style.color = '#999';
+
+    evtSource = new EventSource('/admin/live/stream');
+
+    evtSource.addEventListener('open', function () {
+      statusEl.textContent = 'Connected · live';
+      pulseEl.style.color = '#2dca5d';
+    });
+
+    evtSource.addEventListener('snapshot', function (e) {
+      try {
+        const snap = JSON.parse(e.data);
+        // Reset state to match server's snapshot
+        visitors.clear();
+        Array.from(elements.values()).forEach(function (el) { el.remove(); });
+        elements.clear();
+        snap.visitors.forEach(function (v) { upsertVisitor(v); });
+        stats.active.textContent = snap.active;
+        stats.offer.textContent = snap.on_offer;
+        stats.safe.textContent = snap.on_safe;
+        stats.converted.textContent = snap.converted_now;
+        emptyEl.style.display = snap.visitors.length === 0 ? '' : 'none';
+        setLastUpdate();
+      } catch (e) {}
+    });
+
+    evtSource.addEventListener('arrived', function (e) {
+      try { upsertVisitor(JSON.parse(e.data), true); recomputeStats(); setLastUpdate(); } catch (e) {}
+    });
+    evtSource.addEventListener('updated', function (e) {
+      try { upsertVisitor(JSON.parse(e.data)); recomputeStats(); setLastUpdate(); } catch (e) {}
+    });
+    evtSource.addEventListener('heartbeat', function (e) {
+      try {
+        const v = JSON.parse(e.data);
+        const existing = visitors.get(v.click_id);
+        if (existing) {
+          existing.last_seen_at = v.last_seen_at;
+          // Don't re-render - heartbeats are silent. The duration ticker handles display.
+        }
+        setLastUpdate();
+      } catch (e) {}
+    });
+    evtSource.addEventListener('converted', function (e) {
+      try { upsertVisitor(JSON.parse(e.data)); recomputeStats(); setLastUpdate(); } catch (e) {}
+    });
+    evtSource.addEventListener('left', function (e) {
+      try { removeVisitor(JSON.parse(e.data).click_id); recomputeStats(); setLastUpdate(); } catch (e) {}
+    });
+
+    evtSource.addEventListener('error', function () {
+      statusEl.textContent = 'Reconnecting…';
+      pulseEl.style.color = '#dc2626';
+      // EventSource handles reconnect automatically; we just update status.
+    });
+  }
+  connect();
+
+  // Disconnect cleanly when leaving the page (not strictly needed, browsers
+  // do this anyway, but it's polite to release the server-side handler)
+  window.addEventListener('beforeunload', function () {
+    if (evtSource) evtSource.close();
+  });
+})();
+</script>
+
+<%- include('../partials/footer') %>
