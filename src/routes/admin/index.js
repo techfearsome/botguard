@@ -305,6 +305,43 @@ router.post('/campaigns/:id/delete', async (req, res) => {
 });
 
 /**
+ * Quick toggle for campaign on/off without opening the edit form.
+ * Flips between 'active' and 'paused'. 'archived' campaigns are left alone -
+ * the admin must explicitly un-archive via the form.
+ *
+ * Cache invalidation matters here: the /go hot path caches the campaign
+ * doc for 60s. Without this invalidation, the toggle wouldn't take effect
+ * for up to a minute. With it, next request sees the new status.
+ */
+router.post('/campaigns/:id/toggle', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const camp = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id })
+    .select('slug status')
+    .lean();
+  if (!camp) return res.status(404).send('Campaign not found');
+
+  // Only flip between active <-> paused. Archived campaigns stay archived
+  // until explicitly changed via the full form.
+  let newStatus;
+  if (camp.status === 'active') newStatus = 'paused';
+  else if (camp.status === 'paused') newStatus = 'active';
+  else return res.redirect('/admin/campaigns');     // archived: no-op
+
+  await Campaign.updateOne(
+    { _id: req.params.id, workspace_id: ws._id },
+    { $set: { status: newStatus, updated_at: new Date() } }
+  );
+  await cache.invalidateCampaign(ws._id, camp.slug);
+  logger.info('campaign_status_toggled', {
+    campaign_id: String(req.params.id),
+    slug: camp.slug,
+    from: camp.status,
+    to: newStatus,
+  });
+  res.redirect('/admin/campaigns');
+});
+
+/**
  * Preview the rendered HTML for a campaign — useful for verifying that the auto-conversion
  * script and Clarity tag are actually being injected.
  *

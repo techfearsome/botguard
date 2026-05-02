@@ -48,9 +48,31 @@
             <span class="muted">—</span>
           <% } %>
         </td>
-        <td><span class="badge badge-status-<%= c.status %>"><%= c.status %></span></td>
+        <td>
+          <% if (c.status === 'active') { %>
+            <span class="badge badge-allow" title="Active — full pipeline runs">Active</span>
+          <% } else if (c.status === 'paused') { %>
+            <span class="badge badge-block" title="All traffic goes to safe page">Paused</span>
+          <% } else if (c.status === 'archived') { %>
+            <span class="badge" style="background:#9ca3af; color:white;" title="URL returns 404">Archived</span>
+          <% } else { %>
+            <span class="badge"><%= c.status %></span>
+          <% } %>
+        </td>
         <td><%= c.landing_page_id?.name || '–' %></td>
         <td>
+          <%# Quick toggle: switches active <-> paused without opening the form. %>
+          <%# Posts to /campaigns/:id/toggle which flips between the two and redirects back. %>
+          <% if (c.status === 'active') { %>
+            <form method="POST" action="/admin/campaigns/<%= c._id %>/toggle" style="display:inline"
+                  onsubmit="return confirm('Pause this campaign? All traffic will go to the safe page until you re-enable it.')">
+              <button type="submit" class="btn btn-small" title="Send all traffic to safe page">Pause</button>
+            </form>
+          <% } else if (c.status === 'paused') { %>
+            <form method="POST" action="/admin/campaigns/<%= c._id %>/toggle" style="display:inline">
+              <button type="submit" class="btn btn-small" style="background:#10b981; color:white;" title="Resume normal pipeline">Resume</button>
+            </form>
+          <% } %>
           <a href="/admin/campaigns/<%= c._id %>/edit" class="btn btn-small">Edit</a>
           <a href="/admin/campaigns/<%= c._id %>/preview" class="btn btn-small" target="_blank" title="See exactly what HTML is served to visitors, including injected scripts">Preview</a>
           <form method="POST" action="/admin/campaigns/<%= c._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this campaign?')">

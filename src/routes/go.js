@@ -52,6 +52,41 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
     const doc = buildClickDoc({ req, workspace, campaign });
     const deviceClass = doc.ua_parsed?.device_class || 'other';
 
+    // --- Campaign status gate (runs FIRST, before UTM gate / ProxyCheck) ---
+    // A paused campaign is "ready but disabled" - all traffic skips the filter
+    // chain and goes to the safe page. This means:
+    //   - No ProxyCheck call (saves the external HTTP cost)
+    //   - No UTM/country/proxy gates run
+    //   - No filter chain runs
+    //   - No auto-conversion injection on the safe page (we never inject on safe)
+    //   - The click is still logged with decision='block', reason='campaign_paused'
+    //     so admins can see paused-campaign traffic in /admin/clicks and /admin/live
+    //
+    // Note: 'archived' campaigns are filtered out at lookup time (return 404).
+    // Only 'paused' falls through to here.
+    if (campaign.status === 'paused') {
+      doc.scores = {
+        network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
+        total: 0,
+        profile_used: campaign.source_profile,
+        flags: ['campaign_paused'],
+      };
+      doc.decision = 'block';
+      doc.decision_reason = 'campaign_paused';
+      doc.mode_at_decision = 'enforce';     // pause is always enforcing - not a scored decision
+      doc.page_rendered = 'safe';
+
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
+      if (safePage) doc.landing_page_id = safePage._id;
+
+      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+      registerLiveVisitor(doc, campaign, workspace);
+      setGoCookies(req, res, doc);
+      setNoCacheHeaders(res);
+      return res.status(200).type('html').send(applyPageTracking(html, workspace));
+    }
+
     // --- UTM gate (runs BEFORE the filter chain so we don't waste a ProxyCheck call) ---
     const gateResult = utmGateCheck({ utm: doc.utm, campaign });
     if (gateResult.blocked) {
@@ -71,7 +106,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
     // Run the filter chain
@@ -127,7 +162,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     // Append the pass flag for visibility
     doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
@@ -148,18 +183,9 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
-
-    // Handle paused campaigns
-    if (campaign.status === 'paused') {
-      doc.decision = 'block';
-      doc.decision_reason = 'campaign_paused';
-      doc.page_rendered = 'safe';
-      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      return res.status(410).send('This campaign is currently paused.');
-    }
 
     // Resolve which page to show (per-device override applies)
     const showSafePage = (doc.decision === 'block');
@@ -208,30 +234,7 @@ async function handleClick(req, res, workspaceSlug, campaignSlug) {
       }
     }
 
-    // Cookie - assign the click_id for this visit. Each /go hit assigns a fresh
-    // click_id, even if the visitor returns from a previous campaign. This is
-    // intentional - we want each ad click to have its own attribution chain.
-    res.cookie(CLICK_COOKIE, doc.click_id, {
-      maxAge: CLICK_COOKIE_MAX_AGE,
-      httpOnly: false,
-      sameSite: 'lax',
-      secure: req.secure,
-    });
-
-    // Clear any previous auto-conversion dedup cookie. Without this, a visitor
-    // who converted on a previous ad click would be blocked from converting on
-    // this NEW click for up to 30 days. The dedup is meant to prevent multi-fire
-    // on a single landing page session, not to block subsequent ad campaigns.
-    //
-    // CRITICAL: cookie attributes (path, domain, secure, sameSite) must match
-    // the original Set-Cookie or the browser won't recognize it as the same cookie
-    // and won't delete it. We use express's clearCookie which sends Expires in the past.
-    res.clearCookie('bg_conv', {
-      path: '/',
-      sameSite: 'lax',
-      secure: req.secure,
-      httpOnly: false,
-    });
+    setGoCookies(req, res, doc);
 
     // CRITICAL: never cache /go responses at any layer.
     // - Each visit must get a fresh click_id cookie
@@ -360,6 +363,33 @@ function injectBeforeBodyEnd(html, injection) {
     return html.slice(0, m.index) + injection + html.slice(m.index);
   }
   return html + injection;
+}
+
+/**
+ * Set the standard /go-response cookies on every render path (offer, safe, paused,
+ * gate-short-circuited). Without this, only the main "filter chain ran" path
+ * gets the bg_cid cookie, which means:
+ *   - The heartbeat script can't run (it bails when bg_cid is missing)
+ *   - The visitor doesn't appear in /admin/live
+ *   - Cross-campaign attribution breaks (no fresh click_id assigned)
+ *
+ * Sets:
+ *   - bg_cid: the click_id for this visit (read by heartbeat + auto-conv runtime)
+ *   - clears bg_conv: so each new ad click can convert (per-click-id dedup)
+ */
+function setGoCookies(req, res, doc) {
+  res.cookie(CLICK_COOKIE, doc.click_id, {
+    maxAge: CLICK_COOKIE_MAX_AGE,
+    httpOnly: false,
+    sameSite: 'lax',
+    secure: req.secure,
+  });
+  res.clearCookie('bg_conv', {
+    path: '/',
+    sameSite: 'lax',
+    secure: req.secure,
+    httpOnly: false,
+  });
 }
 
 /**

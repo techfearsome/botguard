@@ -16,13 +16,27 @@
     <small class="muted">URL will be: <code>/go/&lt;slug&gt;</code>. If the generated slug already exists, a random suffix is appended.</small>
   </div>
 
-  <div class="form-row">
-    <label>Status</label>
-    <select name="status">
-      <% ['active', 'paused', 'archived'].forEach(s => { %>
-        <option value="<%= s %>" <%= campaign?.status === s ? 'selected' : '' %>><%= s %></option>
-      <% }) %>
+  <div class="form-row" style="background:#f9fafb; padding:14px; border-radius:6px; border:1px solid #e1e4ea;">
+    <label style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+      <strong>Campaign status</strong>
+      <% if (campaign?.status === 'active') { %>
+        <span class="badge badge-allow">Active</span>
+      <% } else if (campaign?.status === 'paused') { %>
+        <span class="badge badge-block">Paused</span>
+      <% } else if (campaign?.status === 'archived') { %>
+        <span class="badge" style="background:#9ca3af; color:white;">Archived</span>
+      <% } %>
+    </label>
+    <select name="status" style="max-width:280px;">
+      <option value="active" <%= (!campaign || campaign.status === 'active') ? 'selected' : '' %>>Active — process traffic normally</option>
+      <option value="paused" <%= campaign?.status === 'paused' ? 'selected' : '' %>>Paused — send all traffic to safe page</option>
+      <option value="archived" <%= campaign?.status === 'archived' ? 'selected' : '' %>>Archived — return 404 (campaign hidden)</option>
     </select>
+    <small class="muted" style="display:block; margin-top:8px;">
+      <strong>Active</strong> runs the full pipeline (gates, scoring, offer page).<br>
+      <strong>Paused</strong> sends every visitor to the safe page with no filtering — clicks are still logged so you can audit traffic. Use this to "switch off" a campaign without deleting it.<br>
+      <strong>Archived</strong> makes the <code>/go/<%= campaign?.slug || 'slug' %></code> URL return 404. Use this when retiring a campaign permanently.
+    </small>
   </div>
 
   <div class="form-row">
