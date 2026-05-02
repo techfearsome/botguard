@@ -391,10 +391,48 @@ code,
   font-size: 12px;
 }
 
-/* Code/IP/click_id values inside table cells — auto-mono */
-.table .mono,
-.table code {
-  font-size: 12px;
+/* ============================================================================
+   Table scroll wrapper
+   ============================================================================
+   Wide tables (Click Log, Conversions, Campaigns) can exceed the viewport
+   even on desktop. Wrapping them in `.table-scroll` constrains the overflow
+   to a horizontally-scrollable region INSIDE the page rather than letting
+   the table push the body wider than the viewport.
+
+   The wrapper has overflow-x:auto in ALL viewports, not just mobile - because
+   the conversions table has 13 columns and can blow out a 1280px container.
+   On desktop with a wide screen + short URLs, the scrollbar simply won't
+   appear; the wrapper is otherwise invisible. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius-md);
+  /* Ensure the wrapper itself never exceeds its parent's width, no matter
+     what the table inside wants. This is the key invariant. */
+  max-width: 100%;
+}
+.table-scroll .table {
+  border-radius: 0;
+  /* Prevent the table from collapsing to wrapper width - we want it to
+     reach its natural width and let the wrapper scroll. */
+  width: max-content;
+  min-width: 100%;
+}
+
+/* For columns that can contain unbounded user content (URLs, page paths,
+   long campaign names), apply .cell-truncate to clip with ellipsis at a
+   reasonable max-width. Hover reveals via title attribute (set in templates). */
+.cell-truncate {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-truncate-sm {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 
@@ -995,15 +1033,11 @@ fieldset legend {
     padding: 12px 14px;
   }
 
-  /* For tables that don't fit on mobile, wrap them in `.table-scroll` for
-     horizontal scroll. The overflow is constrained to the wrapper. */
-  .table-scroll {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    border-radius: var(--radius-md);
-  }
-  .table-scroll .table {
-    border-radius: 0;
+  /* On mobile, dense tables shrink even further so they don't dominate */
+  .table th,
+  .table td {
+    padding: 8px 10px;
+    font-size: 12px;
   }
 
   .filter-bar {

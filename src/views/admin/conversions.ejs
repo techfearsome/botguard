@@ -100,7 +100,7 @@
               <% } %>
             <% } %>
           </td>
-          <td>
+          <td class="cell-truncate-sm">
             <% if (c.campaign_id) { %>
               <strong><%= c.campaign_id.name %></strong>
               <small class="muted">/<%= c.campaign_id.slug %></small>
@@ -128,7 +128,7 @@
               <small class="muted">(<%= c.click.in_app_browser %>)</small>
             <% } %>
           </td>
-          <td>
+          <td class="cell-truncate-sm">
             <% if (c.click?.landing_page_id) { %>
               <%= c.click.landing_page_id.name %>
               <small class="muted">/<%= c.click.landing_page_id.slug %></small>
@@ -136,10 +136,10 @@
               <em class="muted"><%= c.click.page_rendered %></em>
             <% } else { %>–<% } %>
           </td>
-          <td>
+          <td class="cell-truncate">
             <% if (c.page_url) { %>
               <a href="<%= c.page_url %>" target="_blank" rel="noopener" title="<%= c.page_url %>">
-                <%= c.page_url.length > 40 ? c.page_url.slice(0, 40) + '…' : c.page_url %>
+                <%= c.page_url %>
               </a>
             <% } else { %>–<% } %>
           </td>

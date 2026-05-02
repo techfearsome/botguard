@@ -60,8 +60,8 @@
       <tr>
         <td><%= new Date(c.ts).toLocaleString() %></td>
         <td><a href="/admin/clicks/<%= c.click_id %>"><code><%= c.click_id.slice(0, 12) %>…</code></a></td>
-        <td><%= c.campaign_id?.name || '–' %></td>
-        <td>
+        <td class="cell-truncate-sm" title="<%= c.campaign_id?.name || '' %>"><%= c.campaign_id?.name || '–' %></td>
+        <td class="cell-truncate-sm" title="<%= [c.utm?.source, c.utm?.medium, c.utm?.campaign].filter(Boolean).join(' / ') %>">
           <%= c.utm?.source || '–' %> / <%= c.utm?.medium || '–' %> / <%= c.utm?.campaign || '–' %>
         </td>
         <td><code><%= c.ip || '–' %></code></td>
