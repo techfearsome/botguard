@@ -203,11 +203,11 @@
 </section>
 
 <style>
-  .bar { background: #e1e4ea; height: 6px; border-radius: 3px; width: 200px; overflow: hidden; }
-  .bar-fill { background: #2d6cdf; height: 100%; transition: width .2s; }
-  .bar-total { background: #aa4a08; }
+  .bar { background: var(--bg-input); border: 1px solid var(--border-default); height: 6px; border-radius: 3px; width: 200px; overflow: hidden; }
+  .bar-fill { background: var(--info); height: 100%; transition: width .2s; }
+  .bar-total { background: var(--warning); }
   .flag-cloud { display: flex; flex-wrap: wrap; gap: 6px; }
-  .flag { display: inline-block; padding: 2px 8px; background: #f0f2f7; border-radius: 3px; font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
+  .flag { display: inline-block; padding: 2px 8px; background: var(--bg-input); border: 1px solid var(--border-default); color: var(--text-secondary); border-radius: 3px; font-family: var(--font-mono); font-size: 12px; }
 </style>
 
 <%- include('../partials/footer') %>

@@ -73,7 +73,7 @@
   </div>
 <% } else { %>
   <section class="panel">
-    <table class="table table-dense">
+    <div class="table-scroll"><table class="table table-dense">
       <tr>
         <th>Time</th>
         <th>Campaign</th>
@@ -167,7 +167,7 @@
           </td>
         </tr>
       <% }) %>
-    </table>
+    </table></div>
     <% if (conversions.length === 200) { %>
       <p class="muted" style="margin-top:8px;">Showing latest 200. Use filters or CSV export to see more.</p>
     <% } %>

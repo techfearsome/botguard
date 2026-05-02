@@ -1,9 +1,47 @@
 <%- include('../partials/header', { ws, page, title: 'Settings - BotGuard' }) %>
 
 <div class="page-header">
-  <h1>Settings</h1>
-  <p class="muted">Logged in as <strong><%= adminUser %></strong></p>
+  <div>
+    <h1>Settings</h1>
+    <p class="muted">Logged in as <strong><%= adminUser %></strong></p>
+  </div>
 </div>
+
+<section class="panel" id="appearance">
+  <h3>Appearance</h3>
+  <p class="muted" style="margin-top:0;">Choose a theme for the admin interface. The setting is persisted per workspace and applies to all admins.</p>
+
+  <%
+    const currentTheme = (ws.settings && ws.settings.theme) === 'light' ? 'light' : 'dark';
+  %>
+
+  <form method="POST" action="/admin/settings/theme" id="theme-form" style="margin-top:14px;">
+    <div class="theme-toggle">
+      <label class="<%= currentTheme === 'dark' ? 'is-active' : '' %>">
+        <input type="radio" name="theme" value="dark" <%= currentTheme === 'dark' ? 'checked' : '' %>>
+        Dark
+      </label>
+      <label class="<%= currentTheme === 'light' ? 'is-active' : '' %>">
+        <input type="radio" name="theme" value="light" <%= currentTheme === 'light' ? 'checked' : '' %>>
+        Light
+      </label>
+    </div>
+  </form>
+
+  <script>
+    // Auto-submit when theme is changed - no separate save button needed.
+    // The form posts to /settings/theme which redirects back to /admin/settings#appearance.
+    (function () {
+      var form = document.getElementById('theme-form');
+      if (!form) return;
+      form.querySelectorAll('input[type="radio"]').forEach(function (input) {
+        input.addEventListener('change', function () {
+          form.submit();
+        });
+      });
+    })();
+  </script>
+</section>
 
 <section class="panel">
   <h3>Admin Password</h3>
@@ -22,9 +60,9 @@
      Pass via <code>X-API-Key</code> header or <code>?api_key=</code> query string.</p>
 
   <% if (generated) { %>
-    <div style="background:#fff3cd;color:#8a6d11;padding:12px;border-radius:4px;margin-bottom:12px;">
+    <div class="login-err" style="background: var(--warning-bg); color: var(--warning); border-color: var(--warning);">
       <strong>New key generated — copy this now, you won't see it again:</strong>
-      <pre style="background:#fff;padding:8px;margin-top:8px;border-radius:3px;word-break:break-all;"><%= generated %></pre>
+      <pre style="background: var(--bg-input); padding: 10px; margin-top: 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); word-break: break-all; font-family: var(--font-mono); color: var(--text-primary);"><%= generated %></pre>
     </div>
   <% } %>
 
@@ -66,7 +104,7 @@
     const trackingId = ws.settings?.tracking?.clarity_project_id || '';
   %>
 
-  <form method="POST" action="/admin/settings/tracking" class="form" style="padding:0;">
+  <form method="POST" action="/admin/settings/tracking" class="form" style="padding:0; max-width:none; background:transparent; border:0;">
     <div class="form-row">
       <label>Microsoft Clarity Project ID</label>
       <input type="text" name="clarity_project_id"
@@ -87,7 +125,7 @@
   </form>
 
   <% if (trackingId) { %>
-    <div style="background:#e8f4ea;color:#1f6b3a;padding:10px 12px;border-radius:4px;margin-top:12px;">
+    <div style="background: var(--success-bg); color: var(--success); border: 1px solid var(--success); padding: 10px 12px; border-radius: var(--radius-sm); margin-top: 14px;">
       Clarity is currently <strong>active</strong> on all pages. Project ID: <code><%= trackingId %></code>
     </div>
   <% } %>

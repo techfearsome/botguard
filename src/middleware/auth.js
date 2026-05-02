@@ -197,34 +197,11 @@ async function requireApiKey(req, res, next) {
 function loginPage(req, res) {
   res.set('Cache-Control', 'private, no-store');
   res.set('CDN-Cache-Control', 'no-store');
-  const error = req.query.error;
-  const next_url = req.query.next || '/admin';
-  res.send(`<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>BotGuard - Login</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f6f8; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-  .card { background: #fff; padding: 40px; border-radius: 8px; border: 1px solid #e1e4ea; max-width: 360px; width: 90%; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-  h1 { margin: 0 0 8px 0; font-size: 20px; }
-  .muted { color: #7a8294; font-size: 13px; margin-bottom: 24px; }
-  label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; margin-top: 12px; }
-  input { width: 100%; padding: 8px 10px; border: 1px solid #cfd4de; border-radius: 4px; font-size: 14px; box-sizing: border-box; font-family: inherit; }
-  button { width: 100%; margin-top: 20px; padding: 10px; background: #2d6cdf; color: #fff; border: 0; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; }
-  button:hover { background: #2459b8; }
-  .err { background: #fce4e1; color: #b7281b; padding: 10px; border-radius: 4px; font-size: 13px; margin-bottom: 12px; }
-</style></head>
-<body>
-  <form class="card" method="POST" action="/admin/login">
-    <h1>BotGuard Admin</h1>
-    <p class="muted">Sign in to continue</p>
-    ${error ? `<div class="err">${error === 'invalid' ? 'Invalid username or password.' : 'Login failed.'}</div>` : ''}
-    <input type="hidden" name="next" value="${escapeHtml(next_url)}">
-    <label>Username</label>
-    <input type="text" name="username" required autocomplete="username" autofocus>
-    <label>Password</label>
-    <input type="password" name="password" required autocomplete="current-password">
-    <button type="submit">Sign in</button>
-  </form>
-</body></html>`);
+  const error = req.query.error || null;
+  const nextUrlRaw = typeof req.query.next === 'string' ? req.query.next : '/admin';
+  // Only allow internal redirects (must start with /); otherwise send to /admin.
+  const next_url = nextUrlRaw.startsWith('/') ? nextUrlRaw : '/admin';
+  res.render('login', { error, next_url });
 }
 
 function loginSubmit(req, res) {

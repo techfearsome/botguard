@@ -2,37 +2,37 @@
 
 <div class="page-header">
   <div>
-    <h1>Live Visitors <span id="live-pulse" class="live-pulse" title="Live updates active">●</span></h1>
+    <h1>Live Visitors <span class="live-pulse" title="Live updates active">●</span></h1>
     <p class="muted">Active visitors on your /go landing pages, updating in real-time. Visitors disappear from the list 30 seconds after their last heartbeat.</p>
   </div>
-  <div class="muted" style="text-align:right; font-size:13px;">
-    <span id="connection-status">Connecting…</span>
-    <br><small>Last update: <span id="last-update">–</span></small>
+  <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+    <span class="live-conn" id="connection-status">Connecting…</span>
+    <small class="muted">Last update: <span id="last-update">–</span></small>
   </div>
 </div>
 
-<div class="stat-grid" style="margin-bottom:24px;">
+<div class="stat-grid">
   <div class="stat-card">
     <div class="stat-label">Active right now</div>
     <div class="stat-value" id="stat-active"><%= snapshot.active %></div>
   </div>
   <div class="stat-card">
     <div class="stat-label">On offer pages</div>
-    <div class="stat-value" id="stat-offer" style="color:#1f6b3a;"><%= snapshot.on_offer %></div>
+    <div class="stat-value" id="stat-offer" style="color: var(--success);"><%= snapshot.on_offer %></div>
   </div>
   <div class="stat-card">
     <div class="stat-label">On safe pages</div>
-    <div class="stat-value" id="stat-safe" style="color:#7a5b00;"><%= snapshot.on_safe %></div>
+    <div class="stat-value" id="stat-safe" style="color: var(--warning);"><%= snapshot.on_safe %></div>
   </div>
   <div class="stat-card">
     <div class="stat-label">Conversions today</div>
-    <div class="stat-value" id="stat-conv-today" style="color:#2d6cdf;"><%= snapshot.conversions_today %></div>
-    <div class="stat-sub muted" style="font-size:11px; margin-top:2px;">Resets at midnight</div>
+    <div class="stat-value" id="stat-conv-today" style="color: var(--info);"><%= snapshot.conversions_today %></div>
+    <div class="stat-sub">Resets at midnight</div>
   </div>
 </div>
 
 <section class="panel">
-  <h3 style="margin-bottom:12px;">Visitors</h3>
+  <h3>Visitors</h3>
   <div id="empty-state" class="empty-state" style="<%= snapshot.visitors.length === 0 ? '' : 'display:none;' %>">
     <p>No active visitors right now. New visits will appear here automatically.</p>
   </div>
@@ -43,86 +43,8 @@
   </div>
 </section>
 
-<style>
-  .live-pulse {
-    color: #2dca5d;
-    animation: live-pulse 1.4s ease-in-out infinite;
-    font-size: 0.85em;
-    margin-left: 4px;
-    vertical-align: middle;
-  }
-  @keyframes live-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-  .visitor-card {
-    background: #fff;
-    border: 1px solid #e1e4ea;
-    border-radius: 6px;
-    padding: 12px 14px;
-    display: grid;
-    grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) minmax(140px, 1.5fr) minmax(120px, 1fr) minmax(80px, 0.5fr) auto;
-    gap: 14px;
-    align-items: center;
-    transition: background-color .25s, border-color .25s;
-  }
-  .visitor-card.is-new {
-    background: #ecfdf5;
-    border-color: #34d399;
-  }
-  .visitor-card.is-converted {
-    background: #eff6ff;
-    border-color: #2d6cdf;
-  }
-  .visitor-card.is-leaving {
-    opacity: 0.4;
-    background: #fef2f2;
-  }
-  .visitor-card .v-cell { min-width: 0; }
-  .visitor-card .v-cid {
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    color: #6b7280;
-  }
-  .visitor-card .v-campaign {
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .visitor-card .v-utm {
-    font-size: 12px;
-    color: #6b7280;
-  }
-  .visitor-card .v-meta {
-    font-size: 12px;
-    color: #4b5563;
-  }
-  .visitor-card .v-meta strong { color: #111; }
-  .visitor-card .v-time {
-    font-family: ui-monospace, monospace;
-    font-size: 13px;
-    color: #2d6cdf;
-    text-align: right;
-  }
-  .visitor-card .v-status .badge { white-space: nowrap; }
-  .visitor-card.is-converted .v-status .badge-converted {
-    background: #2d6cdf;
-    color: white;
-  }
-  .badge-page-offer { background: #d1fae5; color: #065f46; }
-  .badge-page-safe { background: #fef3c7; color: #7a5b00; }
-
-  @media (max-width: 900px) {
-    .visitor-card {
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-    .visitor-card .v-time, .visitor-card .v-status { text-align: left; }
-  }
-</style>
-
 <script>
+
 (function () {
   'use strict';
 
@@ -135,7 +57,6 @@
 
   const listEl = document.getElementById('visitor-list');
   const emptyEl = document.getElementById('empty-state');
-  const pulseEl = document.getElementById('live-pulse');
   const statusEl = document.getElementById('connection-status');
   const lastUpdateEl = document.getElementById('last-update');
   const stats = {
@@ -312,13 +233,13 @@
   let evtSource;
   function connect() {
     statusEl.textContent = 'Connecting…';
-    pulseEl.style.color = '#999';
+    statusEl.classList.remove('is-disconnected');
 
     evtSource = new EventSource('/admin/live/stream');
 
     evtSource.addEventListener('open', function () {
       statusEl.textContent = 'Connected · live';
-      pulseEl.style.color = '#2dca5d';
+      statusEl.classList.remove('is-disconnected');
     });
 
     evtSource.addEventListener('snapshot', function (e) {
@@ -378,7 +299,7 @@
         const card = document.getElementById('stat-conv-today').closest('.stat-card');
         if (card) {
           card.style.transition = 'background-color .25s';
-          card.style.backgroundColor = '#dbeafe';
+          card.style.backgroundColor = 'var(--info-bg)';
           setTimeout(function () { card.style.backgroundColor = ''; }, 600);
         }
         setLastUpdate();
@@ -390,7 +311,7 @@
 
     evtSource.addEventListener('error', function () {
       statusEl.textContent = 'Reconnecting…';
-      pulseEl.style.color = '#dc2626';
+      statusEl.classList.add('is-disconnected');
       // EventSource handles reconnect automatically; we just update status.
     });
   }

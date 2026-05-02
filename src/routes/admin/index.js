@@ -834,6 +834,30 @@ router.post('/settings/tracking', async (req, res) => {
   res.redirect('/admin/settings#tracking');
 });
 
+/**
+ * Set the admin UI theme. Persisted on the workspace document so it follows
+ * the workspace across browsers/devices (admins typically have one workspace
+ * per organization, so this is effectively a per-organization preference).
+ *
+ * Defaults to 'dark'. Anything other than 'light' is treated as 'dark' to
+ * keep the input space tight - we don't want to hand-write CSS for
+ * arbitrary theme strings.
+ */
+router.post('/settings/theme', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const requested = String(req.body?.theme || '').toLowerCase();
+  const theme = requested === 'light' ? 'light' : 'dark';
+
+  await Workspace.updateOne(
+    { _id: ws._id },
+    { $set: { 'settings.theme': theme } }
+  );
+  // Invalidate cache so the next /admin GET sees the new theme value
+  await cache.invalidateWorkspace(ws.slug);
+
+  res.redirect('/admin/settings#appearance');
+});
+
 router.post('/settings/api-keys', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const label = (req.body?.label || 'unnamed').slice(0, 60);

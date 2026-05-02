@@ -16,7 +16,7 @@
     <small class="muted">URL will be: <code>/go/&lt;slug&gt;</code>. If the generated slug already exists, a random suffix is appended.</small>
   </div>
 
-  <div class="form-row" style="background:#f9fafb; padding:14px; border-radius:6px; border:1px solid #e1e4ea;">
+  <div class="form-row form-row-highlight">
     <label style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
       <strong>Campaign status</strong>
       <% if (campaign?.status === 'active') { %>
@@ -24,7 +24,7 @@
       <% } else if (campaign?.status === 'paused') { %>
         <span class="badge badge-block">Paused</span>
       <% } else if (campaign?.status === 'archived') { %>
-        <span class="badge" style="background:#9ca3af; color:white;">Archived</span>
+        <span class="badge badge-status-archived">Archived</span>
       <% } %>
     </label>
     <select name="status" style="max-width:280px;">
@@ -49,7 +49,7 @@
     <small class="muted">Determines how filter scores are weighted. Pick the dominant traffic source for this campaign.</small>
   </div>
 
-  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+  <fieldset>
     <legend style="font-weight:600; padding:0 6px;">Default Pages</legend>
     <p class="muted" style="margin-top:0;">
       Used when no per-device override is set below. The Offer page is shown to allowed visitors;
@@ -83,7 +83,7 @@
     </div>
   </fieldset>
 
-  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+  <fieldset>
     <legend style="font-weight:600; padding:0 6px;">Per-Device Pages (optional)</legend>
     <p class="muted" style="margin-top:0;">
       Override the default Offer / Safe page per device class. Useful for app campaigns that
@@ -157,7 +157,7 @@
     </select>
   </div>
 
-  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+  <fieldset>
     <legend style="font-weight:600; padding:0 6px;">UTM Gate</legend>
     <p class="muted" style="margin-top:0;">
       When enabled, visits missing required UTM keys are routed to the safe page. Useful to keep
@@ -190,7 +190,7 @@
     </div>
   </fieldset>
 
-  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+  <fieldset>
     <legend style="font-weight:600; padding:0 6px;">Country Gate</legend>
     <p class="muted" style="margin-top:0;">
       Cross-checks ProxyCheck's country verdict against your list. Whitelist mode = only listed
@@ -245,7 +245,7 @@
     </div>
   </fieldset>
 
-  <fieldset style="border:1px solid #e1e4ea; border-radius:6px; padding:14px 16px; margin-bottom:16px;">
+  <fieldset>
     <legend style="font-weight:600; padding:0 6px;">Proxy Gate</legend>
     <p class="muted" style="margin-top:0;">
       Hard route to safe page on proxy/VPN/Tor detection. Reads ProxyCheck verdict +

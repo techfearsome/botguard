@@ -14,6 +14,12 @@ const WorkspaceSchema = new mongoose.Schema({
     default_threshold: { type: Number, default: 70 },
     default_mode: { type: String, enum: ['log_only', 'enforce'], default: 'log_only' },
 
+    // Admin UI theme preference. 'dark' (default) or 'light'.
+    // Persisted per-workspace so admins get a consistent appearance across
+    // browsers and devices. Read by views/partials/header.ejs to set the
+    // data-theme attribute on <html> for first-paint correctness.
+    theme: { type: String, enum: ['dark', 'light'], default: 'dark' },
+
     // Third-party analytics injection - applied to all offer + safe pages.
     // Useful for session replay (Clarity), error tracking, and ad-platform pixels.
     tracking: {

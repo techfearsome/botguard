@@ -14,7 +14,7 @@
     <a href="/admin/campaigns/new" class="btn btn-primary">Create your first campaign</a>
   </div>
 <% } else { %>
-  <table class="table">
+  <div class="table-scroll"><table class="table">
     <tr>
       <th>Name</th>
       <th>Slug / URL</th>
@@ -54,7 +54,7 @@
           <% } else if (c.status === 'paused') { %>
             <span class="badge badge-block" title="All traffic goes to safe page">Paused</span>
           <% } else if (c.status === 'archived') { %>
-            <span class="badge" style="background:#9ca3af; color:white;" title="URL returns 404">Archived</span>
+            <span class="badge badge-status-archived" title="URL returns 404">Archived</span>
           <% } else { %>
             <span class="badge"><%= c.status %></span>
           <% } %>
@@ -70,7 +70,7 @@
             </form>
           <% } else if (c.status === 'paused') { %>
             <form method="POST" action="/admin/campaigns/<%= c._id %>/toggle" style="display:inline">
-              <button type="submit" class="btn btn-small" style="background:#10b981; color:white;" title="Resume normal pipeline">Resume</button>
+              <button type="submit" class="btn btn-small btn-success" title="Resume normal pipeline">Resume</button>
             </form>
           <% } %>
           <a href="/admin/campaigns/<%= c._id %>/edit" class="btn btn-small">Edit</a>
@@ -81,7 +81,7 @@
         </td>
       </tr>
     <% }) %>
-  </table>
+  </table></div>
 <% } %>
 
 <%- include('../partials/footer') %>

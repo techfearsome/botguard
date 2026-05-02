@@ -40,7 +40,7 @@
 <% if (clicks.length === 0) { %>
   <div class="empty-state"><p>No clicks match these filters.</p></div>
 <% } else { %>
-  <table class="table table-dense">
+  <div class="table-scroll"><table class="table table-dense">
     <tr>
       <th>Time</th>
       <th>Click ID</th>
@@ -99,7 +99,7 @@
         <td><span class="badge badge-<%= c.decision %>"><%= c.decision %></span></td>
       </tr>
     <% }) %>
-  </table>
+  </table></div>
 <% } %>
 
 <%- include('../partials/footer') %>
