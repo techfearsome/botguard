@@ -10,6 +10,7 @@ const { replay } = require('../../lib/replay');
 const { PROFILES } = require('../../scoring/profiles');
 const { requireAdmin, loginPage, loginSubmit, logout } = require('../../middleware/auth');
 const logger = require('../../lib/logger');
+const { parseRange, applyRangeToFilter, RANGE_OPTIONS } = require('../../lib/dateRange');
 
 // --- Login / logout (must be defined BEFORE requireAdmin gate) ---
 router.get('/login', loginPage);
@@ -39,6 +40,9 @@ router.get('/', async (req, res) => {
 
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  // "Today" = since midnight server-local. Used for the Recent Clicks list
+  // so the dashboard shows what's relevant right now, not stale history.
+  const sinceToday = new Date(); sinceToday.setHours(0, 0, 0, 0);
 
   const [clicks24h, clicks7d, conversions24h, decisionBreakdown, topSources, recentClicks] = await Promise.all([
     Click.countDocuments({ workspace_id: ws._id, ts: { $gte: since24h } }),
@@ -54,7 +58,7 @@ router.get('/', async (req, res) => {
       { $sort: { count: -1 } },
       { $limit: 10 },
     ]),
-    Click.find({ workspace_id: ws._id })
+    Click.find({ workspace_id: ws._id, ts: { $gte: sinceToday } })
       .sort({ ts: -1 })
       .limit(20)
       .populate('campaign_id', 'name slug')
@@ -67,6 +71,7 @@ router.get('/', async (req, res) => {
     decisionBreakdown,
     topSources,
     recentClicks,
+    recentClicksScope: 'today',
     page: 'dashboard',
   });
 });
@@ -446,6 +451,9 @@ const { live } = require('../../lib/livePresence');
 
 router.get('/live', async (req, res) => {
   const ws = await resolveWorkspace(req);
+  // Seed the daily-conversion counter from DB so the dashboard shows accurate
+  // "Conversions today" from minute one (not just conversions-since-server-start).
+  await live.seedDailyFromDb(ws._id, Conversion);
   const snapshot = live.snapshot(ws._id);
   res.render('admin/live', { ws, snapshot, page: 'live' });
 });
@@ -463,10 +471,24 @@ router.get('/live', async (req, res) => {
  *   - No client library needed
  *
  * Events are filtered to the admin's workspace.
+ *
+ * Event types:
+ *   - snapshot:    initial state on connection
+ *   - arrived:     new visitor on a /go page
+ *   - updated:     re-arrived (re-render of same click_id)
+ *   - heartbeat:   visitor still active
+ *   - converted:   visitor clicked a tracked button
+ *   - left:        visitor's tab closed or went stale
+ *   - daily_stats: per-workspace daily conversion counter changed
  */
 router.get('/live/stream', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const wsId = String(ws._id);
+
+  // Make sure the daily counter is seeded for this workspace - otherwise an
+  // admin who lands on /admin/live AFTER conversions for the day already
+  // happened would see a stale 0 until the next conversion fires.
+  await live.seedDailyFromDb(ws._id, Conversion);
 
   // SSE headers. Critically, no Cache-Control caching since this is a long-lived
   // connection. X-Accel-Buffering off prevents nginx from buffering the stream.
@@ -486,13 +508,22 @@ router.get('/live/stream', async (req, res) => {
   }
   send('snapshot', live.snapshot(wsId));
 
-  // Subscribe to subsequent events. Filter by workspace.
+  // Subscribe to per-visitor events. Filter by workspace.
   function onEvent(payload) {
     if (!payload || !payload.visitor) return;
     if (payload.visitor.workspace_id && String(payload.visitor.workspace_id) !== wsId) return;
     send(payload.type, payload.visitor);
   }
   live.on('event', onEvent);
+
+  // Subscribe to daily stats events. Forward only the bucket that matches this
+  // admin's workspace (so admins of workspace A never see workspace B's counter).
+  function onDailyStats(payload) {
+    if (!payload) return;
+    if (String(payload.workspace_id) !== wsId) return;
+    send('daily_stats', payload);
+  }
+  live.on('daily_stats', onDailyStats);
 
   // Keep-alive comment every 25s. Without this, intermediate proxies (Cloudflare,
   // nginx) may close the connection after 60-90s of silence, even though SSE
@@ -505,6 +536,7 @@ router.get('/live/stream', async (req, res) => {
   req.on('close', () => {
     clearInterval(keepalive);
     live.removeListener('event', onEvent);
+    live.removeListener('daily_stats', onDailyStats);
   });
 });
 
@@ -516,6 +548,10 @@ router.get('/clicks', async (req, res) => {
   if (req.query.decision) filter.decision = req.query.decision;
   if (req.query.source) filter['utm.source'] = req.query.source;
 
+  // Default range = "today" (controlled by ?range=today|yesterday|7d|30d|all|custom)
+  const range = parseRange(req.query);
+  applyRangeToFilter(filter, range);
+
   const clicks = await Click.find(filter)
     .sort({ ts: -1 })
     .limit(200)
@@ -524,7 +560,13 @@ router.get('/clicks', async (req, res) => {
 
   const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
 
-  res.render('admin/clicks', { ws, clicks, campaigns, query: req.query, page: 'clicks' });
+  res.render('admin/clicks', {
+    ws, clicks, campaigns,
+    query: req.query,
+    range,
+    rangeOptions: RANGE_OPTIONS,
+    page: 'clicks',
+  });
 });
 
 // ---------- Conversions ----------
@@ -537,17 +579,15 @@ router.get('/conversions', async (req, res) => {
   if (req.query.event) filter.event_name = req.query.event;
   if (req.query.auto === '1') filter.auto_detected = true;
 
-  // Optional date range filter
-  if (req.query.from || req.query.to) {
-    filter.ts = {};
-    if (req.query.from) filter.ts.$gte = new Date(req.query.from);
-    if (req.query.to) {
-      // Treat 'to' as end-of-day inclusive
-      const t = new Date(req.query.to);
-      t.setHours(23, 59, 59, 999);
-      filter.ts.$lte = t;
-    }
+  // Default range = "today". Backwards-compat: if old links pass ?from= or ?to=,
+  // treat them as a custom range. New links should use ?range=custom&date_from=&date_to=.
+  let range;
+  if ((req.query.from || req.query.to) && !req.query.range) {
+    range = parseRange({ range: 'custom', date_from: req.query.from, date_to: req.query.to });
+  } else {
+    range = parseRange(req.query);
   }
+  applyRangeToFilter(filter, range);
 
   const conversions = await Conversion.find(filter)
     .sort({ ts: -1 })
@@ -580,6 +620,8 @@ router.get('/conversions', async (req, res) => {
     conversions,
     campaigns,
     query: req.query,
+    range,
+    rangeOptions: RANGE_OPTIONS,
     stats: { totalCount, autoCount, totalValue },
     page: 'conversions',
   });
@@ -593,15 +635,15 @@ router.get('/conversions.csv', async (req, res) => {
   if (req.query.source) filter.source = req.query.source;
   if (req.query.event) filter.event_name = req.query.event;
   if (req.query.auto === '1') filter.auto_detected = true;
-  if (req.query.from || req.query.to) {
-    filter.ts = {};
-    if (req.query.from) filter.ts.$gte = new Date(req.query.from);
-    if (req.query.to) {
-      const t = new Date(req.query.to);
-      t.setHours(23, 59, 59, 999);
-      filter.ts.$lte = t;
-    }
+
+  // Same range parsing as /conversions for consistency
+  let range;
+  if ((req.query.from || req.query.to) && !req.query.range) {
+    range = parseRange({ range: 'custom', date_from: req.query.from, date_to: req.query.to });
+  } else {
+    range = parseRange(req.query);
   }
+  applyRangeToFilter(filter, range);
 
   const conversions = await Conversion.find(filter)
     .sort({ ts: -1 })
@@ -845,7 +887,10 @@ router.get('/clicks/:id', async (req, res) => {
 router.get('/replay', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
-  res.render('admin/replay', { ws, campaigns, profiles: Object.keys(PROFILES), result: null, query: {}, page: 'replay' });
+  res.render('admin/replay', {
+    ws, campaigns, profiles: Object.keys(PROFILES),
+    result: null, query: {}, page: 'replay',
+  });
 });
 
 router.post('/replay', async (req, res) => {
@@ -853,10 +898,13 @@ router.post('/replay', async (req, res) => {
   const body = req.body || {};
   const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
 
+  // Replay is always scoped to "today" - it's a what-if-this-rule-had-been-active
+  // tool for tuning your rules against current traffic, not a historical
+  // analysis tool. Time selection on the form was confusing, so we removed it.
   const filter = {};
   if (body.campaign) filter.campaign_id = body.campaign;
-  if (body.from) filter.ts = { ...(filter.ts || {}), $gte: new Date(body.from) };
-  if (body.to)   filter.ts = { ...(filter.ts || {}), $lte: new Date(body.to) };
+  const sinceToday = new Date(); sinceToday.setHours(0, 0, 0, 0);
+  filter.ts = { $gte: sinceToday };
 
   const hypothetical = {
     threshold: Number(body.threshold) || 70,

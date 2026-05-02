@@ -25,8 +25,9 @@
     <div class="stat-value" id="stat-safe" style="color:#7a5b00;"><%= snapshot.on_safe %></div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Converted (visible)</div>
-    <div class="stat-value" id="stat-converted" style="color:#2d6cdf;"><%= snapshot.converted_now %></div>
+    <div class="stat-label">Conversions today</div>
+    <div class="stat-value" id="stat-conv-today" style="color:#2d6cdf;"><%= snapshot.conversions_today %></div>
+    <div class="stat-sub muted" style="font-size:11px; margin-top:2px;">Resets at midnight</div>
   </div>
 </div>
 
@@ -141,8 +142,10 @@
     active: document.getElementById('stat-active'),
     offer: document.getElementById('stat-offer'),
     safe: document.getElementById('stat-safe'),
-    converted: document.getElementById('stat-converted'),
+    convToday: document.getElementById('stat-conv-today'),
   };
+  // Track current day so we can detect rollover client-side as a fallback
+  let currentDay = '<%= snapshot.day %>';
 
   // Seed local state from the EJS-rendered cards (so we have data to update durations on).
   // The EJS template sets data attributes on each card.
@@ -275,17 +278,19 @@
   }
 
   function recomputeStats() {
-    let active = 0, offer = 0, safe = 0, converted = 0;
+    // Recomputes only the visitor-derived counters. The "Conversions today"
+    // counter is fed by daily_stats SSE events, not by walking visitors -
+    // because most visitors who converted earlier today are no longer in
+    // the live tracker (they've left).
+    let active = 0, offer = 0, safe = 0;
     visitors.forEach(function (v) {
       active += 1;
       if (v.page_type === 'offer') offer += 1;
       else if (v.page_type === 'safe') safe += 1;
-      if (v.converted) converted += 1;
     });
     stats.active.textContent = active;
     stats.offer.textContent = offer;
     stats.safe.textContent = safe;
-    stats.converted.textContent = converted;
   }
 
   function setLastUpdate() {
@@ -327,7 +332,8 @@
         stats.active.textContent = snap.active;
         stats.offer.textContent = snap.on_offer;
         stats.safe.textContent = snap.on_safe;
-        stats.converted.textContent = snap.converted_now;
+        stats.convToday.textContent = snap.conversions_today != null ? snap.conversions_today : 0;
+        if (snap.day) currentDay = snap.day;
         emptyEl.style.display = snap.visitors.length === 0 ? '' : 'none';
         setLastUpdate();
       } catch (e) {}
@@ -351,7 +357,32 @@
       } catch (e) {}
     });
     evtSource.addEventListener('converted', function (e) {
+      // Per-visitor converted event - update the card in place. The daily
+      // counter is bumped via the separate daily_stats event below, so we
+      // don't double-count.
       try { upsertVisitor(JSON.parse(e.data)); recomputeStats(); setLastUpdate(); } catch (e) {}
+    });
+    evtSource.addEventListener('daily_stats', function (e) {
+      // Server-pushed counter update. Replace the displayed value rather
+      // than incrementing locally - server is the source of truth, and
+      // multiple admin tabs all see the same value this way.
+      try {
+        const stats = JSON.parse(e.data);
+        if (stats.day && currentDay !== stats.day) {
+          // Day rolled over since this dashboard was opened. Clear the per-card
+          // "converted" state since those are stale (yesterday's conversions).
+          currentDay = stats.day;
+        }
+        document.getElementById('stat-conv-today').textContent = stats.conversions_today;
+        // Briefly highlight the card so the admin sees the bump
+        const card = document.getElementById('stat-conv-today').closest('.stat-card');
+        if (card) {
+          card.style.transition = 'background-color .25s';
+          card.style.backgroundColor = '#dbeafe';
+          setTimeout(function () { card.style.backgroundColor = ''; }, 600);
+        }
+        setLastUpdate();
+      } catch (e) {}
     });
     evtSource.addEventListener('left', function (e) {
       try { removeVisitor(JSON.parse(e.data).click_id); recomputeStats(); setLastUpdate(); } catch (e) {}

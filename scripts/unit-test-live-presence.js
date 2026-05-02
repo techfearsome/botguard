@@ -108,10 +108,167 @@ test('converted() marks visitor and emits "converted" event', () => {
   p.stop();
 });
 
-test('converted() bumps global counter even if visitor not tracked', () => {
+test('converted() bumps daily counter even if visitor not tracked', () => {
   const p = new LivePresence();
-  p.converted({ click_id: 'NEVER_REGISTERED', term: 'x' });
-  assert.strictEqual(p.conversionsThisProcess, 1);
+  // No visitor registered - just call converted directly
+  p.converted({ click_id: 'NEVER_REGISTERED', term: 'x', workspace_id: 'ws1' });
+  // Both per-workspace and global buckets should have been bumped
+  const wsBucket = p._getDailyBucket('ws1');
+  const globalBucket = p._getDailyBucket('global');
+  assert.strictEqual(wsBucket.conversions, 1);
+  assert.strictEqual(globalBucket.conversions, 1);
+  p.stop();
+});
+
+test('converted() emits daily_stats event for both per-ws and global buckets', () => {
+  const p = new LivePresence();
+  const events = [];
+  p.on('daily_stats', (e) => events.push(e));
+  p.converted({ click_id: 'A1', term: 'x', workspace_id: 'ws-abc' });
+  // Should emit twice: once for ws-abc, once for global
+  assert.strictEqual(events.length, 2);
+  const wsEvent = events.find(e => e.workspace_id === 'ws-abc');
+  const globalEvent = events.find(e => e.workspace_id === 'global');
+  assert.ok(wsEvent, 'expected workspace daily_stats event');
+  assert.ok(globalEvent, 'expected global daily_stats event');
+  assert.strictEqual(wsEvent.conversions_today, 1);
+  assert.strictEqual(globalEvent.conversions_today, 1);
+  assert.ok(wsEvent.day, 'should include day key');
+  p.stop();
+});
+
+test('converted() without workspace_id only bumps global bucket', () => {
+  const p = new LivePresence();
+  const events = [];
+  p.on('daily_stats', (e) => events.push(e));
+  p.converted({ click_id: 'A1', term: 'x' });
+  // Only one event - the global one
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].workspace_id, 'global');
+  p.stop();
+});
+
+test('converted() with tracked visitor uses visitor.workspace_id for bucket', () => {
+  const p = new LivePresence();
+  p.arrived({ click_id: 'A1', workspace_id: 'ws-from-arrived' });
+  const events = [];
+  p.on('daily_stats', (e) => events.push(e));
+  p.converted({ click_id: 'A1', term: 'x' });   // no explicit workspace_id
+  const wsEvent = events.find(e => e.workspace_id === 'ws-from-arrived');
+  assert.ok(wsEvent, 'should use workspace from registered visitor record');
+  p.stop();
+});
+
+test('Multiple conversions accumulate in the daily bucket', () => {
+  const p = new LivePresence();
+  p.converted({ click_id: 'A1', term: 'x', workspace_id: 'ws1' });
+  p.converted({ click_id: 'A2', term: 'y', workspace_id: 'ws1' });
+  p.converted({ click_id: 'A3', term: 'z', workspace_id: 'ws1' });
+  const wsBucket = p._getDailyBucket('ws1');
+  assert.strictEqual(wsBucket.conversions, 3);
+  p.stop();
+});
+
+test('Daily bucket auto-resets when day changes', () => {
+  const p = new LivePresence();
+  p.converted({ click_id: 'A1', term: 'x', workspace_id: 'ws1' });
+  // Manually rewind the bucket's day to simulate yesterday
+  const bucket = p._getDailyBucket('ws1');
+  assert.strictEqual(bucket.conversions, 1);
+  bucket.day = '1999-01-01';   // pretend this bucket is from forever ago
+  // Next access should detect the day mismatch and reset
+  const fresh = p._getDailyBucket('ws1');
+  assert.strictEqual(fresh.conversions, 0);
+  assert.notStrictEqual(fresh.day, '1999-01-01');
+  p.stop();
+});
+
+test('snapshot() includes conversions_today and day fields', () => {
+  const p = new LivePresence();
+  p.arrived({ click_id: 'A1', workspace_id: 'ws1' });
+  p.converted({ click_id: 'A1', term: 'x', workspace_id: 'ws1' });
+  const snap = p.snapshot('ws1');
+  assert.strictEqual(snap.conversions_today, 1);
+  assert.ok(snap.day, 'snapshot should include day key');
+  p.stop();
+});
+
+test('snapshot(undefined) returns global daily bucket', () => {
+  const p = new LivePresence();
+  p.converted({ click_id: 'A1', term: 'x', workspace_id: 'ws1' });
+  p.converted({ click_id: 'A2', term: 'y', workspace_id: 'ws2' });
+  const globalSnap = p.snapshot();
+  assert.strictEqual(globalSnap.conversions_today, 2, 'global counter should sum across workspaces');
+  p.stop();
+});
+
+test('seedDailyFromDb() seeds counter from Conversion model', async () => {
+  const p = new LivePresence();
+  // Stub a fake Conversion model
+  const fakeConversion = {
+    countDocuments: async (filter) => {
+      // Verify the filter was correctly built
+      assert.ok(filter.ts, 'filter must include ts');
+      assert.ok(filter.ts.$gte instanceof Date, 'filter must have $gte Date');
+      assert.strictEqual(filter.workspace_id, 'ws1');
+      return 42;
+    },
+  };
+  await p.seedDailyFromDb('ws1', fakeConversion);
+  const bucket = p._getDailyBucket('ws1');
+  assert.strictEqual(bucket.conversions, 42);
+  assert.strictEqual(bucket.seeded, true);
+  p.stop();
+});
+
+test('seedDailyFromDb() is idempotent within the same day', async () => {
+  const p = new LivePresence();
+  let queryCount = 0;
+  const fakeConversion = {
+    countDocuments: async () => {
+      queryCount += 1;
+      return 5;
+    },
+  };
+  await p.seedDailyFromDb('ws1', fakeConversion);
+  await p.seedDailyFromDb('ws1', fakeConversion);
+  await p.seedDailyFromDb('ws1', fakeConversion);
+  // Only the first call should query the DB
+  assert.strictEqual(queryCount, 1);
+  p.stop();
+});
+
+test('seedDailyFromDb() handles DB errors gracefully (best-effort)', async () => {
+  const p = new LivePresence();
+  const fakeConversion = {
+    countDocuments: async () => { throw new Error('mongo unavailable'); },
+  };
+  // Should not throw
+  await p.seedDailyFromDb('ws1', fakeConversion);
+  // Bucket should still be marked seeded so we don't retry forever
+  const bucket = p._getDailyBucket('ws1');
+  assert.strictEqual(bucket.seeded, true);
+  assert.strictEqual(bucket.conversions, 0);
+  p.stop();
+});
+
+test('seedDailyFromDb() with no model arg is a no-op', async () => {
+  const p = new LivePresence();
+  await p.seedDailyFromDb('ws1', null);
+  await p.seedDailyFromDb('ws1', undefined);
+  // Should not throw, no errors
+  p.stop();
+});
+
+test('seedDailyFromDb() with "global" workspace queries cross-workspace', async () => {
+  const p = new LivePresence();
+  let capturedFilter = null;
+  const fakeConversion = {
+    countDocuments: async (filter) => { capturedFilter = filter; return 100; },
+  };
+  await p.seedDailyFromDb('global', fakeConversion);
+  // Global bucket should NOT include workspace_id in filter
+  assert.strictEqual(capturedFilter.workspace_id, undefined);
   p.stop();
 });
 

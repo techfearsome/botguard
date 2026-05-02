@@ -169,6 +169,37 @@ function postJson(server, urlPath, body, contentType) {
     assert.strictEqual(live.visitors.get('CID_CV1').converted, true);
   });
 
+  console.log('\ndaily_stats events:');
+
+  await test('converted() emits daily_stats event scoped to workspace', () => {
+    const events = [];
+    const handler = (e) => events.push(e);
+    live.on('daily_stats', handler);
+    live.converted({ click_id: 'CID_DS1', term: 'download', workspace_id: 'ws-test-daily-1' });
+    live.removeListener('daily_stats', handler);
+    // Should fire twice: once for ws-test-daily-1, once for global
+    const wsEvent = events.find(e => e.workspace_id === 'ws-test-daily-1');
+    assert.ok(wsEvent, 'expected workspace daily_stats event');
+    assert.ok(wsEvent.conversions_today >= 1);
+    assert.ok(wsEvent.day, 'event must include day key');
+  });
+
+  await test('Multiple conversions in same workspace accumulate the count', () => {
+    const events = [];
+    const handler = (e) => {
+      if (e.workspace_id === 'ws-test-daily-acc') events.push(e);
+    };
+    live.on('daily_stats', handler);
+    live.converted({ click_id: 'A', term: 'x', workspace_id: 'ws-test-daily-acc' });
+    live.converted({ click_id: 'B', term: 'y', workspace_id: 'ws-test-daily-acc' });
+    live.converted({ click_id: 'C', term: 'z', workspace_id: 'ws-test-daily-acc' });
+    live.removeListener('daily_stats', handler);
+    assert.strictEqual(events.length, 3);
+    assert.strictEqual(events[0].conversions_today, 1);
+    assert.strictEqual(events[1].conversions_today, 2);
+    assert.strictEqual(events[2].conversions_today, 3);
+  });
+
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail > 0 ? 1 : 0);

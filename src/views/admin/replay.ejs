@@ -25,12 +25,11 @@
           </select>
         </div>
         <div class="form-row">
-          <label>From (date)</label>
-          <input type="datetime-local" name="from" value="<%= query.from || '' %>">
-        </div>
-        <div class="form-row">
-          <label>To (date)</label>
-          <input type="datetime-local" name="to" value="<%= query.to || '' %>">
+          <label>Time range</label>
+          <div style="padding:8px 10px; background:#f3f4f6; border:1px solid #e1e4ea; border-radius:4px; color:#4b5563; font-size:13px;">
+            <strong>Today</strong> <span class="muted">— since midnight, server local</span>
+          </div>
+          <small class="muted">Replay is scoped to today's traffic. Use Click Log for historical analysis.</small>
         </div>
       </div>
       <div>

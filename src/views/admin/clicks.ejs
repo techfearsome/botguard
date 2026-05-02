@@ -2,10 +2,21 @@
 
 <div class="page-header">
   <h1>Click Log</h1>
-  <p class="muted">Last 200 clicks. Use filters to narrow down.</p>
+  <p class="muted">Last 200 clicks · <strong><%= range.label %></strong>. Use filters to narrow down.</p>
 </div>
 
 <form method="GET" class="filter-bar">
+  <select name="range" onchange="document.getElementById('custom-dates').style.display = this.value === 'custom' ? '' : 'none';">
+    <% rangeOptions.forEach(opt => { %>
+      <option value="<%= opt.value %>" <%= range.range === opt.value ? 'selected' : '' %>><%= opt.label %></option>
+    <% }) %>
+  </select>
+
+  <span id="custom-dates" style="<%= range.range === 'custom' ? '' : 'display:none' %>; display:inline-flex; gap:6px; align-items:center;">
+    <input type="date" name="date_from" value="<%= query.date_from || '' %>" placeholder="From">
+    <input type="date" name="date_to" value="<%= query.date_to || '' %>" placeholder="To">
+  </span>
+
   <select name="campaign">
     <option value="">All campaigns</option>
     <% campaigns.forEach(c => { %>

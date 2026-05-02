@@ -220,12 +220,14 @@ router.post('/auto-conv', async (req, res) => {
     });
 
     // Notify live presence subscribers - admin dashboards see the conversion
-    // appear instantly without polling.
+    // appear instantly without polling. workspace_id ensures the per-workspace
+    // daily counter is bumped (not just the global one).
     live.converted({
       click_id: clickId,
       term,
       text,
       href,
+      workspace_id: click.workspace_id,
     });
 
     // In debug mode, return verbose response so it can be inspected in DevTools.

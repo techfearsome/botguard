@@ -3,7 +3,7 @@
 <div class="page-header">
   <div>
     <h1>Conversions</h1>
-    <p class="muted">All recorded conversions across pixel, postback, and auto-detected sources.</p>
+    <p class="muted">All recorded conversions across pixel, postback, and auto-detected sources · <strong><%= range.label %></strong>.</p>
   </div>
   <div>
     <a href="/admin/conversions.csv?<%= new URLSearchParams(query).toString() %>" class="btn">Export CSV</a>
@@ -45,10 +45,18 @@
     <% }) %>
   </select>
 
-  <input type="text" name="event" placeholder="event_name" value="<%= query.event || '' %>">
+  <select name="range" onchange="document.getElementById('custom-dates').style.display = this.value === 'custom' ? 'inline-flex' : 'none';">
+    <% rangeOptions.forEach(opt => { %>
+      <option value="<%= opt.value %>" <%= range.range === opt.value ? 'selected' : '' %>><%= opt.label %></option>
+    <% }) %>
+  </select>
 
-  <input type="date" name="from" value="<%= query.from || '' %>">
-  <input type="date" name="to" value="<%= query.to || '' %>">
+  <span id="custom-dates" style="<%= range.range === 'custom' ? 'display:inline-flex' : 'display:none' %>; gap:6px; align-items:center;">
+    <input type="date" name="date_from" value="<%= query.date_from || query.from || '' %>" placeholder="From">
+    <input type="date" name="date_to" value="<%= query.date_to || query.to || '' %>" placeholder="To">
+  </span>
+
+  <input type="text" name="event" placeholder="event_name" value="<%= query.event || '' %>">
 
   <label style="font-weight:normal;">
     <input type="checkbox" name="auto" value="1" <%= query.auto === '1' ? 'checked' : '' %>>
