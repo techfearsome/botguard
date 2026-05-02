@@ -33,7 +33,7 @@
             <small class="muted">n/a</small>
           <% } else { %>–<% } %>
         </td>
-        <td><%= new Date(p.updated_at).toLocaleString() %></td>
+        <td><%- localTime(p.updated_at) %></td>
         <td>
           <a href="/admin/pages/<%= p._id %>/edit" class="btn btn-small">Edit</a>
           <form method="POST" action="/admin/pages/<%= p._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this page?')">

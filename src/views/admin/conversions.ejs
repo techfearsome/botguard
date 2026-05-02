@@ -92,7 +92,7 @@
       <% conversions.forEach(c => { %>
         <tr>
           <td>
-            <%= new Date(c.ts).toLocaleString() %>
+            <%- localTime(c.ts) %>
             <% if (c.click && c.click.ts) { %>
               <% const lag = Math.round((new Date(c.ts) - new Date(c.click.ts)) / 1000); %>
               <% if (lag >= 0) { %>

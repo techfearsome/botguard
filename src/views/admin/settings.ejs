@@ -80,8 +80,8 @@
         <tr>
           <td><%= k.label || '–' %></td>
           <td><code>…<%= k.key.slice(-8) %></code></td>
-          <td><%= new Date(k.created_at).toLocaleString() %></td>
-          <td><%= k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never' %></td>
+          <td><%- localTime(k.created_at) %></td>
+          <td><%- k.last_used_at ? localTime(k.last_used_at) : '<span class="muted">never</span>' %></td>
           <td>
             <form method="POST" action="/admin/settings/api-keys/<%= encodeURIComponent(k.key) %>/delete" style="display:inline" onsubmit="return confirm('Revoke this key?')">
               <button type="submit" class="btn btn-small btn-danger">Revoke</button>
@@ -139,7 +139,7 @@
     <tr><td>Owner email</td><td><%= ws.owner_email || '–' %></td></tr>
     <tr><td>Default threshold</td><td><%= ws.settings?.default_threshold ?? 70 %></td></tr>
     <tr><td>Default mode</td><td><%= ws.settings?.default_mode || 'log_only' %></td></tr>
-    <tr><td>Created</td><td><%= new Date(ws.created_at).toLocaleString() %></td></tr>
+    <tr><td>Created</td><td><%- localTime(ws.created_at) %></td></tr>
   </table>
 </section>
 

@@ -80,7 +80,7 @@
       </tr>
       <% recentClicks.forEach(c => { %>
         <tr>
-          <td><%= new Date(c.ts).toLocaleString() %></td>
+          <td><%- localTime(c.ts) %></td>
           <td><a href="/admin/clicks/<%= c.click_id %>"><code><%= c.click_id.slice(0, 10) %>…</code></a></td>
           <td>
             <% if (c.campaign_id) { %>

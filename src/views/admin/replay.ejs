@@ -87,7 +87,7 @@
         <tr><th>Time</th><th>Click ID</th><th>Was</th><th>Now</th><th>Score Was → Now</th></tr>
         <% result.samples.forEach(s => { %>
           <tr>
-            <td><%= new Date(s.ts).toLocaleString() %></td>
+            <td><%- localTime(s.ts) %></td>
             <td><a href="/admin/clicks/<%= s.click_id %>"><code><%= s.click_id.slice(0,12) %>…</code></a></td>
             <td><span class="badge badge-<%= s.was %>"><%= s.was %></span></td>
             <td><span class="badge badge-<%= s.now %>"><%= s.now %></span></td>

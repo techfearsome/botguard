@@ -53,6 +53,14 @@ if (trustProxyEnv === 'cloudflare') {
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
+// Make the localTime helper available in every template under `localTime`.
+// Templates use it like: <%- localTime(c.ts) %> to emit a <time> element that
+// the browser-side script (public/js/local-time.js) rewrites into the
+// visitor's local timezone. Without this, server-side toLocaleString() would
+// always render in the server's TZ (UTC on Coolify) regardless of admin location.
+const { localTime } = require('./lib/localTime');
+app.locals.localTime = localTime;
+
 // Security headers — relaxed for landing pages since we render arbitrary HTML
 app.use(helmet({
   contentSecurityPolicy: false,

@@ -76,6 +76,9 @@ const adminRouter = require(path.resolve(__dirname, '../src/routes/admin'));
 const app = express();
 app.set('view engine', 'ejs');
 app.set('views', path.resolve(__dirname, '../src/views'));
+// Mirror the real server's app.locals so the localTime helper is available
+// to templates rendered during integration tests.
+app.locals.localTime = require(path.resolve(__dirname, '../src/lib/localTime')).localTime;
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());

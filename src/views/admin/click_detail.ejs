@@ -4,7 +4,7 @@
   <div>
     <h1>Click <code><%= click.click_id %></code></h1>
     <p class="muted">
-      <%= new Date(click.ts).toLocaleString() %> ·
+      <%- localTime(click.ts) %> ·
       Campaign: <strong><%= click.campaign_id?.name || '–' %></strong> ·
       Profile: <%= click.scores?.profile_used || '–' %>
     </p>
@@ -180,7 +180,7 @@
       <tr><th>Time</th><th>Event</th><th>Value</th><th>Source</th><th>Details</th></tr>
       <% conversions.forEach(c => { %>
         <tr>
-          <td><%= new Date(c.ts).toLocaleString() %></td>
+          <td><%- localTime(c.ts) %></td>
           <td><%= c.event_name %></td>
           <td><%= c.value %> <%= c.currency %></td>
           <td>

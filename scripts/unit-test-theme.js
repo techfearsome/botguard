@@ -15,11 +15,14 @@ function test(name, fn) {
 }
 
 const viewsDir = path.resolve(__dirname, '../src/views');
+const { localTime } = require(path.resolve(__dirname, '../src/lib/localTime'));
 
 function renderTemplate(file, data) {
   const tplPath = path.join(viewsDir, file);
   const src = fs.readFileSync(tplPath, 'utf8');
-  return ejs.render(src, data, { filename: tplPath, root: viewsDir });
+  // Inject the localTime helper since real Express requests get it via
+  // app.locals - direct ejs.render needs it passed explicitly.
+  return ejs.render(src, { localTime, ...data }, { filename: tplPath, root: viewsDir });
 }
 
 console.log('Theme rendering:');
