@@ -11,6 +11,7 @@ const { PROFILES } = require('../../scoring/profiles');
 const { requireAdmin, loginPage, loginSubmit, logout } = require('../../middleware/auth');
 const logger = require('../../lib/logger');
 const { parseRange, applyRangeToFilter, RANGE_OPTIONS } = require('../../lib/dateRange');
+const { validateRootPath } = require('../../lib/reservedPaths');
 
 // --- Login / logout (must be defined BEFORE requireAdmin gate) ---
 router.get('/login', loginPage);
@@ -89,7 +90,7 @@ router.get('/campaigns', async (req, res) => {
 router.get('/campaigns/new', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign: null, pages, page: 'campaigns' });
+  res.render('admin/campaign_form', { ws, campaign: null, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns' });
 });
 
 router.post('/campaigns', async (req, res) => {
@@ -100,6 +101,23 @@ router.post('/campaigns', async (req, res) => {
     const slug = await resolveSlug(body.slug, body.name, async (s) => {
       return !!(await Campaign.exists({ workspace_id: ws._id, slug: s }));
     });
+
+    // Validate optional custom root path. Empty string is fine - means
+    // the campaign is only reachable at /go/<slug>.
+    const rootPathResult = validateRootPath(body.root_path);
+    if (!rootPathResult.valid) {
+      return res.status(400).send(`Custom URL path: ${rootPathResult.error}`);
+    }
+    // Check uniqueness within the workspace if non-empty
+    if (rootPathResult.normalized) {
+      const collision = await Campaign.exists({
+        workspace_id: ws._id,
+        root_path: rootPathResult.normalized,
+      });
+      if (collision) {
+        return res.status(400).send(`Custom URL path "/${rootPathResult.normalized}" is already used by another campaign in this workspace.`);
+      }
+    }
 
     // UTM gate config
     const utmGate = {
@@ -119,6 +137,7 @@ router.post('/campaigns', async (req, res) => {
     await Campaign.create({
       workspace_id: ws._id,
       slug,
+      root_path: rootPathResult.normalized,
       name: body.name,
       status: body.status || 'active',
       landing_page_id: body.landing_page_id || null,
@@ -237,7 +256,7 @@ router.get('/campaigns/:id/edit', async (req, res) => {
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
   if (!campaign) return res.status(404).send('Campaign not found');
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign, pages, page: 'campaigns' });
+  res.render('admin/campaign_form', { ws, campaign, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns' });
 });
 
 router.post('/campaigns/:id', async (req, res) => {
@@ -258,6 +277,23 @@ router.post('/campaigns/:id', async (req, res) => {
       });
     }
 
+    // Validate optional custom root path. Allow keeping the existing one
+    // unchanged without re-checking uniqueness against itself.
+    const rootPathResult = validateRootPath(body.root_path);
+    if (!rootPathResult.valid) {
+      return res.status(400).send(`Custom URL path: ${rootPathResult.error}`);
+    }
+    if (rootPathResult.normalized && rootPathResult.normalized !== existing.root_path) {
+      const collision = await Campaign.exists({
+        workspace_id: ws._id,
+        root_path: rootPathResult.normalized,
+        _id: { $ne: existing._id },
+      });
+      if (collision) {
+        return res.status(400).send(`Custom URL path "/${rootPathResult.normalized}" is already used by another campaign in this workspace.`);
+      }
+    }
+
     const utmGate = {
       enabled: body.utm_gate_enabled === 'on' || body.utm_gate_enabled === 'true',
       required_keys: parseRequiredUtmKeys(body.utm_required_keys),
@@ -271,6 +307,7 @@ router.post('/campaigns/:id', async (req, res) => {
       {
         $set: {
           slug,
+          root_path: rootPathResult.normalized,
           name: body.name,
           status: body.status,
           landing_page_id: body.landing_page_id || null,

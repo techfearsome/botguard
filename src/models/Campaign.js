@@ -3,6 +3,12 @@ const mongoose = require('mongoose');
 const CampaignSchema = new mongoose.Schema({
   workspace_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', required: true, index: true },
   slug: { type: String, required: true, lowercase: true, trim: true },
+
+  // Optional custom root path - lets a campaign be reached at /<root_path>
+  // in addition to the default /go/<slug>. Empty string means no custom path.
+  // Validated against a reserved-paths list so campaigns can't shadow system
+  // routes like /admin or /privacy. See lib/reservedPaths.js.
+  root_path: { type: String, default: '', lowercase: true, trim: true, index: true },
   name: { type: String, required: true },
   status: { type: String, enum: ['active', 'paused', 'archived'], default: 'active' },
 
@@ -85,6 +91,16 @@ const CampaignSchema = new mongoose.Schema({
 
 CampaignSchema.index({ workspace_id: 1, slug: 1 }, { unique: true });
 CampaignSchema.index({ workspace_id: 1, status: 1 });
+
+// Unique within workspace, but only when root_path is set. Two campaigns with
+// no custom path are fine; two campaigns claiming the same /promo are not.
+CampaignSchema.index(
+  { workspace_id: 1, root_path: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { root_path: { $type: 'string', $ne: '' } },
+  }
+);
 
 CampaignSchema.pre('save', function (next) {
   this.updated_at = new Date();

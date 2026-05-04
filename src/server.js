@@ -113,6 +113,33 @@ app.use('/', siteRoutes);
 // Health check
 app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
+// --- Custom root-path campaign routes ---
+// Campaigns can opt-in to a custom root path like /promo or /black-friday-2026
+// in addition to the default /go/<slug>. This is registered AFTER all explicit
+// system routes (admin, site pages, healthz) so a campaign at /privacy could
+// never shadow the site page. Defense-in-depth: the handler also rejects any
+// path that's in the reserved-paths registry, even if validation at create
+// time somehow let one through.
+//
+// The route regex requires a single segment matching [a-z0-9][a-z0-9_-]{1,63}
+// so multi-segment paths (/foo/bar), uppercase, special characters, and
+// dot-files won't match here - they'll fall through to the 404 handler.
+const { isReservedPath } = require('./lib/reservedPaths');
+const { handleClick: goHandleClick } = require('./routes/go');
+const { DEFAULT_SLUG: DEFAULT_WS_SLUG } = require('./lib/bootstrap');
+
+app.get(/^\/([a-z0-9][a-z0-9_-]{1,63})$/, async (req, res, next) => {
+  const candidate = req.params[0];
+  // Defensive: if a reserved path somehow got past validation, return 404
+  // rather than serving the campaign. This protects future system routes too.
+  if (isReservedPath(candidate)) return next();
+  return goHandleClick(req, res, {
+    workspaceSlug: DEFAULT_WS_SLUG,
+    lookupKind: 'root_path',
+    lookupValue: candidate,
+  });
+});
+
 // 404 handler. For browser requests (Accept: text/html) we render the configured
 // SitePage with slug='404'. For API/JSON requests we keep returning JSON.
 app.use((req, res) => {

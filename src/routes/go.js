@@ -32,20 +32,42 @@ function injectChallenge(html) {
   return html + tag;
 }
 
-async function handleClick(req, res, workspaceSlug, campaignSlug) {
+/**
+ * Main entrypoint for /go/<slug> and custom root-path requests.
+ *
+ * @param {object} opts
+ * @param {string} opts.workspaceSlug - workspace identifier (single-tenant uses DEFAULT_SLUG)
+ * @param {string} opts.lookupKind - "slug" (default for /go/<slug>) or "root_path" (custom routes)
+ * @param {string} opts.lookupValue - the slug or root_path value to resolve
+ */
+async function handleClick(req, res, opts) {
+  const { workspaceSlug, lookupKind, lookupValue } = opts;
   try {
     const workspace = await cache.getWorkspaceBySlug(workspaceSlug, () =>
       Workspace.findOne({ slug: workspaceSlug }).lean()
     );
     if (!workspace) return res.status(404).send('Campaign not found');
 
-    const campaign = await cache.getCampaignBySlug(workspace._id, campaignSlug, () =>
-      Campaign.findOne({
+    let campaign;
+    if (lookupKind === 'root_path') {
+      // Look up by custom root_path. We don't cache by root_path yet because
+      // it's a less common lookup and the campaign object itself is small;
+      // a Mongo query per visit is fine.
+      campaign = await Campaign.findOne({
         workspace_id: workspace._id,
-        slug: campaignSlug,
+        root_path: lookupValue,
         status: { $ne: 'archived' },
-      }).lean()
-    );
+      }).lean();
+    } else {
+      // Default: lookup by slug, with cache.
+      campaign = await cache.getCampaignBySlug(workspace._id, lookupValue, () =>
+        Campaign.findOne({
+          workspace_id: workspace._id,
+          slug: lookupValue,
+          status: { $ne: 'archived' },
+        }).lean()
+      );
+    }
     if (!campaign) return res.status(404).send('Campaign not found');
 
     // Build base click record
@@ -324,11 +346,17 @@ async function handleFingerprint(req, res) {
 router.post('/fp', express.json({ limit: '32kb' }), handleFingerprint);
 
 // Single-tenant
-router.get('/:slug', (req, res) => handleClick(req, res, DEFAULT_SLUG, req.params.slug));
+router.get('/:slug', (req, res) => handleClick(req, res, {
+  workspaceSlug: DEFAULT_SLUG,
+  lookupKind: 'slug',
+  lookupValue: req.params.slug,
+}));
 // Multi-tenant
-router.get('/:workspaceSlug/:campaignSlug', (req, res) =>
-  handleClick(req, res, req.params.workspaceSlug, req.params.campaignSlug)
-);
+router.get('/:workspaceSlug/:campaignSlug', (req, res) => handleClick(req, res, {
+  workspaceSlug: req.params.workspaceSlug,
+  lookupKind: 'slug',
+  lookupValue: req.params.campaignSlug,
+}));
 
 function renderStubPage({ campaign, click_id }) {
   return `<!DOCTYPE html>
@@ -479,3 +507,4 @@ function escapeHtml(s = '') {
 }
 
 module.exports = router;
+module.exports.handleClick = handleClick;

@@ -3,7 +3,7 @@
 <div class="page-header">
   <div>
     <h1>Campaigns</h1>
-    <p class="muted">Each campaign has a unique slug used in the public URL: <code>/go/&lt;slug&gt;</code></p>
+    <p class="muted">Each campaign has a unique slug used in the public URL: <code>/go/&lt;slug&gt;</code>. Campaigns can also be assigned a custom root URL like <code>/promo</code>.</p>
   </div>
   <a href="/admin/campaigns/new" class="btn btn-primary">+ New Campaign</a>
 </div>
@@ -28,7 +28,12 @@
     <% campaigns.forEach(c => { %>
       <tr>
         <td><strong><%= c.name %></strong></td>
-        <td><code>/go/<%= c.slug %></code></td>
+        <td>
+          <code>/go/<%= c.slug %></code>
+          <% if (c.root_path) { %>
+            <br><code style="background: var(--success-bg); color: var(--success); border-color: var(--success);">/<%= c.root_path %></code>
+          <% } %>
+        </td>
         <td><%= c.source_profile %></td>
         <td><span class="badge badge-mode-<%= c.filter_config?.mode %>"><%= c.filter_config?.mode || 'log_only' %></span></td>
         <td>

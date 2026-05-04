@@ -16,6 +16,30 @@
     <small class="muted">URL will be: <code>/go/&lt;slug&gt;</code>. If the generated slug already exists, a random suffix is appended.</small>
   </div>
 
+  <div class="form-row">
+    <label>Custom URL path <span class="muted">(optional)</span></label>
+    <%
+      const baseUrl = (locals.baseUrl || '').replace(/\/$/, '');
+      const rootPath = campaign?.root_path || '';
+    %>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <span class="muted" style="font-family: var(--font-mono); font-size: 13px; white-space: nowrap;"><%= baseUrl || 'https://yourdomain.com' %>/</span>
+      <input type="text" name="root_path" id="root_path_input" value="<%= rootPath %>"
+             pattern="[a-z0-9][a-z0-9_-]{1,63}"
+             maxlength="64"
+             placeholder="e.g. promo, black-friday, special-offer">
+    </div>
+    <small class="muted">
+      Lets the campaign be reached at a custom URL like <code><%= baseUrl || 'https://yourdomain.com' %>/promo</code> in addition to <code>/go/&lt;slug&gt;</code>. Leave blank if you only want the default <code>/go/</code> URL.
+      <br>Reserved paths like <code>admin</code>, <code>privacy</code>, <code>p</code>, <code>api</code> are blocked. Lowercase letters, digits, hyphens, and underscores only. 2-64 characters.
+    </small>
+    <% if (rootPath) { %>
+      <div style="margin-top: 8px; padding: 8px 12px; background: var(--success-bg); color: var(--success); border-radius: var(--radius-sm); font-size: 13px;">
+        Active at: <code style="background:transparent; border:0; color:inherit; padding:0;"><%= baseUrl %>/<%= rootPath %></code>
+      </div>
+    <% } %>
+  </div>
+
   <div class="form-row form-row-highlight">
     <label style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
       <strong>Campaign status</strong>
