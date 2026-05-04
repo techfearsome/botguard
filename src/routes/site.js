@@ -128,6 +128,93 @@ router.get('/p/:slug', (req, res) => {
   return renderSitePage(req, res, slug);
 });
 
+// --- robots.txt ---
+//
+// Generated dynamically because the policy depends on:
+//   1. Custom campaign root_paths (each must be Disallow-ed)
+//   2. The request host (sitemap reference includes it)
+//   3. Per-environment opt-out (BG_NO_INDEX=1 disallows everything)
+//   4. Per-workspace AI-crawler opt-out (settings.block_ai_crawlers)
+//
+// Cached in-memory; invalidated when campaigns are saved/deleted.
+const { buildRobotsTxt, buildSitemapXml, listDisallowedRootPaths } = require('../lib/robotsAndSitemap');
+
+let robotsCache = { ts: 0, body: '', forHost: '' };
+let sitemapCache = { ts: 0, body: '', forHost: '' };
+const ROBOTS_CACHE_MS = 5 * 60 * 1000;
+const SITEMAP_CACHE_MS = 5 * 60 * 1000;
+
+router.get('/robots.txt', async (req, res) => {
+  try {
+    const host = req.hostname || req.get('host') || 'localhost';
+    const protocol = req.protocol || 'https';
+
+    // Cheap cache - only valid for the same host. If the same instance serves
+    // multiple hosts (multi-tenant future) we'll rekey by host.
+    const now = Date.now();
+    let body = robotsCache.body;
+    if (!body || robotsCache.forHost !== host || (now - robotsCache.ts) >= ROBOTS_CACHE_MS) {
+      const ws = await resolveWorkspace();
+      const blockAi = !!(ws && ws.settings && ws.settings.block_ai_crawlers);
+      const disallowedRootPaths = ws ? await listDisallowedRootPaths(ws._id) : [];
+      body = buildRobotsTxt({
+        host,
+        protocol,
+        disallowedRootPaths,
+        noIndex: process.env.BG_NO_INDEX === '1',
+        blockAi,
+      });
+      robotsCache = { ts: now, body, forHost: host };
+    }
+
+    // Mimic stock WordPress response headers: text/plain, no Cache-Control,
+    // no X-Robots-Tag, no X-Powered-By. The body shape and these headers
+    // together make the response indistinguishable from a default WP install.
+    res.type('text/plain').send(body);
+  } catch (err) {
+    logger.error('robots_txt_error', { err: err.message });
+    // Fail-safe: return a minimal allow-all so we don't accidentally block
+    // good crawlers due to a transient DB error.
+    res.type('text/plain').send('User-agent: *\nDisallow: /wp-admin/\nAllow: /wp-admin/admin-ajax.php\n');
+  }
+});
+
+// --- sitemap.xml ---
+//
+// Lists ONLY the public site pages (homepage, privacy, terms, /p/<slug>).
+// Never lists /go/ or custom-root-path campaigns - those are paid-traffic
+// destinations and must not appear in search results.
+//
+// Cached for 5 min in-memory; invalidated when SitePages are saved/deleted.
+router.get('/sitemap.xml', async (req, res) => {
+  try {
+    const host = req.hostname || req.get('host') || 'localhost';
+    const protocol = req.protocol || 'https';
+
+    const now = Date.now();
+    let body = sitemapCache.body;
+    if (!body || sitemapCache.forHost !== host || (now - sitemapCache.ts) >= SITEMAP_CACHE_MS) {
+      const ws = await resolveWorkspace();
+      const sitePages = ws
+        ? await SitePage.find({ workspace_id: ws._id, enabled: true })
+            .select('slug updated_at meta').lean()
+        : [];
+      body = buildSitemapXml({ host, protocol, publicPages: sitePages });
+      sitemapCache = { ts: now, body, forHost: host };
+    }
+
+    res.type('application/xml').send(body);
+  } catch (err) {
+    logger.error('sitemap_xml_error', { err: err.message });
+    res.status(500).type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap-0.9"></urlset>\n');
+  }
+});
+
+// Hooks for tests + admin route handlers: clear caches on demand.
+function clearRobotsCache() { robotsCache = { ts: 0, body: '', forHost: '' }; }
+function clearSitemapCache() { sitemapCache = { ts: 0, body: '', forHost: '' }; }
+function clearAllCaches() { clearRobotsCache(); clearSitemapCache(); }
+
 // Router is the default export. render404 is exposed as a property on the router
 // so server.js can call it from the app-wide 404 fallback handler.
-module.exports = Object.assign(router, { render404 });
+module.exports = Object.assign(router, { render404, clearRobotsCache, clearSitemapCache, clearAllCaches });

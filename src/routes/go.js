@@ -491,6 +491,11 @@ function setNoCacheHeaders(res) {
   res.set('Surrogate-Control', 'no-store');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
+  // Defense-in-depth: even if a crawler somehow finds a /go/ or custom-path URL
+  // (someone shared a link, a malicious actor scraped UTM params from outbound
+  // referrers, etc.), the response itself tells them not to index. This is
+  // belt-and-suspenders alongside the robots.txt Disallow rules.
+  res.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
 }
 
 function renderSafeFallback() {

@@ -13,6 +13,28 @@ const logger = require('../../lib/logger');
 const { parseRange, applyRangeToFilter, RANGE_OPTIONS } = require('../../lib/dateRange');
 const { validateRootPath } = require('../../lib/reservedPaths');
 
+/**
+ * Best-effort cache invalidation for the dynamic robots.txt and sitemap.xml.
+ * Called by admin handlers that mutate campaigns or site pages so changes are
+ * visible to crawlers on the next /robots.txt or /sitemap.xml request rather
+ * than waiting for the in-memory TTL to expire.
+ *
+ * Lazily-required to avoid a circular dependency (site.js requires admin code
+ * indirectly via the cache module).
+ */
+function invalidateRobotsCache() {
+  try {
+    const siteRoutes = require('../site');
+    if (typeof siteRoutes.clearRobotsCache === 'function') siteRoutes.clearRobotsCache();
+  } catch (e) { /* ignore - best-effort */ }
+}
+function invalidateSitemapCache() {
+  try {
+    const siteRoutes = require('../site');
+    if (typeof siteRoutes.clearSitemapCache === 'function') siteRoutes.clearSitemapCache();
+  } catch (e) { /* ignore - best-effort */ }
+}
+
 // --- Login / logout (must be defined BEFORE requireAdmin gate) ---
 router.get('/login', loginPage);
 router.post('/login', loginSubmit);
@@ -154,6 +176,10 @@ router.post('/campaigns', async (req, res) => {
       postback_url: body.postback_url || '',
       notes: body.notes || '',
     });
+    // New campaigns may have added a custom root_path - the next /robots.txt
+    // request must include the new Disallow rule. Invalidating the cache here
+    // makes that visible without waiting for the 5-minute TTL.
+    invalidateRobotsCache();
     res.redirect('/admin/campaigns');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -327,6 +353,8 @@ router.post('/campaigns/:id', async (req, res) => {
     // Invalidate both old and new slug to handle slug renames
     await cache.invalidateCampaign(ws._id, existing.slug);
     if (slug !== existing.slug) await cache.invalidateCampaign(ws._id, slug);
+    // root_path may have been added/removed/changed - refresh /robots.txt
+    invalidateRobotsCache();
     res.redirect('/admin/campaigns');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -338,6 +366,8 @@ router.post('/campaigns/:id/delete', async (req, res) => {
   const camp = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).select('slug').lean();
   await Campaign.deleteOne({ _id: req.params.id, workspace_id: ws._id });
   if (camp) await cache.invalidateCampaign(ws._id, camp.slug);
+  // Deleted campaign may have had a root_path - drop it from /robots.txt.
+  invalidateRobotsCache();
   res.redirect('/admin/campaigns');
 });
 
@@ -895,6 +925,32 @@ router.post('/settings/theme', async (req, res) => {
   res.redirect('/admin/settings#appearance');
 });
 
+/**
+ * Toggle whether robots.txt blocks AI training crawlers (GPTBot, ClaudeBot,
+ * Google-Extended, etc). The setting is opt-in signaling - only well-behaved
+ * crawlers respect robots.txt. This does NOT replace the proxy/ASN gates,
+ * which actually filter unwanted traffic at the network layer.
+ *
+ * After toggling we clear the in-memory robots cache so the next /robots.txt
+ * request reflects the new setting immediately.
+ */
+router.post('/settings/crawlers', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const blockAi = req.body?.block_ai_crawlers === 'on' || req.body?.block_ai_crawlers === 'true';
+
+  await Workspace.updateOne(
+    { _id: ws._id },
+    { $set: { 'settings.block_ai_crawlers': blockAi } }
+  );
+  await cache.invalidateWorkspace(ws.slug);
+
+  // Clear robots.txt in-memory cache so the change takes effect immediately
+  // rather than waiting for the 5-minute TTL.
+  invalidateRobotsCache();
+
+  res.redirect('/admin/settings#crawlers');
+});
+
 router.post('/settings/api-keys', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const label = (req.body?.label || 'unnamed').slice(0, 60);
@@ -960,6 +1016,9 @@ router.post('/site/:slug', async (req, res) => {
     { $set: update, $setOnInsert: { workspace_id: ws._id, slug, created_at: new Date() } },
     { upsert: true }
   );
+  // New/edited public pages should appear in /sitemap.xml on the next request.
+  // /robots.txt isn't affected by SitePage changes (only by campaign root_paths).
+  invalidateSitemapCache();
   res.redirect('/admin/site');
 });
 
@@ -967,6 +1026,7 @@ router.post('/site/:slug/delete', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const slug = String(req.params.slug || '').toLowerCase();
   await SitePage.deleteOne({ workspace_id: ws._id, slug });
+  invalidateSitemapCache();
   res.redirect('/admin/site');
 });
 

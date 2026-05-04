@@ -20,6 +20,14 @@ const WorkspaceSchema = new mongoose.Schema({
     // data-theme attribute on <html> for first-paint correctness.
     theme: { type: String, enum: ['dark', 'light'], default: 'dark' },
 
+    // Whether to block AI/training crawlers via robots.txt. Default false
+    // (allow them). When true, robots.txt emits Disallow: / for known AI
+    // crawler user-agents (GPTBot, ClaudeBot, Google-Extended, etc).
+    // Note: only well-behaved crawlers respect robots.txt - this is opt-in
+    // signaling, not enforcement. For real blocking, use the existing
+    // proxy/ASN gates which run on every request.
+    block_ai_crawlers: { type: Boolean, default: false },
+
     // Third-party analytics injection - applied to all offer + safe pages.
     // Useful for session replay (Clarity), error tracking, and ad-platform pixels.
     tracking: {

@@ -131,6 +131,39 @@
   <% } %>
 </section>
 
+<section class="panel" id="crawlers">
+  <h3>Crawlers &amp; Indexing</h3>
+  <p class="muted" style="margin-top:0;">
+    Controls what BotGuard tells crawlers via <code>/robots.txt</code>. Search engines
+    are allowed by default to index your public site (homepage, privacy, terms, custom pages),
+    while campaign URLs (<code>/go/</code> and any custom paths like <code>/promo</code>)
+    are always disallowed - they're paid-traffic destinations and shouldn't appear in search results.
+  </p>
+
+  <%
+    const blockAi = !!(ws.settings && ws.settings.block_ai_crawlers);
+  %>
+
+  <form method="POST" action="/admin/settings/crawlers" id="crawlers-form" style="margin-top: 14px;">
+    <label style="display:flex; align-items:center; gap:10px; padding: 12px; background: var(--bg-input); border: 1px solid var(--border-default); border-radius: var(--radius-sm); cursor: pointer;">
+      <input type="checkbox" name="block_ai_crawlers" <%= blockAi ? 'checked' : '' %> onchange="document.getElementById('crawlers-form').submit()">
+      <span>
+        <strong>Block AI training crawlers</strong>
+        <div class="muted" style="font-size: 12px; margin-top: 4px;">
+          Adds <code>Disallow: /</code> for GPTBot, ClaudeBot, Google-Extended, PerplexityBot,
+          CCBot, Applebot-Extended, Bytespider, and other known training crawlers in <code>robots.txt</code>.
+          Only well-behaved crawlers respect this - real blocking still depends on your proxy/ASN gates.
+        </div>
+      </span>
+    </label>
+  </form>
+
+  <div style="margin-top: 16px;">
+    <a href="/robots.txt" target="_blank" rel="noopener" class="btn btn-small">View current robots.txt</a>
+    <a href="/sitemap.xml" target="_blank" rel="noopener" class="btn btn-small">View sitemap.xml</a>
+  </div>
+</section>
+
 <section class="panel">
   <h3>Workspace Info</h3>
   <table class="table table-dense">
