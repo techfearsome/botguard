@@ -22,7 +22,7 @@ function renderTemplate(file, data) {
   const src = fs.readFileSync(tplPath, 'utf8');
   // Inject the localTime helper since real Express requests get it via
   // app.locals - direct ejs.render needs it passed explicitly.
-  return ejs.render(src, { localTime, ...data }, { filename: tplPath, root: viewsDir });
+  return ejs.render(src, { localTime, assetUrl: (p) => p + '?v=test', ...data }, { filename: tplPath, root: viewsDir });
 }
 
 console.log('Theme rendering:');

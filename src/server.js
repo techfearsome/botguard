@@ -61,6 +61,23 @@ app.set('views', path.join(__dirname, 'views'));
 const { localTime } = require('./lib/localTime');
 app.locals.localTime = localTime;
 
+// Asset versioning. Every /static/... URL includes a ?v=<build-id> query
+// string so Cloudflare and browser caches treat each deploy's files as new
+// URLs. Without this, our 24h s-maxage on /static/* means changes to JS/CSS
+// files only become visible 24h after deploy (or after manual Cloudflare
+// purge), which is a brutal feedback loop.
+//
+// BUILD_ID is provided by env (Coolify can set it from the git commit SHA);
+// otherwise we fall back to the server start time. Either way, every
+// process restart -> new ?v= -> caches bust automatically.
+const BUILD_ID = process.env.BUILD_ID || String(Date.now());
+app.locals.assetUrl = (path) => {
+  if (!path) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}v=${BUILD_ID}`;
+};
+app.locals.BUILD_ID = BUILD_ID;
+
 // Security headers — relaxed for landing pages since we render arbitrary HTML
 app.use(helmet({
   contentSecurityPolicy: false,

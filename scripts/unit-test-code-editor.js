@@ -29,7 +29,7 @@ const { localTime } = require(path.resolve(__dirname, '../src/lib/localTime'));
 function renderTemplate(file, data) {
   const tplPath = path.join(viewsDir, file);
   const src = fs.readFileSync(tplPath, 'utf8');
-  return ejs.render(src, { localTime, ...data }, { filename: tplPath, root: viewsDir });
+  return ejs.render(src, { localTime, assetUrl: (p) => p + '?v=test', ...data }, { filename: tplPath, root: viewsDir });
 }
 
 console.log('Code editor wiring - /admin/pages/new (page_form.ejs):');
@@ -65,7 +65,7 @@ test('Prism script is loaded on the page', () => {
     lp: null,
     page: 'pages',
   });
-  assert.ok(/<script src="\/static\/js\/vendor\/prism\.js"/.test(html),
+  assert.ok(/<script src="\/static\/js\/vendor\/prism\.js(\?[^"]*)?"/.test(html),
     'prism.js script tag missing');
 });
 
@@ -75,7 +75,7 @@ test('code-editor.js script is loaded as module', () => {
     lp: null,
     page: 'pages',
   });
-  assert.ok(/<script src="\/static\/js\/code-editor\.js" type="module">/.test(html),
+  assert.ok(/<script src="\/static\/js\/code-editor\.js(\?[^"]*)?" type="module">/.test(html),
     'code-editor.js script tag missing or not a module');
 });
 
@@ -99,8 +99,8 @@ test('Prism + code-editor scripts loaded', () => {
     sp: { slug: 'home', html: '', enabled: true },
     page: 'site',
   });
-  assert.ok(/<script src="\/static\/js\/vendor\/prism\.js"/.test(html));
-  assert.ok(/<script src="\/static\/js\/code-editor\.js" type="module">/.test(html));
+  assert.ok(/<script src="\/static\/js\/vendor\/prism\.js(\?[^"]*)?"/.test(html));
+  assert.ok(/<script src="\/static\/js\/code-editor\.js(\?[^"]*)?" type="module">/.test(html));
 });
 
 console.log('\nVendored asset existence:');

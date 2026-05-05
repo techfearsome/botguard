@@ -73,7 +73,7 @@
 <!-- Code editor enhancement: upgrades the HTML textarea to a CodeJar+Prism
      editor with syntax highlighting. Plain textarea remains functional if
      scripts fail to load. -->
-<script src="/static/js/vendor/prism.js" defer></script>
-<script src="/static/js/code-editor.js" type="module"></script>
+<script src="<%= assetUrl('/static/js/vendor/prism.js') %>" defer></script>
+<script src="<%= assetUrl('/static/js/code-editor.js') %>" type="module"></script>
 
 <%- include('../partials/footer') %>

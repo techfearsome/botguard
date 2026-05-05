@@ -79,6 +79,8 @@ app.set('views', path.resolve(__dirname, '../src/views'));
 // Mirror the real server's app.locals so the localTime helper is available
 // to templates rendered during integration tests.
 app.locals.localTime = require(path.resolve(__dirname, '../src/lib/localTime')).localTime;
+// Asset versioning helper - tests don't care about cache busting; identity is fine
+app.locals.assetUrl = (p) => p;
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
