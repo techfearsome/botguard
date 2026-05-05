@@ -92,6 +92,7 @@ function buildRobotsTxt(opts) {
     host,
     protocol = 'https',
     disallowedRootPaths = [],
+    indexableCampaigns = [],
     noIndex = false,
     blockAi = false,
   } = opts;
@@ -110,13 +111,23 @@ function buildRobotsTxt(opts) {
   lines.push('Disallow: /wp-admin/');
   lines.push('Allow: /wp-admin/admin-ajax.php');
 
-  // Real internal mounts.
+  // Real internal mounts (admin, cb, lv, px, healthz, plus the blanket /go/).
+  // Indexable campaigns at /go/<slug> get a per-slug Allow line emitted
+  // BEFORE the blanket Disallow, so crawlers honoring the longest-match
+  // (Google, Bing) treat the Allow as the override. Older spec-compliant
+  // crawlers do "first match wins" which also works with this ordering.
+  for (const c of indexableCampaigns) {
+    if (c && c.slug) {
+      lines.push(`Allow: /go/${c.slug}`);
+    }
+  }
   for (const p of INTERNAL_PATHS) {
     lines.push(`Disallow: ${p}/`);
   }
 
-  // Custom campaign root paths. These are paid-traffic destinations and
-  // must not be indexed.
+  // Custom campaign root paths that opted OUT of indexing. Indexable ones
+  // simply get no Disallow line - their root_path falls through to the
+  // catch-all crawl-allow.
   for (const rp of disallowedRootPaths) {
     if (!rp || typeof rp !== 'string') continue;
     const slug = rp.trim().toLowerCase();
@@ -124,9 +135,7 @@ function buildRobotsTxt(opts) {
     lines.push(`Disallow: /${slug}`);
   }
 
-  // Allow CSS/JS so Google can render pages for ranking. (WP doesn't include
-  // this by default, but it's harmless if /static/ exists - and matches the
-  // explicit-allow style WP uses for admin-ajax.php above.)
+  // Allow CSS/JS so Google can render pages for ranking.
   lines.push('Allow: /static/');
 
   if (blockAi) {
@@ -157,7 +166,7 @@ function buildRobotsTxt(opts) {
  * @returns {string}
  */
 function buildSitemapXml(opts) {
-  const { host, protocol = 'https', publicPages = [] } = opts;
+  const { host, protocol = 'https', publicPages = [], indexableCampaigns = [] } = opts;
   const base = `${protocol}://${host}`;
 
   const urls = [];
@@ -179,15 +188,29 @@ function buildSitemapXml(opts) {
       url = `${base}/p/${encodeURIComponent(page.slug)}`;
     }
     const lastmod = page.updated_at ? new Date(page.updated_at).toISOString().slice(0, 10) : null;
-    urls.push({ url, lastmod });
+    urls.push({ url, lastmod, priority: '0.7' });
+  }
+
+  // Include indexable campaign URLs. We prefer the custom root_path form
+  // (cleaner URL, better for SEO) when available, falling back to /go/<slug>.
+  // Including BOTH would split rank between two URLs for the same content,
+  // which is bad SEO - so we emit only one URL per campaign.
+  for (const c of indexableCampaigns) {
+    if (!c || !c.slug) continue;
+    const url = c.root_path
+      ? `${base}/${encodeURIComponent(c.root_path)}`
+      : `${base}/go/${encodeURIComponent(c.slug)}`;
+    const lastmod = c.updated_at ? new Date(c.updated_at).toISOString().slice(0, 10) : null;
+    urls.push({ url, lastmod, priority: '0.8' });
   }
 
   const xml = ['<?xml version="1.0" encoding="UTF-8"?>'];
   xml.push('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap-0.9">');
-  for (const { url, lastmod } of urls) {
+  for (const { url, lastmod, priority } of urls) {
     xml.push('  <url>');
     xml.push(`    <loc>${escapeXml(url)}</loc>`);
     if (lastmod) xml.push(`    <lastmod>${lastmod}</lastmod>`);
+    if (priority) xml.push(`    <priority>${priority}</priority>`);
     xml.push('  </url>');
   }
   xml.push('</urlset>');
@@ -201,20 +224,44 @@ function escapeXml(s) {
 }
 
 /**
- * Fetch the list of all custom root_paths currently in use across active
- * campaigns. Used by the /robots.txt handler to disallow each.
+ * Fetch the list of custom root_paths for campaigns that should be
+ * Disallow-ed in robots.txt. EXCLUDES campaigns marked indexable=true, since
+ * those are explicitly opted-in to crawler access.
  */
 async function listDisallowedRootPaths(workspaceId) {
-  const filter = { root_path: { $type: 'string', $ne: '' } };
+  const filter = {
+    root_path: { $type: 'string', $ne: '' },
+    indexable: { $ne: true },
+    status: { $ne: 'archived' },
+  };
   if (workspaceId) filter.workspace_id = workspaceId;
   const docs = await Campaign.find(filter).select('root_path').lean();
   return docs.map((d) => d.root_path).filter(Boolean);
+}
+
+/**
+ * Fetch the list of indexable campaigns. Used by:
+ *   - robots.txt generator (to emit Allow: /go/<slug> overrides for the
+ *     blanket Disallow: /go/ rule)
+ *   - sitemap.xml generator (to include their URLs in the sitemap)
+ *
+ * Returns objects with both slug (for /go/<slug>) and root_path (for
+ * /<root_path>) so callers can build whichever URL form they need.
+ */
+async function listIndexableCampaigns(workspaceId) {
+  const filter = {
+    indexable: true,
+    status: 'active',                // archived/paused not eligible for indexing
+  };
+  if (workspaceId) filter.workspace_id = workspaceId;
+  return Campaign.find(filter).select('slug root_path updated_at').lean();
 }
 
 module.exports = {
   buildRobotsTxt,
   buildSitemapXml,
   listDisallowedRootPaths,
+  listIndexableCampaigns,
   AI_CRAWLERS,        // exported for tests
   INTERNAL_PATHS,     // exported for tests
 };

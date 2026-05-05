@@ -162,6 +162,7 @@ router.post('/campaigns', async (req, res) => {
       root_path: rootPathResult.normalized,
       name: body.name,
       status: body.status || 'active',
+      indexable: body.indexable === 'on' || body.indexable === 'true',
       landing_page_id: body.landing_page_id || null,
       safe_page_id: body.safe_page_id || null,
       device_pages: devicePages,
@@ -178,8 +179,10 @@ router.post('/campaigns', async (req, res) => {
     });
     // New campaigns may have added a custom root_path - the next /robots.txt
     // request must include the new Disallow rule. Invalidating the cache here
-    // makes that visible without waiting for the 5-minute TTL.
+    // makes that visible without waiting for the 5-minute TTL. Same for
+    // /sitemap.xml: indexable campaigns appear there.
     invalidateRobotsCache();
+    invalidateSitemapCache();
     res.redirect('/admin/campaigns');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -336,6 +339,7 @@ router.post('/campaigns/:id', async (req, res) => {
           root_path: rootPathResult.normalized,
           name: body.name,
           status: body.status,
+          indexable: body.indexable === 'on' || body.indexable === 'true',
           landing_page_id: body.landing_page_id || null,
           safe_page_id: body.safe_page_id || null,
           device_pages: devicePages,
@@ -353,8 +357,10 @@ router.post('/campaigns/:id', async (req, res) => {
     // Invalidate both old and new slug to handle slug renames
     await cache.invalidateCampaign(ws._id, existing.slug);
     if (slug !== existing.slug) await cache.invalidateCampaign(ws._id, slug);
-    // root_path may have been added/removed/changed - refresh /robots.txt
+    // root_path may have been added/removed/changed - refresh /robots.txt.
+    // indexable status may have flipped - refresh /sitemap.xml too.
     invalidateRobotsCache();
+    invalidateSitemapCache();
     res.redirect('/admin/campaigns');
   } catch (err) {
     res.status(400).send(`Error: ${err.message}`);
@@ -367,7 +373,9 @@ router.post('/campaigns/:id/delete', async (req, res) => {
   await Campaign.deleteOne({ _id: req.params.id, workspace_id: ws._id });
   if (camp) await cache.invalidateCampaign(ws._id, camp.slug);
   // Deleted campaign may have had a root_path - drop it from /robots.txt.
+  // It may have been indexable - drop it from /sitemap.xml too.
   invalidateRobotsCache();
+  invalidateSitemapCache();
   res.redirect('/admin/campaigns');
 });
 

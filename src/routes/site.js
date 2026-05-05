@@ -145,7 +145,7 @@ router.get('/p/:slug', (req, res) => {
 //   4. Per-workspace AI-crawler opt-out (settings.block_ai_crawlers)
 //
 // Cached in-memory; invalidated when campaigns are saved/deleted.
-const { buildRobotsTxt, buildSitemapXml, listDisallowedRootPaths } = require('../lib/robotsAndSitemap');
+const { buildRobotsTxt, buildSitemapXml, listDisallowedRootPaths, listIndexableCampaigns } = require('../lib/robotsAndSitemap');
 
 let robotsCache = { ts: 0, body: '', forHost: '' };
 let sitemapCache = { ts: 0, body: '', forHost: '' };
@@ -164,11 +164,15 @@ router.get('/robots.txt', async (req, res) => {
     if (!body || robotsCache.forHost !== host || (now - robotsCache.ts) >= ROBOTS_CACHE_MS) {
       const ws = await resolveWorkspace();
       const blockAi = !!(ws && ws.settings && ws.settings.block_ai_crawlers);
-      const disallowedRootPaths = ws ? await listDisallowedRootPaths(ws._id) : [];
+      const [disallowedRootPaths, indexableCampaigns] = ws ? await Promise.all([
+        listDisallowedRootPaths(ws._id),
+        listIndexableCampaigns(ws._id),
+      ]) : [[], []];
       body = buildRobotsTxt({
         host,
         protocol,
         disallowedRootPaths,
+        indexableCampaigns,
         noIndex: process.env.BG_NO_INDEX === '1',
         blockAi,
       });
@@ -181,19 +185,10 @@ router.get('/robots.txt', async (req, res) => {
     res.type('text/plain').send(body);
   } catch (err) {
     logger.error('robots_txt_error', { err: err.message });
-    // Fail-safe: return a minimal allow-all so we don't accidentally block
-    // good crawlers due to a transient DB error.
     res.type('text/plain').send('User-agent: *\nDisallow: /wp-admin/\nAllow: /wp-admin/admin-ajax.php\n');
   }
 });
 
-// --- sitemap.xml ---
-//
-// Lists ONLY the public site pages (homepage, privacy, terms, /p/<slug>).
-// Never lists /go/ or custom-root-path campaigns - those are paid-traffic
-// destinations and must not appear in search results.
-//
-// Cached for 5 min in-memory; invalidated when SitePages are saved/deleted.
 router.get('/sitemap.xml', async (req, res) => {
   try {
     const host = req.hostname || req.get('host') || 'localhost';
@@ -203,11 +198,11 @@ router.get('/sitemap.xml', async (req, res) => {
     let body = sitemapCache.body;
     if (!body || sitemapCache.forHost !== host || (now - sitemapCache.ts) >= SITEMAP_CACHE_MS) {
       const ws = await resolveWorkspace();
-      const sitePages = ws
-        ? await SitePage.find({ workspace_id: ws._id, enabled: true })
-            .select('slug updated_at meta').lean()
-        : [];
-      body = buildSitemapXml({ host, protocol, publicPages: sitePages });
+      const [sitePages, indexableCampaigns] = ws ? await Promise.all([
+        SitePage.find({ workspace_id: ws._id, enabled: true }).select('slug updated_at meta').lean(),
+        listIndexableCampaigns(ws._id),
+      ]) : [[], []];
+      body = buildSitemapXml({ host, protocol, publicPages: sitePages, indexableCampaigns });
       sitemapCache = { ts: now, body, forHost: host };
     }
 

@@ -108,6 +108,40 @@ test('Lowercases and trims root path entries', () => {
   assert.ok(/Disallow: \/black-friday$/m.test(txt));
 });
 
+console.log('\nbuildRobotsTxt - indexable campaigns:');
+
+test('Indexable campaigns get Allow: /go/<slug> emitted before blanket /go/ Disallow', () => {
+  const txt = buildRobotsTxt({
+    host: 'example.com',
+    indexableCampaigns: [{ slug: 'public-promo' }, { slug: 'evergreen-offer' }],
+  });
+  assert.ok(txt.includes('Allow: /go/public-promo'));
+  assert.ok(txt.includes('Allow: /go/evergreen-offer'));
+  // Order matters: Allow lines come before the blanket Disallow: /go/
+  const allowIdx = txt.indexOf('Allow: /go/public-promo');
+  const disallowIdx = txt.indexOf('Disallow: /go/');
+  assert.ok(allowIdx < disallowIdx, 'Allow must come before Disallow for longest-match precedence');
+});
+
+test('Indexable campaigns root_paths are NOT in the Disallow list (caller responsibility)', () => {
+  // The list of disallowedRootPaths is built by listDisallowedRootPaths()
+  // which already filters out indexable campaigns. This test confirms the
+  // builder honors what the caller passes - it doesn't second-guess.
+  const txt = buildRobotsTxt({
+    host: 'example.com',
+    disallowedRootPaths: ['paid-only-promo'],
+    indexableCampaigns: [{ slug: 'public-slug', root_path: 'public-promo' }],
+  });
+  assert.ok(txt.includes('Disallow: /paid-only-promo'));
+  assert.ok(!txt.includes('Disallow: /public-promo'),
+    'indexable root_path should not have a Disallow line');
+});
+
+test('No indexable campaigns - no Allow rules for /go/', () => {
+  const txt = buildRobotsTxt({ host: 'example.com', indexableCampaigns: [] });
+  assert.ok(!/Allow: \/go\//.test(txt));
+});
+
 console.log('\nbuildRobotsTxt - noIndex mode (staging):');
 
 test('noIndex=true disallows everything for everyone', () => {
@@ -218,6 +252,50 @@ test('Skips pages with meta.noindex=true', () => {
   assert.ok(xml.includes('/p/public-page'));
   assert.ok(xml.includes('<loc>https://example.com/</loc>'));
   assert.ok(!xml.includes('/p/private'), 'noindex page leaked into sitemap');
+});
+
+console.log('\nbuildSitemapXml - indexable campaigns:');
+
+test('Includes indexable campaign URLs - prefers root_path when present', () => {
+  const xml = buildSitemapXml({
+    host: 'example.com',
+    indexableCampaigns: [{ slug: 'main-promo', root_path: 'promo' }],
+  });
+  assert.ok(xml.includes('<loc>https://example.com/promo</loc>'));
+  assert.ok(!xml.includes('/go/main-promo'),
+    'should prefer root_path over /go/<slug> to avoid duplicate URLs splitting rank');
+});
+
+test('Falls back to /go/<slug> if no root_path', () => {
+  const xml = buildSitemapXml({
+    host: 'example.com',
+    indexableCampaigns: [{ slug: 'main-promo', root_path: '' }],
+  });
+  assert.ok(xml.includes('<loc>https://example.com/go/main-promo</loc>'));
+});
+
+test('Indexable campaigns get priority 0.8 (higher than site pages at 0.7)', () => {
+  const xml = buildSitemapXml({
+    host: 'example.com',
+    publicPages: [{ slug: 'home' }],
+    indexableCampaigns: [{ slug: 'promo' }],
+  });
+  // Both should have priority lines
+  const matches = xml.match(/<priority>[\d.]+<\/priority>/g) || [];
+  assert.strictEqual(matches.length, 2);
+  assert.ok(xml.includes('<priority>0.8</priority>'));
+  assert.ok(xml.includes('<priority>0.7</priority>'));
+});
+
+test('Does NOT include campaigns where indexable is missing/false', () => {
+  // Builder doesn't second-guess - if caller didn't include the campaign in
+  // indexableCampaigns, it doesn't appear. This test documents that contract.
+  const xml = buildSitemapXml({
+    host: 'example.com',
+    indexableCampaigns: [],   // listIndexableCampaigns() returned nothing
+  });
+  assert.ok(!xml.includes('/promo'));
+  assert.ok(!xml.includes('/go/'));
 });
 
 console.log('\nINTERNAL_PATHS sanity:');

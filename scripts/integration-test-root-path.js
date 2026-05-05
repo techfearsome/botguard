@@ -368,6 +368,28 @@ async function run() {
     assert.ok(r.headers['x-pingback']);
   });
 
+  console.log('\nIndexable campaigns:');
+
+  await test('Indexable campaign omits X-Robots-Tag header (allows crawling)', async () => {
+    stubState = makeState();
+    // Find the main-promo campaign and flip its indexable flag
+    const camp = stubState.campaigns.find((c) => c.slug === 'main-promo');
+    camp.indexable = true;
+    const r = await fetch(server, '/promo');
+    assert.strictEqual(r.headers['x-robots-tag'], undefined,
+      `expected no X-Robots-Tag for indexable campaign, got: ${r.headers['x-robots-tag']}`);
+    // X-Pingback (the WP fingerprint) is still present regardless
+    assert.ok(r.headers['x-pingback'], 'X-Pingback should still be set');
+  });
+
+  await test('Non-indexable campaign keeps X-Robots-Tag noindex', async () => {
+    stubState = makeState();
+    // Default: campaigns are not indexable
+    const r = await fetch(server, '/promo');
+    assert.ok(/noindex/.test(r.headers['x-robots-tag']),
+      'expected noindex on non-indexable campaign');
+  });
+
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail > 0 ? 1 : 0);

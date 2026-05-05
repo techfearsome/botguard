@@ -63,6 +63,29 @@
     </small>
   </div>
 
+  <div class="form-row form-row-highlight">
+    <label style="display:flex; align-items:center; gap:10px; margin-bottom:8px; cursor:pointer;">
+      <input type="checkbox" name="indexable" <%= campaign?.indexable ? 'checked' : '' %>>
+      <strong>Allow search engines to index this campaign</strong>
+      <% if (campaign?.indexable) { %>
+        <span class="badge badge-allow">Indexable</span>
+      <% } else { %>
+        <span class="badge badge-status-archived">Hidden from search</span>
+      <% } %>
+    </label>
+    <small class="muted" style="display:block; margin-top:8px;">
+      <strong>Default: off.</strong> Most campaigns are paid-traffic destinations and should not appear in Google/Bing — organic clicks aren't filtered by your gates and could trigger ad-platform quality reviews for cloaking discrepancies.
+      <br>
+      Turn this <strong>on</strong> for campaigns where organic SEO traffic is desired (evergreen landing pages, content marketing, brand pages). When on:
+      <ul style="margin: 4px 0 0 20px; padding: 0;">
+        <li>The URL is added to <code>/sitemap.xml</code></li>
+        <li><code>/robots.txt</code> emits an <code>Allow:</code> rule for it</li>
+        <li>The <code>X-Robots-Tag: noindex</code> header is dropped from responses</li>
+      </ul>
+      <strong style="color: var(--warning);">Caveat:</strong> indexable campaigns still run through your full filter chain. If gates (country, proxy, UTM) reject Googlebot, crawlers see only the safe page or a 404. Consider relaxing gates for indexable campaigns or setting <code>filter_config.mode</code> to <code>log_only</code>.
+    </small>
+  </div>
+
   <div class="form-row">
     <label>Source Profile</label>
     <select name="source_profile">

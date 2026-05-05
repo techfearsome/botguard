@@ -106,7 +106,7 @@ async function handleClick(req, res, opts) {
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
       registerLiveVisitor(doc, campaign, workspace);
       setGoCookies(req, res, doc);
-      setNoCacheHeaders(req, res);
+      setNoCacheHeaders(req, res, campaign);
       return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
@@ -129,7 +129,7 @@ async function handleClick(req, res, opts) {
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res, campaign); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
     // Run the filter chain
@@ -185,7 +185,7 @@ async function handleClick(req, res, opts) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res, campaign); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     // Append the pass flag for visibility
     doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
@@ -206,7 +206,7 @@ async function handleClick(req, res, opts) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res, campaign); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
 
@@ -263,7 +263,7 @@ async function handleClick(req, res, opts) {
     // - Each visit must get a fresh click_id cookie
     // - Cloudflare will cache HTML by default if cookies aren't on the request
     // - 'private' tells the browser only it can cache; 's-maxage=0' tells CDNs not to
-    setNoCacheHeaders(req, res);
+    setNoCacheHeaders(req, res, campaign);
 
     // Persist click (non-blocking)
     writeClick(doc).catch((err) => {
@@ -505,17 +505,33 @@ function registerLiveVisitor(doc, campaign, workspace) {
  *
  * Apply to every /go response and gate-blocked safe-page response.
  */
-function setNoCacheHeaders(req, res) {
+/**
+ * Headers applied to every campaign render (offer page, safe page, gate stubs).
+ *
+ * - Cache busting: campaigns must never be cached (different visitor = different
+ *   variant, different conversion state, etc.)
+ * - X-Robots-Tag noindex: only set when the campaign is NOT indexable. For
+ *   indexable campaigns we omit it so crawlers can index the URL freely.
+ * - X-Pingback: WordPress fingerprint - present on every response regardless
+ *   of indexable status; matches what a normal WP site emits.
+ *
+ * Pass `campaign` so we can read `campaign.indexable`. Backwards-compatible:
+ * if campaign is omitted (e.g. error responses where we don't have one),
+ * defaults to noindex (the safe option).
+ */
+function setNoCacheHeaders(req, res, campaign) {
   res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
   res.set('CDN-Cache-Control', 'no-store');
   res.set('Surrogate-Control', 'no-store');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
-  // Defense-in-depth: even if a crawler somehow finds a /go/ or custom-path URL
-  // (someone shared a link, a malicious actor scraped UTM params from outbound
-  // referrers, etc.), the response itself tells them not to index. This is
-  // belt-and-suspenders alongside the robots.txt Disallow rules.
-  res.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+  // Default to noindex; only opt-in indexable campaigns skip this header.
+  // The header is the second line of defense alongside robots.txt - even
+  // if a crawler ignores robots.txt or the URL leaks, this header tells
+  // them not to index. See campaigns.indexable in models/Campaign.js.
+  if (!campaign || !campaign.indexable) {
+    res.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+  }
   // WordPress fingerprint: every WP install sends X-Pingback on frontend
   // page responses. Including it here gives campaign URLs the same surface
   // signal as our public site pages, so the whole domain looks WP-shaped.

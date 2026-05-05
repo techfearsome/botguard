@@ -12,6 +12,25 @@ const CampaignSchema = new mongoose.Schema({
   name: { type: String, required: true },
   status: { type: String, enum: ['active', 'paused', 'archived'], default: 'active' },
 
+  // Whether crawlers may index this campaign's URLs.
+  //
+  // Default false (paid-traffic destinations should typically NOT be in search
+  // results - organic clicks would be unfiltered and could trigger ad-platform
+  // quality reviews for cloaking discrepancies). Admins can flip this on for
+  // campaigns where organic SEO traffic is desired (e.g. evergreen landing
+  // pages, content marketing).
+  //
+  // Effects when true:
+  //   - robots.txt emits Allow: /go/<slug> (overrides the blanket Disallow: /go/)
+  //   - root_path Disallow line is omitted
+  //   - X-Robots-Tag noindex header is NOT set on the response
+  //   - The campaign URLs appear in /sitemap.xml
+  //
+  // CAVEAT: indexable campaigns still run through the full filter chain.
+  // If gates (country, proxy, UTM) reject Googlebot, crawlers see only the
+  // safe page or a 404. The admin must consider this when enabling.
+  indexable: { type: Boolean, default: false },
+
   landing_page_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
   safe_page_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
 
