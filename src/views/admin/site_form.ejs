@@ -33,7 +33,7 @@
 
   <div class="form-row">
     <label>HTML</label>
-    <textarea name="html" rows="22" class="code"><%= sp.html || '' %></textarea>
+    <textarea name="html" rows="22" class="code" data-code-editor="html"><%= sp.html || '' %></textarea>
     <small class="muted">
       Paste full HTML or just a body fragment. If your HTML doesn't include <code>&lt;!DOCTYPE html&gt;</code>
       we'll wrap it in a minimal shell using the title and meta below.
@@ -69,5 +69,11 @@
     <% } %>
   </div>
 </form>
+
+<!-- Code editor enhancement: upgrades the HTML textarea to a CodeJar+Prism
+     editor with syntax highlighting. Plain textarea remains functional if
+     scripts fail to load. -->
+<script src="/static/js/vendor/prism.js" defer></script>
+<script src="/static/js/code-editor.js" type="module"></script>
 
 <%- include('../partials/footer') %>

@@ -1088,3 +1088,117 @@ fieldset legend {
     border-color: #ccc;
   }
 }
+
+
+/* ============================================================================
+   Code editor (CodeJar + Prism)
+   ============================================================================
+   The HTML editor in /admin/pages/new and /admin/site/<slug>/edit. Uses the
+   same surface/text tokens as the rest of the form so the editor matches the
+   theme rather than fighting it. Prism's syntax-highlighting tokens get a
+   minimal palette-aware mapping below - we intentionally don't load a full
+   Prism theme stylesheet because (a) most of them are very 2014-looking and
+   (b) we want the colors to flip with our [data-theme] toggle.
+   ========================================================================== */
+
+.code-editor-wrap {
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  /* fixed reasonable height, scrolls when content exceeds */
+  max-height: 480px;
+  overflow: auto;
+  /* Prism injects its own padding via its theme; we control it here instead */
+}
+
+.code-editor-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+
+pre.code-editor,
+pre.code-editor code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-body);
+  background: transparent;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  /* Allow long lines to wrap rather than horizontal-scroll - HTML lines can
+     be very long with inline styles, and horizontal scroll inside a vertical
+     scroll container is painful. Admins can still see everything. */
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 2;
+  -moz-tab-size: 2;
+}
+
+pre.code-editor {
+  padding: 12px 14px;
+  min-height: 200px;
+}
+
+pre.code-editor code {
+  display: block;
+  /* contenteditable needs this for the cursor to show on empty line */
+  min-height: 1.55em;
+  caret-color: var(--accent);
+}
+
+/* Prism token colors - theme-aware via CSS vars */
+pre.code-editor .token.comment,
+pre.code-editor .token.prolog,
+pre.code-editor .token.doctype,
+pre.code-editor .token.cdata        { color: var(--text-tertiary); font-style: italic; }
+pre.code-editor .token.punctuation  { color: var(--text-secondary); }
+pre.code-editor .token.tag,
+pre.code-editor .token.namespace,
+pre.code-editor .token.deleted      { color: var(--accent); }       /* tag names mint */
+pre.code-editor .token.attr-name    { color: var(--info); }         /* attr=blue */
+pre.code-editor .token.attr-value,
+pre.code-editor .token.string       { color: var(--warning); }      /* string=amber */
+pre.code-editor .token.entity,
+pre.code-editor .token.number,
+pre.code-editor .token.boolean,
+pre.code-editor .token.symbol       { color: var(--info); }
+pre.code-editor .token.atrule,
+pre.code-editor .token.keyword,
+pre.code-editor .token.selector     { color: var(--accent); }
+pre.code-editor .token.function     { color: var(--info); }
+pre.code-editor .token.regex,
+pre.code-editor .token.important,
+pre.code-editor .token.variable     { color: var(--warning); }
+pre.code-editor .token.bold         { font-weight: 600; }
+pre.code-editor .token.italic       { font-style: italic; }
+
+/* Light theme: shift the bright tokens to higher-contrast values. The
+   default mappings above use --accent/--info/--warning which already flip
+   with the theme, but in light mode "amber on white" is hard to read - so
+   force a darker amber for strings. */
+[data-theme="light"] pre.code-editor .token.attr-value,
+[data-theme="light"] pre.code-editor .token.string,
+[data-theme="light"] pre.code-editor .token.regex,
+[data-theme="light"] pre.code-editor .token.important,
+[data-theme="light"] pre.code-editor .token.variable {
+  color: #92400e;     /* darker amber matches light-theme --warning */
+}
+
+/* Hide the original textarea visually but keep it in the DOM for form
+   submission. The script also sets aria-hidden + tabindex=-1 for a11y. */
+.form-row textarea[data-code-editor-active="1"] {
+  display: none !important;
+}
+
+/* Mobile: shrink the max height so it doesn't dominate small viewports */
+@media (max-width: 699px) {
+  .code-editor-wrap {
+    max-height: 320px;
+  }
+  pre.code-editor,
+  pre.code-editor code {
+    font-size: 12px;
+  }
+}

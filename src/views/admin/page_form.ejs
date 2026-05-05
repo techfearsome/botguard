@@ -25,7 +25,7 @@
 
   <div class="form-row">
     <label>HTML Template</label>
-    <textarea name="html_template" rows="20" class="code"><%= lp?.html_template || '' %></textarea>
+    <textarea name="html_template" rows="20" class="code" data-code-editor="html"><%= lp?.html_template || '' %></textarea>
     <small class="muted">Available placeholders: <code>{{click_id}}</code>, <code>{{utm_source}}</code>, <code>{{utm_medium}}</code>, <code>{{utm_campaign}}</code></small>
   </div>
 
@@ -73,5 +73,11 @@
     <a href="/admin/pages" class="btn">Cancel</a>
   </div>
 </form>
+
+<!-- Code editor enhancement: upgrades the HTML Template textarea to a
+     CodeJar+Prism editor with syntax highlighting. Plain textarea remains
+     functional if scripts fail to load. -->
+<script src="/static/js/vendor/prism.js" defer></script>
+<script src="/static/js/code-editor.js" type="module"></script>
 
 <%- include('../partials/footer') %>
