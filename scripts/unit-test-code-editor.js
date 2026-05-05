@@ -129,6 +129,40 @@ test('public/js/code-editor.js exists', () => {
   assert.ok(/import.*CodeJar/.test(content), 'CodeJar import missing in code-editor.js');
 });
 
+test('code-editor.js seeds empty contenteditable with a newline (empty-page focus fix)', () => {
+  // Browser bug we hit in production: an empty <code contenteditable>
+  // element has no caret position, so "New Page" forms with no initial
+  // HTML showed an editor you couldn't type into. The fix is to seed the
+  // contenteditable with at least a newline. This test guards against
+  // a future refactor accidentally reverting that.
+  const p = path.resolve(__dirname, '../public/js/code-editor.js');
+  const content = fs.readFileSync(p, 'utf8');
+  // We expect a transformation that ensures at least one trailing newline:
+  // .replace(/\n*$/, '\n')   matches the seed pattern
+  assert.ok(/replace\(\/\\n\*\$\/, '\\n'\)/.test(content),
+    'newline seed transformation missing - empty editors will not be focusable');
+});
+
+test('code-editor.js strips trailing newline before saving to textarea', () => {
+  // Symmetric with the seed above: we add a trailing newline for cursor
+  // anchoring, then strip it before saving so the form value matches what
+  // the user actually typed.
+  const p = path.resolve(__dirname, '../public/js/code-editor.js');
+  const content = fs.readFileSync(p, 'utf8');
+  assert.ok(/replace\(\/\\n\$\/, ''\)/.test(content),
+    'trailing-newline strip missing - saved values will have a phantom newline');
+});
+
+test('code-editor.js has wrap click handler (empty editor click-to-focus fix)', () => {
+  // Without this, clicking the empty area of the editor wrapper fails
+  // to focus the contenteditable in some browsers - the click lands on
+  // the wrap <div>, not the <code> child.
+  const p = path.resolve(__dirname, '../public/js/code-editor.js');
+  const content = fs.readFileSync(p, 'utf8');
+  assert.ok(/wrap\.addEventListener\('click'/.test(content),
+    'wrap click handler missing - empty editor wont focus on click');
+});
+
 test('LICENSE files for vendored libraries are included (MIT attribution)', () => {
   // Vendoring third-party MIT-licensed code requires keeping the LICENSE
   // alongside the redistributed source. This test enforces that habit.

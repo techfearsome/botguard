@@ -1139,12 +1139,20 @@ pre.code-editor code {
 pre.code-editor {
   padding: 12px 14px;
   min-height: 200px;
+  /* Make the <pre> a flex container so the inner <code> can stretch to
+     fill all available height. Without this, an empty editor gives only
+     1.55em of click target inside a 200px-tall wrapper. */
+  display: flex;
+  flex-direction: column;
 }
 
 pre.code-editor code {
   display: block;
   /* contenteditable needs this for the cursor to show on empty line */
   min-height: 1.55em;
+  /* Stretch to fill the parent's height so clicks anywhere in the visible
+     editor area focus the contenteditable, not the surrounding wrapper. */
+  flex: 1 1 auto;
   caret-color: var(--accent);
 }
 

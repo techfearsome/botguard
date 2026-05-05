@@ -61,7 +61,18 @@ import { CodeJar } from '/static/js/vendor/codejar.js';
 
     const code = document.createElement('code');
     code.className = 'language-markup';
-    code.textContent = textarea.value;
+
+    // Seed the contenteditable with at least a newline. An empty <code>
+    // element with no text/children has nowhere for the browser to place
+    // a caret - clicking inside refuses to focus, or the cursor lands at
+    // an unreachable position. With a newline seed (zero-width-equivalent
+    // for our purposes), the editor is immediately typable.
+    //
+    // Also: even non-empty content benefits from a trailing newline because
+    // contenteditable's last-line behavior is fragile across browsers without
+    // it. We normalize to "exactly one trailing newline".
+    const initial = (textarea.value || '').replace(/\n*$/, '\n');
+    code.textContent = initial;
 
     pre.appendChild(code);
     wrap.appendChild(pre);
@@ -87,8 +98,29 @@ import { CodeJar } from '/static/js/vendor/codejar.js';
     });
 
     // Pipe edits back into the hidden textarea so form submit works.
+    // We strip the trailing newline we forced on init so the saved value
+    // matches what the user actually typed.
     jar.onUpdate((newCode) => {
-      textarea.value = newCode;
+      textarea.value = newCode.replace(/\n$/, '');
+    });
+    // Also sync immediately - textarea.value already matches but ensure
+    // consistency in case onUpdate doesn't fire on init in some browsers.
+    textarea.value = initial.replace(/\n$/, '');
+
+    // Make the whole wrapper a click target. Without this, clicking the
+    // padding area of an empty editor fails to focus the contenteditable
+    // because the click lands on the wrap div, not the <code> child.
+    wrap.addEventListener('click', (e) => {
+      // Don't steal clicks already handled by the contenteditable itself
+      if (e.target === code || code.contains(e.target)) return;
+      code.focus();
+      // Place cursor at the end
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
     });
 
     // If something else (validation, restore from autosave) updates the
