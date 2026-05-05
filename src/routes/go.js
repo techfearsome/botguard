@@ -17,6 +17,7 @@ const { buildHeartbeatInjection } = require('../lib/heartbeat');
 const { live } = require('../lib/livePresence');
 const { decide } = require('../scoring/decide');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
+const { setPingbackHeader, injectWpMeta } = require('../lib/wpFingerprint');
 const logger = require('../lib/logger');
 
 const CLICK_COOKIE = 'bg_cid';
@@ -105,7 +106,7 @@ async function handleClick(req, res, opts) {
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
       registerLiveVisitor(doc, campaign, workspace);
       setGoCookies(req, res, doc);
-      setNoCacheHeaders(res);
+      setNoCacheHeaders(req, res);
       return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
@@ -128,7 +129,7 @@ async function handleClick(req, res, opts) {
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
     // Run the filter chain
@@ -184,7 +185,7 @@ async function handleClick(req, res, opts) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     // Append the pass flag for visibility
     doc.scores.flags = [...(doc.scores.flags || []), ...countryResult.flags];
@@ -205,7 +206,7 @@ async function handleClick(req, res, opts) {
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
     doc.scores.flags = [...(doc.scores.flags || []), ...proxyResult.flags];
 
@@ -262,7 +263,7 @@ async function handleClick(req, res, opts) {
     // - Each visit must get a fresh click_id cookie
     // - Cloudflare will cache HTML by default if cookies aren't on the request
     // - 'private' tells the browser only it can cache; 's-maxage=0' tells CDNs not to
-    setNoCacheHeaders(res);
+    setNoCacheHeaders(req, res);
 
     // Persist click (non-blocking)
     writeClick(doc).catch((err) => {
@@ -428,9 +429,28 @@ function setGoCookies(req, res, doc) {
  * - Heartbeat: ALWAYS injected (small, presence is core to /admin/live)
  * - Clarity: injected only if workspace has clarity_project_id set
  */
+/**
+ * Wrap landing-page HTML with both presence/analytics tracking AND the
+ * WordPress fingerprint surface.
+ *
+ * Runs on every /go response - offer pages, safe pages, gate-blocked stubs,
+ * and the renderSafeFallback() output. By centralizing the HTML mutations
+ * here we guarantee a uniform fingerprint across the whole campaign surface,
+ * so a crawler that hits one URL forms a "this is WordPress" opinion that
+ * won't be contradicted by hitting another URL on the same domain.
+ *
+ * - WP fingerprint meta: ALWAYS injected (3 small <meta>/<link> tags in <head>)
+ * - Heartbeat: ALWAYS injected (small, presence is core to /admin/live)
+ * - Clarity: injected only if workspace has clarity_project_id set
+ */
 function applyPageTracking(html, workspace) {
+  // Inject WP fingerprint meta tags into <head>. Idempotent on already-WP
+  // pages (a duplicate generator tag is harmless; fingerprinters take the
+  // first-seen value). Returns input unchanged if html is empty.
+  let out = injectWpMeta(html);
+
   // Always inject heartbeat - it's tiny (~700 bytes) and powers /admin/live
-  let out = injectBeforeBodyEnd(html, buildHeartbeatInjection());
+  out = injectBeforeBodyEnd(out, buildHeartbeatInjection());
 
   // Clarity is workspace-scoped and optional
   const trackingId = workspace?.settings?.tracking?.clarity_project_id;
@@ -485,7 +505,7 @@ function registerLiveVisitor(doc, campaign, workspace) {
  *
  * Apply to every /go response and gate-blocked safe-page response.
  */
-function setNoCacheHeaders(res) {
+function setNoCacheHeaders(req, res) {
   res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
   res.set('CDN-Cache-Control', 'no-store');
   res.set('Surrogate-Control', 'no-store');
@@ -496,6 +516,10 @@ function setNoCacheHeaders(res) {
   // referrers, etc.), the response itself tells them not to index. This is
   // belt-and-suspenders alongside the robots.txt Disallow rules.
   res.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+  // WordPress fingerprint: every WP install sends X-Pingback on frontend
+  // page responses. Including it here gives campaign URLs the same surface
+  // signal as our public site pages, so the whole domain looks WP-shaped.
+  setPingbackHeader(req, res);
 }
 
 function renderSafeFallback() {

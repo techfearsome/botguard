@@ -152,8 +152,8 @@ function makeState() {
       },
     ],
     pages: {
-      p_offer: { _id: 'p_offer', name: 'Offer', slug: 'offer', html_template: '<html><body>OFFER_PAGE</body></html>', variants: [] },
-      p_safe:  { _id: 'p_safe',  name: 'Safe',  slug: 'safe',  html_template: '<html><body>SAFE_PAGE</body></html>',  variants: [] },
+      p_offer: { _id: 'p_offer', name: 'Offer', slug: 'offer', html_template: '<!DOCTYPE html><html><head><title>Offer</title></head><body>OFFER_PAGE</body></html>', variants: [] },
+      p_safe:  { _id: 'p_safe',  name: 'Safe',  slug: 'safe',  html_template: '<!DOCTYPE html><html><head><title>Safe</title></head><body>SAFE_PAGE</body></html>',  variants: [] },
     },
     clicks: [],
   };
@@ -307,6 +307,65 @@ async function run() {
     stubState = makeState();
     const r = await fetch(server, '/favicon.ico');
     assert.strictEqual(r.status, 404);
+  });
+
+  console.log('\nWP fingerprint applied to campaign URLs:');
+
+  await test('GET /go/<slug> response has X-Pingback header', async () => {
+    stubState = makeState();
+    const r = await fetch(server, '/go/main-promo');
+    assert.ok(r.headers['x-pingback'], 'X-Pingback header missing on offer page');
+    assert.ok(r.headers['x-pingback'].endsWith('/xmlrpc.php'),
+      `expected X-Pingback to end with /xmlrpc.php, got: ${r.headers['x-pingback']}`);
+  });
+
+  await test('GET /<root_path> response has X-Pingback header', async () => {
+    stubState = makeState();
+    const r = await fetch(server, '/promo');
+    assert.ok(r.headers['x-pingback'], 'X-Pingback header missing on custom-path response');
+    assert.ok(r.headers['x-pingback'].endsWith('/xmlrpc.php'));
+  });
+
+  await test('Offer page HTML contains <meta generator content="WordPress ...">', async () => {
+    stubState = makeState();
+    const r = await fetch(server, '/promo');
+    assert.ok(/<meta name="generator" content="WordPress \d+\.\d+/.test(r.body),
+      `expected WP generator meta in body, got first 400 chars: ${r.body.slice(0, 400)}`);
+  });
+
+  await test('Offer page HTML contains api.w.org REST link', async () => {
+    stubState = makeState();
+    const r = await fetch(server, '/promo');
+    assert.ok(/<link rel="https:\/\/api\.w\.org\/" href="\/wp-json\/">/.test(r.body));
+  });
+
+  await test('Paused campaign safe response also has WP fingerprint', async () => {
+    // Critical: even gate-blocked responses need consistent fingerprint, else
+    // a scanner that hits a paused-campaign URL sees a non-WP-shaped response
+    // and the fingerprint becomes inconsistent across the domain.
+    stubState = makeState();
+    const r = await fetch(server, '/paused-promo');
+    assert.ok(r.headers['x-pingback'], 'paused campaign response missing X-Pingback');
+    assert.ok(/<meta name="generator" content="WordPress/.test(r.body),
+      'paused campaign safe page missing WP generator meta');
+  });
+
+  await test('Offer page still has its original content (fingerprint is additive)', async () => {
+    stubState = makeState();
+    const r = await fetch(server, '/promo');
+    assert.ok(r.body.includes('OFFER_PAGE'), 'original page content lost');
+    assert.ok(r.body.includes('<title>Offer</title>'), 'original title lost');
+  });
+
+  await test('X-Robots-Tag noindex still present alongside WP fingerprint', async () => {
+    // Belt-and-suspenders: WP fingerprint says "I'm a normal site" to bots
+    // doing platform identification, but X-Robots-Tag tells crawlers not to
+    // actually index the page. Both must be present.
+    stubState = makeState();
+    const r = await fetch(server, '/promo');
+    assert.ok(r.headers['x-robots-tag'], 'X-Robots-Tag missing');
+    assert.ok(r.headers['x-robots-tag'].includes('noindex'));
+    assert.ok(r.headers['x-pingback']);
   });
 
   server.close();
