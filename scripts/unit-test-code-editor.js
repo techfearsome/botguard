@@ -163,6 +163,23 @@ test('code-editor.js has wrap click handler (empty editor click-to-focus fix)', 
     'wrap click handler missing - empty editor wont focus on click');
 });
 
+test('code-editor.js skips Prism on empty/whitespace content (preserves seed newline)', () => {
+  // Prism.highlightElement strips innerHTML when there are no tokens to
+  // render. On an empty/whitespace-only editor, that wipes the seed
+  // newline we put in to anchor the cursor. The guard must check
+  // textContent.trim() before calling Prism so the seed survives.
+  // Without this, /admin/pages/new shows an editor that can't be focused.
+  const p = path.resolve(__dirname, '../public/js/code-editor.js');
+  const content = fs.readFileSync(p, 'utf8');
+  // Look for the guard in the highlightHtml function. Match flexibly since
+  // the exact code may shift slightly with future refactors but the intent
+  // (don't highlight empty content) must remain.
+  assert.ok(
+    /textContent[\s\S]*?\.trim\(\)/.test(content),
+    'Prism empty-content guard missing - empty editors will lose their cursor anchor'
+  );
+});
+
 test('LICENSE files for vendored libraries are included (MIT attribution)', () => {
   // Vendoring third-party MIT-licensed code requires keeping the LICENSE
   // alongside the redistributed source. This test enforces that habit.

@@ -42,9 +42,16 @@ import { CodeJar } from '/static/js/vendor/codejar.js';
   function highlightHtml(editorEl) {
     // Prism.highlightElement expects the element to have a class like
     // "language-markup" - we set that when creating the element.
-    if (window.Prism) {
-      window.Prism.highlightElement(editorEl);
-    }
+    //
+    // Skip empty/whitespace-only content. Prism would strip the element's
+    // innerHTML entirely (no tokens to render), which destroys the seed
+    // newline we put in to anchor the cursor for empty editors. Once the
+    // user types real content, this guard short-circuits and Prism runs
+    // normally on every CodeJar onInput cycle.
+    if (!window.Prism) return;
+    const text = editorEl.textContent || '';
+    if (!text.trim()) return;
+    window.Prism.highlightElement(editorEl);
   }
 
   function upgradeTextarea(textarea) {
