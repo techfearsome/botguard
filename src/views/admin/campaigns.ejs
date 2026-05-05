@@ -79,7 +79,9 @@
             </form>
           <% } %>
           <a href="/admin/campaigns/<%= c._id %>/edit" class="btn btn-small">Edit</a>
-          <a href="/admin/campaigns/<%= c._id %>/preview" class="btn btn-small" target="_blank" title="See exactly what HTML is served to visitors, including injected scripts">Preview</a>
+          <a href="/admin/campaigns/<%= c._id %>/preview/page/offer" class="btn btn-small" target="_blank" rel="noopener" title="View the offer page as a visitor (no tracking)">Preview offer</a>
+          <a href="/admin/campaigns/<%= c._id %>/preview/page/safe" class="btn btn-small" target="_blank" rel="noopener" title="View the safe page as a visitor (no tracking)">Preview safe</a>
+          <a href="/admin/campaigns/<%= c._id %>/preview" class="btn btn-small" target="_blank" rel="noopener" title="See raw HTML source including injected Clarity / auto-conv scripts">Source</a>
           <form method="POST" action="/admin/campaigns/<%= c._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this campaign?')">
             <button type="submit" class="btn btn-small btn-danger">Delete</button>
           </form>

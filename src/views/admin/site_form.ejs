@@ -65,6 +65,7 @@
     <button type="submit" class="btn btn-primary">Save</button>
     <a href="/admin/site" class="btn">Cancel</a>
     <% if (!sp._new) { %>
+      <a href="/admin/site/<%= sp.slug %>/preview" target="_blank" rel="noopener" class="btn" title="View this page as a visitor would (no tracking). Save first to see latest changes.">Preview</a>
       <a href="/<%= sp.slug === 'home' ? '' : (['privacy','terms'].includes(sp.slug) ? sp.slug : 'p/' + sp.slug) %>" target="_blank" class="btn">View live →</a>
     <% } %>
   </div>

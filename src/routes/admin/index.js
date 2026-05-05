@@ -12,6 +12,7 @@ const { requireAdmin, loginPage, loginSubmit, logout } = require('../../middlewa
 const logger = require('../../lib/logger');
 const { parseRange, applyRangeToFilter, RANGE_OPTIONS } = require('../../lib/dateRange');
 const { validateRootPath } = require('../../lib/reservedPaths');
+const { renderPreview, setPreviewHeaders, PREVIEW_PLACEHOLDERS } = require('../../lib/preview');
 
 /**
  * Best-effort cache invalidation for the dynamic robots.txt and sitemap.xml.
@@ -476,6 +477,34 @@ router.get('/campaigns/:id/preview', async (req, res) => {
   );
 });
 
+/**
+ * Visitor-rendered preview for a campaign's offer or safe page.
+ * Returns rendered HTML (text/html), unlike /campaigns/:id/preview which
+ * returns the source for inspection. No tracking, no logging, no cookies.
+ *
+ * GET /admin/campaigns/:id/preview/page/:kind  (kind = "offer" or "safe")
+ * Optional: ?device=iphone|android|windows|mac|linux|other (default 'other')
+ */
+router.get('/campaigns/:id/preview/page/:kind', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!campaign) return res.status(404).send('Campaign not found');
+
+  const kind = req.params.kind === 'safe' ? 'safe' : 'offer';
+  const device = ['iphone','android','windows','mac','linux','other'].includes(req.query.device)
+    ? req.query.device : 'other';
+
+  const { resolvePageForDevice } = require('../../lib/pageResolver');
+  const page = await resolvePageForDevice(campaign, device, kind);
+  if (!page) {
+    setPreviewHeaders(res);
+    return res.send(`<!DOCTYPE html><html><body style="font-family:system-ui;padding:40px;max-width:600px;margin:0 auto;"><h2>No ${kind} page configured</h2><p>This campaign has no ${kind} page set for device class "${device}". A real visit would render the built-in stub.</p></body></html>`);
+  }
+
+  setPreviewHeaders(res);
+  res.send(renderPreview(page));
+});
+
 // ---------- Landing pages ----------
 router.get('/pages', async (req, res) => {
   const ws = await resolveWorkspace(req);
@@ -556,6 +585,33 @@ router.post('/pages/:id/delete', async (req, res) => {
   const ws = await resolveWorkspace(req);
   await LandingPage.deleteOne({ _id: req.params.id, workspace_id: ws._id });
   res.redirect('/admin/pages');
+});
+
+/**
+ * Visitor-rendered preview of a saved LandingPage.
+ * Returns rendered HTML with placeholders interpolated, WP fingerprint
+ * meta injected, but NO tracking, NO Click row, NO cookies, NO filter chain.
+ * The ?utm_source=... etc query parameters can be passed to override the
+ * default "preview" placeholder values for testing UTM-driven content.
+ */
+router.get('/pages/:id/preview', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const page = await LandingPage.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!page) return res.status(404).send('Page not found');
+
+  // Allow query-string overrides for placeholder values - useful for testing
+  // landing pages that use {{utm_source}} etc to display dynamic content.
+  // We only override values that were explicitly provided so unset query
+  // params keep the friendly "preview" defaults.
+  const placeholders = { ...PREVIEW_PLACEHOLDERS };
+  for (const k of ['click_id', 'utm_source', 'utm_medium', 'utm_campaign']) {
+    if (typeof req.query[k] === 'string' && req.query[k]) {
+      placeholders[k] = req.query[k];
+    }
+  }
+
+  setPreviewHeaders(res);
+  res.send(renderPreview(page, { placeholders }));
 });
 
 // ---------- Live presence ----------
@@ -1036,6 +1092,23 @@ router.post('/site/:slug/delete', async (req, res) => {
   await SitePage.deleteOne({ workspace_id: ws._id, slug });
   invalidateSitemapCache();
   res.redirect('/admin/site');
+});
+
+/**
+ * Visitor-rendered preview of a saved SitePage.
+ * Same semantics as /admin/pages/:id/preview - renders the page exactly as
+ * a real visitor would see it (homepage, /privacy, /terms, /p/<slug>) but
+ * with tracking disabled and no side effects. Useful for verifying layout,
+ * the WP fingerprint injection, and noindex meta-tags.
+ */
+router.get('/site/:slug/preview', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const slug = String(req.params.slug || '').toLowerCase();
+  const page = await SitePage.findOne({ workspace_id: ws._id, slug }).lean();
+  if (!page) return res.status(404).send('Site page not found');
+
+  setPreviewHeaders(res);
+  res.send(renderPreview(page));
 });
 
 // ---------- Click detail ----------

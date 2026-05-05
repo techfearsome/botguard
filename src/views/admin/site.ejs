@@ -44,6 +44,7 @@
               <%= p._placeholder ? 'Create' : 'Edit' %>
             </a>
             <% if (!p._placeholder) { %>
+              <a href="/admin/site/<%= p.slug %>/preview" target="_blank" rel="noopener" class="btn btn-small" title="View this page as a visitor would (no tracking)">Preview</a>
               <form method="POST" action="/admin/site/<%= p.slug %>/delete" style="display:inline" onsubmit="return confirm('Delete this page?')">
                 <button type="submit" class="btn btn-small btn-danger">Delete</button>
               </form>
@@ -72,6 +73,7 @@
             </td>
             <td>
               <a href="/admin/site/<%= p.slug %>/edit" class="btn btn-small">Edit</a>
+              <a href="/admin/site/<%= p.slug %>/preview" target="_blank" rel="noopener" class="btn btn-small" title="View this page as a visitor would (no tracking)">Preview</a>
               <form method="POST" action="/admin/site/<%= p.slug %>/delete" style="display:inline" onsubmit="return confirm('Delete this page?')">
                 <button type="submit" class="btn btn-small btn-danger">Delete</button>
               </form>

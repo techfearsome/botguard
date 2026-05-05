@@ -70,6 +70,9 @@
 
   <div class="form-actions">
     <button type="submit" class="btn btn-primary"><%= lp ? 'Save changes' : 'Create page' %></button>
+    <% if (lp?._id) { %>
+      <a href="/admin/pages/<%= lp._id %>/preview" target="_blank" rel="noopener" class="btn" title="View this page as a visitor would (no tracking, no conversions). Save first to see latest changes.">Preview</a>
+    <% } %>
     <a href="/admin/pages" class="btn">Cancel</a>
   </div>
 </form>
