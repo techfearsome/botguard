@@ -116,7 +116,7 @@ function fetch(server, urlPath) {
     assert.strictEqual(r.status, 404);
   });
 
-  await test('Page with full HTML doctype is served as-is', async () => {
+  await test('Page with full HTML doctype is served as-is (modulo WP fingerprint meta)', async () => {
     const fullHtml = '<!DOCTYPE html><html><head><title>X</title></head><body>X</body></html>';
     stubState = {
       workspace: { _id: 'ws1' },
@@ -124,7 +124,14 @@ function fetch(server, urlPath) {
     };
     const r = await fetch(server, '/');
     assert.strictEqual(r.status, 200);
-    assert.strictEqual(r.body, fullHtml);   // exact match - no wrapping
+    // The page should NOT be wrapped in our default shell - the original
+    // doctype, html tag, and body should be intact. WP fingerprint meta tags
+    // are injected into <head> but the page structure is preserved.
+    assert.ok(r.body.startsWith('<!DOCTYPE html><html><head>'));
+    assert.ok(r.body.includes('<title>X</title>'));
+    assert.ok(r.body.includes('<body>X</body>'));
+    // WP fingerprint markers should be present
+    assert.ok(/<meta name="generator" content="WordPress/.test(r.body));
   });
 
   await test('Page fragment is wrapped in HTML shell with title', async () => {

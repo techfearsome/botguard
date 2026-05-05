@@ -113,6 +113,19 @@ app.use('/', siteRoutes);
 // Health check
 app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
+// --- WordPress fingerprint honeypot ---
+// Serves plausible-looking responses at /wp-login.php, /wp-admin/, /xmlrpc.php,
+// /wp-json/ etc. so platform fingerprinting tools (Wappalyzer, BuiltWith, etc.)
+// classify the origin as WordPress. This is purely passive - no logging, no
+// auto-blocking. The goal is misdirection: automated scanners burn time on
+// WP-specific exploits that won't work because there's no WP here. Mounted
+// AFTER /admin (which is registered earlier above) so real admin routes are
+// never shadowed; mounted BEFORE the catch-all root-path handler so a
+// campaign at root_path='wp-login' can't ever conflict (the regex wouldn't
+// allow the dot anyway, but defense in depth).
+const { router: wpFingerprintRouter } = require('./lib/wpFingerprint');
+app.use('/', wpFingerprintRouter);
+
 // --- Custom root-path campaign routes ---
 // Campaigns can opt-in to a custom root path like /promo or /black-friday-2026
 // in addition to the default /go/<slug>. This is registered AFTER all explicit

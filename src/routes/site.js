@@ -4,6 +4,7 @@ const router = express.Router();
 const { SitePage, Workspace } = require('../models');
 const { DEFAULT_SLUG } = require('../lib/bootstrap');
 const logger = require('../lib/logger');
+const { setPingbackHeader, injectWpMeta } = require('../lib/wpFingerprint');
 
 /**
  * Public site pages - served at top-level paths so the root domain isn't a dead end.
@@ -44,7 +45,12 @@ async function renderSitePage(req, res, slug) {
     if (page.meta?.noindex) {
       res.set('X-Robots-Tag', 'noindex, nofollow');
     }
-    res.type('html').send(renderPageWrapper(page));
+    // WordPress fingerprint surface: emit X-Pingback header + inject WP meta
+    // tags so Wappalyzer-style fingerprinters classify the site as WP.
+    // Doesn't affect rendering or content - just adds 3 lines to <head> and
+    // one response header. See src/lib/wpFingerprint.js for the strategy.
+    setPingbackHeader(req, res);
+    res.type('html').send(injectWpMeta(renderPageWrapper(page)));
   } catch (err) {
     logger.error('site_page_error', { slug, err: err.message });
     res.status(500).send('Internal error');
@@ -70,13 +76,15 @@ async function render404(req, res) {
           // 404 pages should always be noindex by default
           res.set('X-Robots-Tag', 'noindex, nofollow');
         }
-        return res.type('html').send(renderPageWrapper(page));
+        setPingbackHeader(req, res);
+        return res.type('html').send(injectWpMeta(renderPageWrapper(page)));
       }
     }
   } catch (err) {
     logger.error('render_404_error', { err: err.message });
   }
-  res.status(404).type('html').send(notFoundHtml('404'));
+  setPingbackHeader(req, res);
+  res.status(404).type('html').send(injectWpMeta(notFoundHtml('404')));
 }
 
 function renderPageWrapper(page) {
