@@ -932,6 +932,240 @@ router.post('/asn/:id/delete', async (req, res) => {
   res.redirect('/admin/asn');
 });
 
+// ---------- Firewall (flagged-IP ledger) ----------
+//
+// One row per unique flagged IP, with hit count + reasons accumulated over
+// time. Sourced automatically from the click write path - any block decision
+// that classifies as a fraud signal (proxy, VPN, datacenter, bot, ASN,
+// hard-block, source mismatch) creates or updates a FirewallEntry row.
+//
+// Date range filter follows the same pattern as conversions / clicks (uses
+// last_seen for "what got hit recently").
+//
+// CSV export at /admin/firewall/export.csv is shaped for Google Ads IP
+// exclusion - one IP per line, capped at 500 rows by default (Google Ads
+// per-list limit). Admins can also download a richer CSV (with reasons,
+// device, dates) at /admin/firewall/full.csv for AbuseIPDB / manual review.
+
+const { FirewallEntry } = require('../../models');
+
+function buildFirewallFilter(req, ws) {
+  const filter = { workspace_id: ws._id };
+
+  // Reason class filter - multi-select. ?class=proxy,bot returns either.
+  if (req.query.class && typeof req.query.class === 'string') {
+    const classes = req.query.class.split(',').map((s) => s.trim()).filter(Boolean);
+    if (classes.length) filter.reason_classes = { $in: classes };
+  }
+
+  // Reviewed filter - default hides reviewed entries (admin already saw them)
+  // unless ?reviewed=all or ?reviewed=1
+  if (req.query.reviewed === '1') filter.reviewed = true;
+  else if (req.query.reviewed === 'all') { /* no filter - show both */ }
+  else filter.reviewed = false;
+
+  // Free-text search over IP / ASN / country
+  if (req.query.q && typeof req.query.q === 'string') {
+    const q = req.query.q.trim();
+    if (q) {
+      filter.$or = [
+        { ip: q },                                     // exact IP match
+        { last_asn: new RegExp(q, 'i') },
+        { last_country: new RegExp('^' + q + '$', 'i') },
+      ];
+    }
+  }
+
+  return filter;
+}
+
+router.get('/firewall', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = buildFirewallFilter(req, ws);
+
+  // Date range applied to last_seen (when did we last see this IP)
+  const range = parseRange(req.query);
+  if (range && range.from) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$gte = range.from;
+  }
+  if (range && range.to) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$lte = range.to;
+  }
+
+  const entries = await FirewallEntry.find(filter)
+    .sort({ last_seen: -1 })
+    .limit(500)
+    .lean();
+
+  // Aggregate reason-class counts for the filter UI
+  const counts = await FirewallEntry.aggregate([
+    { $match: { workspace_id: ws._id, reviewed: false } },
+    { $unwind: '$reason_classes' },
+    { $group: { _id: '$reason_classes', count: { $sum: 1 } } },
+  ]);
+  const classCounts = Object.fromEntries(counts.map((c) => [c._id, c.count]));
+
+  res.render('admin/firewall', {
+    ws,
+    page: 'firewall',
+    entries,
+    range,
+    rangeOptions: RANGE_OPTIONS,
+    classCounts,
+    classes: FirewallEntry.REASON_CLASSES,
+    activeClasses: req.query.class ? req.query.class.split(',') : [],
+    showReviewed: req.query.reviewed,
+    searchQuery: req.query.q || '',
+  });
+});
+
+/**
+ * Mark entries as reviewed (or un-reviewed). Body: ids=<id1>,<id2>,...
+ * Used to clear flagged IPs out of the default view after exporting them.
+ */
+router.post('/firewall/mark-reviewed', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const ids = String(req.body.ids || '').split(',').filter(Boolean);
+  const reviewed = req.body.reviewed !== '0';
+  if (ids.length) {
+    await FirewallEntry.updateMany(
+      { _id: { $in: ids }, workspace_id: ws._id },
+      { $set: { reviewed } }
+    );
+  }
+  res.redirect('back');
+});
+
+/**
+ * Mark ALL currently-visible entries as reviewed. Same filters as the list
+ * view so "review all" only affects what the admin actually sees.
+ */
+router.post('/firewall/mark-all-reviewed', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = buildFirewallFilter(req, ws);
+  // Range filter from the list view
+  const range = parseRange(req.body);
+  if (range && range.from) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$gte = range.from;
+  }
+  if (range && range.to) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$lte = range.to;
+  }
+  await FirewallEntry.updateMany(filter, { $set: { reviewed: true } });
+  res.redirect('/admin/firewall');
+});
+
+router.post('/firewall/:id/notes', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  await FirewallEntry.updateOne(
+    { _id: req.params.id, workspace_id: ws._id },
+    { $set: { notes: String(req.body.notes || '').slice(0, 500) } }
+  );
+  res.redirect('/admin/firewall');
+});
+
+router.post('/firewall/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  await FirewallEntry.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+  res.redirect('/admin/firewall');
+});
+
+/**
+ * CSV export for Google Ads IP exclusion list. One IP per line, no header,
+ * capped at 500 rows by default (Google Ads per-list limit). Filters from
+ * the URL query are honored so admins can export "last 7 days, proxy only".
+ */
+router.get('/firewall/export.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = buildFirewallFilter(req, ws);
+
+  const range = parseRange(req.query);
+  if (range && range.from) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$gte = range.from;
+  }
+  if (range && range.to) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$lte = range.to;
+  }
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 500, 5000);
+  const entries = await FirewallEntry.find(filter)
+    .sort({ last_seen: -1 })
+    .limit(limit)
+    .select('ip')
+    .lean();
+
+  // Plain CSV - one IP per line. No header (Google Ads doesn't expect one).
+  // We deliberately use \r\n line endings since some upload tools (including
+  // older Google Ads bulk uploaders) get cranky with bare \n.
+  const csv = entries.map((e) => e.ip).join('\r\n') + (entries.length ? '\r\n' : '');
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="firewall-ips-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(csv);
+});
+
+/**
+ * Rich CSV export - includes reason, hit count, dates, country, ASN, device.
+ * Useful for AbuseIPDB submission review or manual analysis. NOT shaped for
+ * Google Ads (which only wants the IP column).
+ */
+router.get('/firewall/full.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = buildFirewallFilter(req, ws);
+
+  const range = parseRange(req.query);
+  if (range && range.from) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$gte = range.from;
+  }
+  if (range && range.to) {
+    filter.last_seen = filter.last_seen || {};
+    filter.last_seen.$lte = range.to;
+  }
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 5000, 50000);
+  const entries = await FirewallEntry.find(filter)
+    .sort({ last_seen: -1 })
+    .limit(limit)
+    .lean();
+
+  function csvCell(v) {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    if (/[,"\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  const lines = [
+    ['ip', 'reason_classes', 'reasons', 'hit_count', 'first_seen', 'last_seen', 'country', 'asn', 'device', 'campaign', 'user_agent', 'notes'].join(','),
+  ];
+  for (const e of entries) {
+    lines.push([
+      csvCell(e.ip),
+      csvCell((e.reason_classes || []).join('|')),
+      csvCell((e.reasons || []).join('|')),
+      csvCell(e.hit_count || 0),
+      csvCell(e.first_seen ? new Date(e.first_seen).toISOString() : ''),
+      csvCell(e.last_seen ? new Date(e.last_seen).toISOString() : ''),
+      csvCell(e.last_country || ''),
+      csvCell(e.last_asn || ''),
+      csvCell(e.last_device || ''),
+      csvCell(e.last_campaign_slug || ''),
+      csvCell(e.last_user_agent || ''),
+      csvCell(e.notes || ''),
+    ].join(','));
+  }
+
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="firewall-full-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(lines.join('\r\n') + '\r\n');
+});
+
 // ---------- Settings (API keys, password info) ----------
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);

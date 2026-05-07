@@ -7,4 +7,5 @@ module.exports = {
   Conversion: require('./Conversion'),
   AsnBlacklist: require('./AsnBlacklist'),
   SitePage: require('./SitePage'),
+  FirewallEntry: require('./FirewallEntry'),
 };

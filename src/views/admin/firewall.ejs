@@ -1,0 +1,154 @@
+<%- include('../partials/header', { ws, page, title: 'Firewall - BotGuard' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Firewall</h1>
+    <p class="muted">
+      Flagged IPs from the filter chain — proxies, VPNs, datacenters, bots — deduplicated by IP across <strong><%= range.label %></strong>.
+      Excludes country-gate and UTM-gate blocks (those are policy decisions, not fraud signals).
+    </p>
+  </div>
+  <div style="display:flex; gap:8px; align-items:flex-start;">
+    <a href="/admin/firewall/export.csv?<%= new URLSearchParams({ ...(searchQuery && { q: searchQuery }), ...(activeClasses.length && { class: activeClasses.join(',') }), range: range.range, date_from: range.range === 'custom' ? range.date_from : '', date_to: range.range === 'custom' ? range.date_to : '' }).toString() %>"
+       class="btn btn-primary"
+       title="Plain CSV, one IP per line. Capped at 500 (Google Ads exclusion list limit).">
+      Export for Google Ads
+    </a>
+    <a href="/admin/firewall/full.csv?<%= new URLSearchParams({ ...(searchQuery && { q: searchQuery }), ...(activeClasses.length && { class: activeClasses.join(',') }), range: range.range, date_from: range.range === 'custom' ? range.date_from : '', date_to: range.range === 'custom' ? range.date_to : '' }).toString() %>"
+       class="btn"
+       title="Full CSV with reasons, hit count, dates, country, ASN, device. Useful for AbuseIPDB review or manual analysis.">
+      Full CSV
+    </a>
+  </div>
+</div>
+
+<div class="stat-grid" style="margin-bottom: 16px;">
+  <% classes.forEach(c => { %>
+    <div class="stat-card" style="cursor:pointer;" onclick="window.location.href='/admin/firewall?class=<%= c %>'">
+      <div class="stat-label"><%= c %></div>
+      <div class="stat-value"><%= classCounts[c] || 0 %></div>
+    </div>
+  <% }) %>
+</div>
+
+<form method="GET" action="/admin/firewall" class="filter-bar">
+  <input type="text" name="q" placeholder="Search IP, ASN, country..." value="<%= searchQuery %>">
+
+  <select name="range" onchange="document.getElementById('custom-dates').style.display = this.value === 'custom' ? 'inline-flex' : 'none';">
+    <% rangeOptions.forEach(opt => { %>
+      <option value="<%= opt.value %>" <%= range.range === opt.value ? 'selected' : '' %>><%= opt.label %></option>
+    <% }) %>
+  </select>
+
+  <span id="custom-dates" style="<%= range.range === 'custom' ? 'display:inline-flex' : 'display:none' %>; gap:6px; align-items:center;">
+    <input type="date" name="date_from" value="<%= range.date_from || '' %>" placeholder="From">
+    <input type="date" name="date_to" value="<%= range.date_to || '' %>" placeholder="To">
+  </span>
+
+  <select name="class">
+    <option value="">All reasons</option>
+    <% classes.forEach(c => { %>
+      <option value="<%= c %>" <%= activeClasses.includes(c) ? 'selected' : '' %>><%= c %> (<%= classCounts[c] || 0 %>)</option>
+    <% }) %>
+  </select>
+
+  <select name="reviewed">
+    <option value="" <%= !showReviewed ? 'selected' : '' %>>Unreviewed only</option>
+    <option value="1" <%= showReviewed === '1' ? 'selected' : '' %>>Reviewed only</option>
+    <option value="all" <%= showReviewed === 'all' ? 'selected' : '' %>>All</option>
+  </select>
+
+  <button type="submit" class="btn">Filter</button>
+  <a href="/admin/firewall" class="btn">Clear</a>
+</form>
+
+<% if (entries.length === 0) { %>
+  <div class="empty-state">
+    <h3>No flagged IPs in this range</h3>
+    <p class="muted">As traffic comes in, flagged IPs (proxies, VPNs, bots) will accumulate here automatically.</p>
+  </div>
+<% } else { %>
+  <div class="table-actions" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+    <div class="muted"><strong><%= entries.length %></strong> entries shown <% if (entries.length === 500) { %><span style="opacity:0.7;">(capped — refine filters or use CSV export to see more)</span><% } %></div>
+    <form method="POST" action="/admin/firewall/mark-all-reviewed" style="display:inline" onsubmit="return confirm('Mark all <%= entries.length %> entries as reviewed?')">
+      <input type="hidden" name="range" value="<%= range.range %>">
+      <input type="hidden" name="date_from" value="<%= range.date_from || '' %>">
+      <input type="hidden" name="date_to" value="<%= range.date_to || '' %>">
+      <input type="hidden" name="q" value="<%= searchQuery %>">
+      <input type="hidden" name="class" value="<%= activeClasses.join(',') %>">
+      <button type="submit" class="btn btn-small">Mark all reviewed</button>
+    </form>
+  </div>
+
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>IP</th>
+          <th>Reasons</th>
+          <th>Hits</th>
+          <th>First seen</th>
+          <th>Last seen</th>
+          <th>Country</th>
+          <th>ASN</th>
+          <th>Device</th>
+          <th>Notes</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      <% entries.forEach(e => { %>
+        <tr<%= e.reviewed ? ' style="opacity:0.5;"' : '' %>>
+          <td class="mono"><%= e.ip %></td>
+          <td>
+            <% (e.reason_classes || []).forEach(c => { %>
+              <span class="badge badge-block"><%= c %></span>
+            <% }) %>
+          </td>
+          <td class="mono"><%= e.hit_count %></td>
+          <td><%- localTime(e.first_seen) %></td>
+          <td><%- localTime(e.last_seen) %></td>
+          <td><%= e.last_country || '—' %></td>
+          <td class="cell-truncate-sm"><%= e.last_asn || '—' %></td>
+          <td><%= e.last_device || '—' %></td>
+          <td>
+            <form method="POST" action="/admin/firewall/<%= e._id %>/notes" style="display:flex; gap:4px;">
+              <input type="text" name="notes" value="<%= e.notes || '' %>" placeholder="add note..." style="width:140px; font-size:12px;">
+              <button type="submit" class="btn btn-small" title="Save note">✓</button>
+            </form>
+          </td>
+          <td style="display:flex; gap:4px;">
+            <% if (!e.reviewed) { %>
+              <form method="POST" action="/admin/firewall/mark-reviewed" style="display:inline">
+                <input type="hidden" name="ids" value="<%= e._id %>">
+                <button type="submit" class="btn btn-small" title="Mark as reviewed (hide from default view)">✓</button>
+              </form>
+            <% } else { %>
+              <form method="POST" action="/admin/firewall/mark-reviewed" style="display:inline">
+                <input type="hidden" name="ids" value="<%= e._id %>">
+                <input type="hidden" name="reviewed" value="0">
+                <button type="submit" class="btn btn-small" title="Mark as unreviewed">↺</button>
+              </form>
+            <% } %>
+            <form method="POST" action="/admin/firewall/<%= e._id %>/delete" style="display:inline" onsubmit="return confirm('Delete this entry? It will reappear if the IP hits again.')">
+              <button type="submit" class="btn btn-small btn-danger" title="Delete entry">×</button>
+            </form>
+          </td>
+        </tr>
+      <% }) %>
+      </tbody>
+    </table>
+  </div>
+
+  <details style="margin-top:24px;">
+    <summary class="muted" style="cursor:pointer; font-size:13px;">How to use this list</summary>
+    <div style="margin-top:8px; font-size:13px; line-height:1.6; max-width:760px;">
+      <p><strong>Google Ads IP exclusion:</strong> Click "Export for Google Ads" above. The file has one IP per line, capped at 500 (Google Ads' per-list limit). In Google Ads: Campaign → Settings → Additional settings → IP exclusions → paste the list.</p>
+      <p><strong>AbuseIPDB:</strong> Click "Full CSV" for the richer export with reasons and ASN data. Review entries manually before submitting — false positives hurt the AbuseIPDB community. ProxyCheck-flagged proxies/VPNs are usually safe to report under category 9 (Proxy/VPN); behavioral flags (bot, headless) are higher confidence.</p>
+      <p><strong>Reviewed</strong> entries are hidden from the default view but stay in the database — useful for "I exported this batch, hide them so I see new ones." Use the dropdown to switch back to reviewed-only or all.</p>
+      <p><strong>Country and UTM gate blocks are NOT in this list</strong> — those are policy decisions (you blocked the country, or required a UTM that wasn't there), not fraud signals. Mixing them in would pollute your IP exclusion list with false positives.</p>
+    </div>
+  </details>
+<% } %>
+
+<%- include('../partials/footer') %>

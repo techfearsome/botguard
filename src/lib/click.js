@@ -136,6 +136,14 @@ function buildClickDoc({ req, workspace, campaign }) {
 
 async function writeClick(doc) {
   const click = await Click.create(doc);
+  // Fire-and-forget firewall ledger update. The recorder itself classifies
+  // the reason and bails out for non-fraud blocks (country, UTM gates) or
+  // for allowed clicks. Errors are logged inside the recorder, never thrown.
+  // We don't await this - a slow firewall write must not delay the response.
+  try {
+    const { recordFirewallEntry } = require('./firewall');
+    recordFirewallEntry(doc).catch(() => { /* logged inside */ });
+  } catch (e) { /* defensive: never fail click write because of firewall */ }
   return click;
 }
 
