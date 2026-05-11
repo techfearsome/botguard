@@ -135,9 +135,17 @@
       <% ['source','medium','campaign','term','content'].forEach(k => { %>
         <tr><td>utm_<%= k %></td><td><%= click.utm?.[k] || '–' %></td></tr>
       <% }) %>
-      <tr><td>fbclid</td><td><%= click.external_ids?.fbclid || '–' %></td></tr>
-      <tr><td>gclid</td><td><%= click.external_ids?.gclid || '–' %></td></tr>
-      <tr><td>ttclid</td><td><%= click.external_ids?.ttclid || '–' %></td></tr>
+      <%# Google Ads click identifiers. gclid is the deterministic one;
+          wbraid/gbraid are iOS aggregate identifiers used when GCLID can't
+          be sent due to App Tracking Transparency. Case-sensitive - displayed
+          verbatim, never lowercased. %>
+      <tr><td>gclid</td><td class="mono"><%= click.external_ids?.gclid || '–' %></td></tr>
+      <tr><td>wbraid</td><td class="mono"><%= click.external_ids?.wbraid || '–' %></td></tr>
+      <tr><td>gbraid</td><td class="mono"><%= click.external_ids?.gbraid || '–' %></td></tr>
+      <tr><td>fbclid</td><td class="mono"><%= click.external_ids?.fbclid || '–' %></td></tr>
+      <tr><td>msclkid</td><td class="mono"><%= click.external_ids?.msclkid || '–' %></td></tr>
+      <tr><td>ttclid</td><td class="mono"><%= click.external_ids?.ttclid || '–' %></td></tr>
+      <tr><td>li_fat_id</td><td class="mono"><%= click.external_ids?.li_fat_id || '–' %></td></tr>
       <tr><td>referer</td><td><small><%= click.referer || '–' %></small></td></tr>
     </table>
   </section>

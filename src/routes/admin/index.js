@@ -716,6 +716,23 @@ router.get('/clicks', async (req, res) => {
   if (req.query.decision) filter.decision = req.query.decision;
   if (req.query.source) filter['utm.source'] = req.query.source;
 
+  // Click-ID search: try the value against all five ad-platform identifiers
+  // simultaneously. Useful when debugging "did Google ever send us a click
+  // with this gclid?" without the admin having to know which platform's
+  // identifier it is. Case-sensitive match - these IDs are case-sensitive.
+  if (req.query.click_id && typeof req.query.click_id === 'string') {
+    const cid = req.query.click_id.trim();
+    if (cid) {
+      filter.$or = [
+        { 'external_ids.gclid':   cid },
+        { 'external_ids.wbraid':  cid },
+        { 'external_ids.gbraid':  cid },
+        { 'external_ids.fbclid':  cid },
+        { 'external_ids.msclkid': cid },
+      ];
+    }
+  }
+
   // Default range = "today" (controlled by ?range=today|yesterday|7d|30d|all|custom)
   const range = parseRange(req.query);
   applyRangeToFilter(filter, range);

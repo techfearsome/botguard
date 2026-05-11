@@ -61,11 +61,20 @@ const ClickSchema = new mongoose.Schema({
     content: String,
   },
   external_ids: {
-    gclid: String,
-    fbclid: String,
-    msclkid: String,
-    ttclid: String,
-    li_fat_id: String,
+    // Google Ads click identifiers. Stored case-sensitive (Google Ads API
+    // rejects uploads with case-altered values). gclid is the deterministic
+    // per-click identifier; wbraid/gbraid are iOS privacy-preserving
+    // aggregate identifiers used when GCLID can't be sent due to App
+    // Tracking Transparency. Either wbraid or gbraid may appear instead of
+    // or alongside gclid on the same click.
+    gclid:  String,    // non-iOS, or iOS with ATT consent (deterministic)
+    wbraid: String,    // iOS in-app ad → web (most common iOS pattern)
+    gbraid: String,    // iOS web ad → iOS app handoff
+    // Other ad platforms - same case-sensitive verbatim-capture rule.
+    fbclid: String,    // Facebook / Instagram
+    msclkid: String,   // Microsoft Bing
+    ttclid: String,    // TikTok
+    li_fat_id: String, // LinkedIn
   },
 
   // Fingerprint (populated by JS challenge in week 2)
@@ -121,5 +130,15 @@ ClickSchema.index({ workspace_id: 1, decision: 1, ts: -1 });
 ClickSchema.index({ ip_hash: 1, ts: -1 });
 ClickSchema.index({ 'utm.source': 1, ts: -1 });
 ClickSchema.index({ asn: 1 });
+
+// External-click-ID indexes - sparse so the index only stores documents
+// where the field is set (most clicks have at most one of these). These
+// will be used by the Google Ads conversion uploader to find the matching
+// click for a given conversion, and by admins debugging attribution.
+ClickSchema.index({ workspace_id: 1, 'external_ids.gclid': 1 }, { sparse: true });
+ClickSchema.index({ workspace_id: 1, 'external_ids.wbraid': 1 }, { sparse: true });
+ClickSchema.index({ workspace_id: 1, 'external_ids.gbraid': 1 }, { sparse: true });
+ClickSchema.index({ workspace_id: 1, 'external_ids.fbclid': 1 }, { sparse: true });
+ClickSchema.index({ workspace_id: 1, 'external_ids.msclkid': 1 }, { sparse: true });
 
 module.exports = mongoose.model('Click', ClickSchema);
