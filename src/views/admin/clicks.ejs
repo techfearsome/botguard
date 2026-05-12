@@ -1,8 +1,13 @@
 <%- include('../partials/header', { ws, page, title: 'Click Log - BotGuard' }) %>
 
 <div class="page-header">
-  <h1>Click Log</h1>
-  <p class="muted">Last 200 clicks · <strong><%= range.label %></strong>. Use filters to narrow down.</p>
+  <div>
+    <h1>Click Log</h1>
+    <p class="muted">Last 200 clicks · <strong><%= range.label %></strong>. Use filters to narrow down.</p>
+  </div>
+  <div>
+    <a href="/admin/clicks.csv?<%= new URLSearchParams(query).toString() %>" class="btn" title="Download up to 10,000 rows matching the current filters">Export CSV</a>
+  </div>
 </div>
 
 <form method="GET" class="filter-bar">

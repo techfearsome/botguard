@@ -709,8 +709,17 @@ router.get('/live/stream', async (req, res) => {
 });
 
 // ---------- Click log ----------
-router.get('/clicks', async (req, res) => {
-  const ws = await resolveWorkspace(req);
+/**
+ * Build the Mongo filter for the clicks list. Used by both `GET /clicks`
+ * (renders the admin view, capped at 200 rows) and `GET /clicks.csv`
+ * (exports the same filtered set, capped higher). Sharing this guarantees
+ * the export contains exactly the rows the admin was looking at, not a
+ * different subset because of a copy-paste drift between two query builders.
+ *
+ * Note that the caller still applies the date range separately via
+ * applyRangeToFilter() because parseRange() needs the req.query directly.
+ */
+function buildClicksFilter(req, ws) {
   const filter = { workspace_id: ws._id };
   if (req.query.campaign) filter.campaign_id = req.query.campaign;
   if (req.query.decision) filter.decision = req.query.decision;
@@ -732,6 +741,12 @@ router.get('/clicks', async (req, res) => {
       ];
     }
   }
+  return filter;
+}
+
+router.get('/clicks', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = buildClicksFilter(req, ws);
 
   // Default range = "today" (controlled by ?range=today|yesterday|7d|30d|all|custom)
   const range = parseRange(req.query);
@@ -752,6 +767,98 @@ router.get('/clicks', async (req, res) => {
     rangeOptions: RANGE_OPTIONS,
     page: 'clicks',
   });
+});
+
+/**
+ * CSV export of the clicks list with the same filters applied as the list
+ * view. Higher row cap (10K) than the list (200) since the whole point is
+ * offline analysis. Columns chosen to be useful for spreadsheet pivots and
+ * ad-platform conversion debugging without bloating the file - includes all
+ * five external click identifiers (gclid, wbraid, gbraid, fbclid, msclkid)
+ * so admins can grep for a specific platform's click to investigate
+ * attribution issues.
+ */
+router.get('/clicks.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = buildClicksFilter(req, ws);
+
+  // Same range semantics as /clicks - parseRange() reads req.query directly,
+  // so the same query string produces the same range here.
+  const range = parseRange(req.query);
+  applyRangeToFilter(filter, range);
+
+  const clicks = await Click.find(filter)
+    .sort({ ts: -1 })
+    .limit(10000)               // higher cap for export, still bounded
+    .populate('campaign_id', 'name slug')
+    .lean();
+
+  const headers = [
+    'ts',                       // ISO timestamp
+    'click_id',                 // our internal click ID
+    'campaign', 'campaign_slug',
+    'decision', 'decision_reason',
+    'page_rendered', 'variant_shown',
+    'risk_score',
+    'ip', 'country', 'asn', 'asn_org',
+    'device_class', 'device_label', 'os', 'browser', 'browser_version',
+    'in_app_browser',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+    // All five ad-platform click identifiers. wbraid/gbraid are the iOS
+    // privacy-preserving aggregate IDs that Apple sends instead of gclid
+    // for ATT-restricted traffic. Including them as separate columns lets
+    // admins pivot/filter by platform when debugging attribution.
+    'gclid', 'wbraid', 'gbraid', 'fbclid', 'msclkid',
+    'referer',
+    'user_agent',
+    'conversion_count',
+  ];
+  const rows = [headers.join(',')];
+  for (const c of clicks) {
+    rows.push([
+      c.ts ? new Date(c.ts).toISOString() : '',
+      c.click_id,
+      c.campaign_id?.name || '',
+      c.campaign_id?.slug || '',
+      c.decision || '',
+      c.decision_reason || '',
+      c.page_rendered || '',
+      c.variant_shown || '',
+      c.scores?.total ?? '',
+      c.ip || '',
+      c.country || '',
+      c.asn ?? '',
+      c.asn_org || '',
+      c.device_class || '',
+      c.ua_parsed?.device_label || '',
+      c.ua_parsed?.os || '',
+      c.ua_parsed?.browser || '',
+      c.ua_parsed?.browser_version || '',
+      c.in_app_browser || '',
+      c.utm?.source || '',
+      c.utm?.medium || '',
+      c.utm?.campaign || '',
+      c.utm?.term || '',
+      c.utm?.content || '',
+      c.external_ids?.gclid   || '',
+      c.external_ids?.wbraid  || '',
+      c.external_ids?.gbraid  || '',
+      c.external_ids?.fbclid  || '',
+      c.external_ids?.msclkid || '',
+      c.referer || '',
+      c.user_agent || '',
+      c.conversion_count ?? 0,
+    ].map(csvEscape).join(','));
+  }
+
+  // Filename includes the date range for self-describing downloads when the
+  // admin's been doing several exports.
+  const today = new Date().toISOString().slice(0, 10);
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="clicks-${today}.csv"`);
+  // CRLF line endings - more compatible with Windows tools (Excel) and
+  // matches the pattern used by /admin/firewall/export.csv.
+  res.send(rows.join('\r\n') + '\r\n');
 });
 
 // ---------- Conversions ----------
