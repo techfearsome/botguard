@@ -7,7 +7,11 @@
 
 const assert = require('assert');
 const path = require('path');
-const { parseUtm, parseExternalIds, UTM_KEYS, EXTERNAL_ID_KEYS } = require(
+const {
+  parseUtm, parseExternalIds, parseValueTrack,
+  UTM_KEYS, EXTERNAL_ID_KEYS,
+  GOOGLE_VALUETRACK_CORE, GOOGLE_VALUETRACK_KEYS, BING_VALUETRACK_KEYS,
+} = require(
   path.resolve(__dirname, '../src/lib/utm')
 );
 
@@ -156,6 +160,201 @@ test('Ignores empty strings (no key set for empty values)', () => {
   // empty identifier = no identifier.
   assert.ok(!('gclid' in out));
   assert.ok(!('wbraid' in out));
+});
+
+console.log('\nparseValueTrack - constants:');
+
+test('GOOGLE_VALUETRACK_CORE contains the 15 essential params', () => {
+  // Lock the canonical list. If a future change removes one of these,
+  // we want to know.
+  for (const key of [
+    'campaignid', 'adgroupid', 'creative', 'keyword', 'matchtype',
+    'network', 'device', 'devicemodel', 'targetid', 'placement',
+    'adposition', 'loc_physical_ms', 'loc_interest_ms',
+    'feeditemid', 'extensionid',
+  ]) {
+    assert.ok(GOOGLE_VALUETRACK_CORE.includes(key),
+      `GOOGLE_VALUETRACK_CORE missing ${key}`);
+  }
+});
+
+test('GOOGLE_VALUETRACK_KEYS includes shopping/travel params', () => {
+  for (const key of ['product_id', 'merchant_id', 'hotel_id', 'travel_start_year']) {
+    assert.ok(GOOGLE_VALUETRACK_KEYS.includes(key),
+      `GOOGLE_VALUETRACK_KEYS missing shopping/travel key ${key}`);
+  }
+});
+
+test('BING_VALUETRACK_KEYS includes Bing-specific params', () => {
+  for (const key of ['querystring', 'matchtype', 'adid', 'orderitemid']) {
+    assert.ok(BING_VALUETRACK_KEYS.includes(key),
+      `BING_VALUETRACK_KEYS missing ${key}`);
+  }
+});
+
+console.log('\nparseValueTrack - basic capture:');
+
+test('Returns empty object for null/non-object/empty input', () => {
+  assert.deepStrictEqual(parseValueTrack(null), {});
+  assert.deepStrictEqual(parseValueTrack(undefined), {});
+  assert.deepStrictEqual(parseValueTrack('not an object'), {});
+  assert.deepStrictEqual(parseValueTrack({}), {});
+});
+
+test('Captures Google ValueTrack when gclid is present', () => {
+  const out = parseValueTrack({
+    gclid: 'CjwKCAjw',
+    campaignid: '12345678',
+    adgroupid: '87654321',
+    keyword: 'cooking school nyc',
+    matchtype: 'e',
+    network: 'g',
+    device: 'm',
+    placement: 'example.com',
+  });
+  assert.ok(out.google, 'expected google subdoc');
+  assert.strictEqual(out.google.campaignid, '12345678');
+  assert.strictEqual(out.google.keyword, 'cooking school nyc');
+  assert.strictEqual(out.google.matchtype, 'e');
+  assert.strictEqual(out.google.network, 'g');
+});
+
+test('Captures Google ValueTrack when wbraid is present (iOS)', () => {
+  // wbraid is the iOS aggregate identifier - same Google platform
+  const out = parseValueTrack({
+    wbraid: 'CjkKCA',
+    campaignid: '999',
+    keyword: 'iphone keyword',
+  });
+  assert.ok(out.google);
+  assert.strictEqual(out.google.campaignid, '999');
+});
+
+test('Captures Google ValueTrack when gbraid is present', () => {
+  const out = parseValueTrack({
+    gbraid: 'CjkKCA',
+    campaignid: '111',
+  });
+  assert.ok(out.google);
+  assert.strictEqual(out.google.campaignid, '111');
+});
+
+test('Captures Bing ValueTrack when msclkid is present (no Google IDs)', () => {
+  const out = parseValueTrack({
+    msclkid: 'bing123',
+    campaignid: '5555',
+    adid: 'bingad',
+    querystring: 'cooking class nyc',
+  });
+  assert.ok(out.bing, 'expected bing subdoc');
+  assert.ok(!out.google, 'should NOT populate google when only msclkid present');
+  assert.strictEqual(out.bing.campaignid, '5555');
+  assert.strictEqual(out.bing.adid, 'bingad');
+  assert.strictEqual(out.bing.querystring, 'cooking class nyc');
+});
+
+test('Defaults to Google semantics when no click ID is present', () => {
+  // Direct traffic with manual ValueTrack tagging (unusual but possible).
+  // We can't tell which platform; default to Google since it's the more
+  // common case in practice.
+  const out = parseValueTrack({
+    campaignid: '777',
+    keyword: 'organic',
+  });
+  assert.ok(out.google);
+  assert.strictEqual(out.google.campaignid, '777');
+});
+
+test('Captures shopping/travel ValueTrack params', () => {
+  const out = parseValueTrack({
+    gclid: 'g123',
+    product_id: 'SKU-9876',
+    merchant_id: '4567',
+    product_country: 'US',
+  });
+  assert.strictEqual(out.google.product_id, 'SKU-9876');
+  assert.strictEqual(out.google.merchant_id, '4567');
+  assert.strictEqual(out.google.product_country, 'US');
+});
+
+console.log('\nparseValueTrack - case sensitivity:');
+
+test('Preserves case in keyword (search terms can be mixed case)', () => {
+  const out = parseValueTrack({
+    gclid: 'g1',
+    keyword: 'Best Cooking Schools NYC',
+  });
+  assert.strictEqual(out.google.keyword, 'Best Cooking Schools NYC');
+});
+
+test('Preserves case in placement (URLs are case-sensitive)', () => {
+  const out = parseValueTrack({
+    gclid: 'g1',
+    placement: 'Example.COM/Path',
+  });
+  assert.strictEqual(out.google.placement, 'Example.COM/Path');
+});
+
+console.log('\nparseValueTrack - allowlist enforcement:');
+
+test('Ignores unknown query parameters (no schema pollution)', () => {
+  // We don't want random URL junk landing in the valuetrack subdoc.
+  const out = parseValueTrack({
+    gclid: 'g1',
+    campaignid: '123',
+    random_junk: 'should be ignored',
+    spam_param: 'also ignored',
+    xss_attempt: '<script>alert(1)</script>',
+  });
+  assert.strictEqual(out.google.campaignid, '123');
+  assert.strictEqual(out.google.random_junk, undefined);
+  assert.strictEqual(out.google.spam_param, undefined);
+  assert.strictEqual(out.google.xss_attempt, undefined);
+});
+
+test('Omits google subdoc entirely when no Google VT params present', () => {
+  // Just a gclid with no other VT params - the google subdoc would be {}.
+  // The function should not populate it (saves Mongo space across millions
+  // of clicks that have a gclid but no other VT tagging).
+  const out = parseValueTrack({ gclid: 'g1' });
+  assert.strictEqual(out.google, undefined);
+});
+
+console.log('\nparseValueTrack - DoS protection:');
+
+test('Caps each value at 512 characters', () => {
+  const long = 'X'.repeat(2000);
+  const out = parseValueTrack({ gclid: 'g1', keyword: long });
+  assert.strictEqual(out.google.keyword.length, 512);
+});
+
+test('Ignores non-string values', () => {
+  const out = parseValueTrack({
+    gclid: 'g1',
+    campaignid: '123',
+    keyword: { not: 'a string' },
+    matchtype: ['array'],
+    network: 42,
+  });
+  assert.strictEqual(out.google.campaignid, '123');
+  assert.strictEqual(out.google.keyword, undefined);
+  assert.strictEqual(out.google.matchtype, undefined);
+  assert.strictEqual(out.google.network, undefined);
+});
+
+test('Ignores empty string values', () => {
+  // Some advertisers leave placeholder syntax in their URLs that Google
+  // doesn't substitute (e.g. {keyword} on a display-network click). Google
+  // replaces with empty string per their docs. We should NOT store empty.
+  const out = parseValueTrack({
+    gclid: 'g1',
+    campaignid: '123',
+    keyword: '',
+    matchtype: '',
+  });
+  assert.strictEqual(out.google.campaignid, '123');
+  assert.ok(!('keyword' in out.google), 'empty keyword should not be stored');
+  assert.ok(!('matchtype' in out.google), 'empty matchtype should not be stored');
 });
 
 console.log('\nparseUtm - regression coverage (existing behavior unchanged):');

@@ -3,7 +3,7 @@ const UAParser = require('ua-parser-js');
 
 const { Click } = require('../models');
 const { getClientIp, hashIp } = require('./ip');
-const { parseUtm, parseExternalIds } = require('./utm');
+const { parseUtm, parseExternalIds, parseValueTrack } = require('./utm');
 const { detectInAppBrowser } = require('./inapp');
 const { classifyDeviceClass } = require('./deviceClass');
 
@@ -117,6 +117,7 @@ function buildClickDoc({ req, workspace, campaign }) {
 
     utm: parseUtm(req.query),
     external_ids: parseExternalIds(req.query),
+    valuetrack: parseValueTrack(req.query),
 
     fingerprint: {},
     scores: {

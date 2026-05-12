@@ -151,6 +151,48 @@
   </section>
 </div>
 
+<%# Google Ads / Bing ValueTrack - dynamic parameters the ad platform
+    substitutes at click time (keyword, matchtype, campaignid, etc.). Only
+    show this panel if the click actually carried ValueTrack data; otherwise
+    it would render a row of empty placeholders for every click which is
+    noise.
+
+    For data to show here, the advertiser must have set up their ad URL
+    template to include the ValueTrack placeholders. The recommended Google
+    template is:
+      ?gclid={gclid}&campaignid={campaignid}&adgroupid={adgroupid}
+       &keyword={keyword}&matchtype={matchtype}&network={network}
+       &device={device}&placement={placement}&creative={creative}
+    See https://support.google.com/google-ads/answer/6305348 for the full list. %>
+<% const vtG = click.valuetrack?.google || {}; %>
+<% const vtB = click.valuetrack?.bing || {}; %>
+<% const hasVtG = Object.keys(vtG).length > 0; %>
+<% const hasVtB = Object.keys(vtB).length > 0; %>
+
+<% if (hasVtG || hasVtB) { %>
+<section class="panel">
+  <h3>ValueTrack <span class="muted" style="font-weight:normal; font-size:13px;">(ad platform's dynamic parameters)</span></h3>
+
+  <% if (hasVtG) { %>
+    <h4 style="margin-top:0;">Google Ads</h4>
+    <table class="table table-dense">
+      <% Object.entries(vtG).forEach(([k, v]) => { %>
+        <tr><td><%= k %></td><td class="mono"><%= v %></td></tr>
+      <% }) %>
+    </table>
+  <% } %>
+
+  <% if (hasVtB) { %>
+    <h4 style="margin-top:<%= hasVtG ? '16px' : '0' %>;">Bing Ads</h4>
+    <table class="table table-dense">
+      <% Object.entries(vtB).forEach(([k, v]) => { %>
+        <tr><td><%= k %></td><td class="mono"><%= v %></td></tr>
+      <% }) %>
+    </table>
+  <% } %>
+</section>
+<% } %>
+
 <section class="panel">
   <h3>Fingerprint</h3>
   <% if (click.fingerprint && Object.keys(click.fingerprint).length > 0) { %>

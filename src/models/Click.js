@@ -77,6 +77,24 @@ const ClickSchema = new mongoose.Schema({
     li_fat_id: String, // LinkedIn
   },
 
+  // Ad-platform ValueTrack parameters - the dynamic placeholders Google
+  // Ads and Bing Ads replace with real values at click time (e.g. {keyword},
+  // {campaignid}, {matchtype}, {placement}). Captured into a nested subdoc
+  // keyed by platform so we can show "Google said this click came from
+  // keyword 'cooking school nyc' with match_type 'exact'" in the click
+  // detail view.
+  //
+  // Schema.Types.Mixed because the set of keys varies by ad platform and
+  // by campaign type (shopping vs search vs display). The allowlist of
+  // valid keys lives in src/lib/utm.js so junk URL params can't pollute
+  // this subdoc - parseValueTrack() filters before write.
+  //
+  // Shape: { google: { campaignid, keyword, matchtype, ... }, bing: {...} }
+  valuetrack: {
+    google: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    bing:   { type: mongoose.Schema.Types.Mixed, default: undefined },
+  },
+
   // Fingerprint (populated by JS challenge in week 2)
   fingerprint: {
     canvas: String,

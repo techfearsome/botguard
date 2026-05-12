@@ -68,6 +68,18 @@ function makeState() {
         device_class: 'iphone', ua_parsed: { device_label: 'iPhone', os: 'iOS', browser: 'Safari', browser_version: '17' },
         utm: { source: 'google', medium: 'cpc', campaign: 'spring' },
         external_ids: { gclid: 'GCL-mixedCASE123', wbraid: '' },
+        valuetrack: {
+          google: {
+            campaignid: '12345678',
+            adgroupid: '87654321',
+            creative: 'creative-id',
+            keyword: 'cooking school nyc',
+            matchtype: 'e',
+            network: 'g',
+            device: 'm',
+            placement: 'example.com',
+          },
+        },
         user_agent: 'Mozilla/5.0',
         scores: { total: 12 },
         conversion_count: 1,
@@ -252,10 +264,42 @@ async function run() {
     const firstLine = r.body.split('\r\n')[0];
     // Check key columns are present - the full list is in admin/index.js
     for (const col of ['ts', 'click_id', 'campaign', 'decision', 'decision_reason',
-                       'ip', 'country', 'gclid', 'wbraid', 'gbraid', 'fbclid', 'msclkid']) {
+                       'ip', 'country', 'gclid', 'wbraid', 'gbraid', 'fbclid', 'msclkid',
+                       // ValueTrack columns - Google-prefixed to distinguish from
+                       // regular utm_ columns
+                       'g_campaignid', 'g_adgroupid', 'g_creative',
+                       'g_keyword', 'g_matchtype', 'g_network', 'g_device', 'g_placement']) {
       assert.ok(firstLine.split(',').includes(col),
         `expected column ${col} in header, got: ${firstLine}`);
     }
+  });
+
+  console.log('\nValueTrack data in CSV export:');
+
+  await test('ValueTrack values appear in the matching click row', async () => {
+    // c1 has valuetrack.google populated; the export should surface them.
+    stubState = makeState();
+    const r = await fetchOnce(server, '/admin/clicks.csv?range=all&click_id=GCL-mixedCASE123');
+    const lines = r.body.split('\r\n').filter(Boolean);
+    assert.strictEqual(lines.length, 2, 'expected 1 header + 1 match');
+    const row = lines[1];
+    // Verify the high-signal VT values are present in the row
+    assert.ok(row.includes('12345678'), `expected campaignid in row, got: ${row}`);
+    assert.ok(row.includes('87654321'), `expected adgroupid in row, got: ${row}`);
+    assert.ok(row.includes('cooking school nyc'), `expected keyword in row, got: ${row}`);
+    assert.ok(row.includes(',e,'), `expected matchtype 'e' in row, got: ${row}`);
+    assert.ok(row.includes('example.com'), `expected placement in row, got: ${row}`);
+  });
+
+  await test('Empty ValueTrack columns for clicks without VT data', async () => {
+    // c2 has no valuetrack subdoc; its row should still have the columns
+    // but with empty values (not undefined, not "undefined" as a string).
+    stubState = makeState();
+    const r = await fetchOnce(server, '/admin/clicks.csv?range=all&decision=block');
+    // c2 row exists; verify it doesn't include "undefined" - that would mean
+    // we're stringifying undefined instead of using empty cells
+    assert.ok(!r.body.includes('undefined'),
+      `CSV should never contain literal "undefined" for missing VT data`);
   });
 
   await test('Lines end with CRLF', async () => {

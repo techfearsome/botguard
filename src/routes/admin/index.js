@@ -840,6 +840,13 @@ router.get('/clicks.csv', async (req, res) => {
     // for ATT-restricted traffic. Including them as separate columns lets
     // admins pivot/filter by platform when debugging attribution.
     'gclid', 'wbraid', 'gbraid', 'fbclid', 'msclkid',
+    // Google Ads ValueTrack - the high-signal subset of the 29 parameters
+    // we capture. Skipping the shopping/travel ones (rare for most
+    // advertisers) and the geo-target IDs (numeric, not human-useful in a
+    // spreadsheet without a lookup table). The full set is still in
+    // click.valuetrack.google and visible on the click-detail page.
+    'g_campaignid', 'g_adgroupid', 'g_creative',
+    'g_keyword', 'g_matchtype', 'g_network', 'g_device', 'g_placement',
     'referer',
     'user_agent',
     'conversion_count',
@@ -876,6 +883,14 @@ router.get('/clicks.csv', async (req, res) => {
       c.external_ids?.gbraid  || '',
       c.external_ids?.fbclid  || '',
       c.external_ids?.msclkid || '',
+      c.valuetrack?.google?.campaignid || '',
+      c.valuetrack?.google?.adgroupid  || '',
+      c.valuetrack?.google?.creative   || '',
+      c.valuetrack?.google?.keyword    || '',
+      c.valuetrack?.google?.matchtype  || '',
+      c.valuetrack?.google?.network    || '',
+      c.valuetrack?.google?.device     || '',
+      c.valuetrack?.google?.placement  || '',
       c.referer || '',
       c.user_agent || '',
       c.conversion_count ?? 0,
