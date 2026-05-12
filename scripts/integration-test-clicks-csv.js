@@ -114,7 +114,7 @@ function makeState() {
 }
 
 function makeFindChain(docs) {
-  // Mimic the .find().sort().limit().populate().lean() chain
+  // Mimic the .find().sort().skip().limit().populate().lean() chain
   const state = { docs: docs.slice(), populate: null };
   const chain = {
     sort: (s) => {
@@ -127,6 +127,7 @@ function makeFindChain(docs) {
       });
       return chain;
     },
+    skip: (n) => { state.docs = state.docs.slice(n); return chain; },
     limit: (n) => { state.docs = state.docs.slice(0, n); return chain; },
     populate: (field, select) => { state.populate = field; return chain; },
     select: () => chain,
@@ -177,6 +178,7 @@ const stubModels = {
   Workspace: { findOne: async () => stubState.workspace },
   Click: {
     find: (filter) => makeFindChain(stubState.clicks.filter((c) => applyFilter(c, filter))),
+    countDocuments: async (filter) => stubState.clicks.filter((c) => applyFilter(c, filter)).length,
   },
   Campaign: {
     find: () => ({ select: () => ({ lean: async () => stubState.campaigns }) }),

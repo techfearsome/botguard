@@ -1210,3 +1210,71 @@ pre.code-editor .token.italic       { font-style: italic; }
     font-size: 12px;
   }
 }
+
+
+/* ============================================================================
+   Pagination control
+   ============================================================================
+   Used at the bottom of the clicks list. Layout: prev/next + page X of Y on
+   the left, per-page selector on the right. Stacks on mobile. */
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding: 12px 0;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pagination-page-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 0 8px;
+}
+
+.pagination-page-info input[type="number"] {
+  /* Compact text input matching the surrounding font and color tokens */
+  padding: 4px 6px;
+  font-size: 13px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  color: var(--text-body);
+  border-radius: var(--radius-sm);
+}
+
+.pagination-per-page {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Disabled-state buttons that still render in flow (greyed out) so the
+   layout doesn't jump when you reach the first/last page. */
+.btn.disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.4;
+  pointer-events: none;
+  cursor: default;
+}
+
+@media (max-width: 699px) {
+  .pagination {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pagination-controls {
+    justify-content: center;
+  }
+}

@@ -3,7 +3,16 @@
 <div class="page-header">
   <div>
     <h1>Click Log</h1>
-    <p class="muted">Last 200 clicks · <strong><%= range.label %></strong>. Use filters to narrow down.</p>
+    <p class="muted">
+      <% if (totalCount === 0) { %>
+        No clicks in <strong><%= range.label %></strong>.
+      <% } else { %>
+        Showing <strong><%= showingFrom.toLocaleString() %>–<%= showingTo.toLocaleString() %></strong>
+        of <strong><%= totalCount.toLocaleString() %></strong> clicks
+        · <strong><%= range.label %></strong>.
+        Use filters to narrow down.
+      <% } %>
+    </p>
   </div>
   <div>
     <a href="/admin/clicks.csv?<%= new URLSearchParams(query).toString() %>" class="btn" title="Download up to 10,000 rows matching the current filters">Export CSV</a>
@@ -107,6 +116,75 @@
       </tr>
     <% }) %>
   </table></div>
+
+  <%# Pagination control. Preserves all current filters via the form, so
+      jumping pages doesn't lose the active query. The per-page selector
+      auto-submits on change. The page number input is the only thing
+      that's manually typed-and-submitted. %>
+  <nav class="pagination" aria-label="Click log pagination">
+    <% function paginationUrl(targetPage) {
+         const params = new URLSearchParams(query);
+         params.set('page_n', String(targetPage));
+         params.set('per', String(perPage));
+         return '/admin/clicks?' + params.toString();
+       } %>
+
+    <div class="pagination-controls">
+      <% if (currentPage > 1) { %>
+        <a href="<%= paginationUrl(1) %>" class="btn btn-small" title="First page">« First</a>
+        <a href="<%= paginationUrl(currentPage - 1) %>" class="btn btn-small" rel="prev">‹ Prev</a>
+      <% } else { %>
+        <span class="btn btn-small disabled" aria-disabled="true">« First</span>
+        <span class="btn btn-small disabled" aria-disabled="true">‹ Prev</span>
+      <% } %>
+
+      <span class="pagination-page-info">
+        Page
+        <form method="GET" action="/admin/clicks" style="display:inline">
+          <%# Hidden inputs preserve every other filter. We deliberately
+              forward `per` so a manually typed page number keeps the
+              currently-selected per-page size. %>
+          <% Object.entries(query).forEach(([k, v]) => { %>
+            <% if (k !== 'page_n' && v !== '' && v != null) { %>
+              <input type="hidden" name="<%= k %>" value="<%= v %>">
+            <% } %>
+          <% }) %>
+          <input type="hidden" name="per" value="<%= perPage %>">
+          <input type="number" name="page_n" value="<%= currentPage %>"
+                 min="1" max="<%= totalPages %>"
+                 style="width:70px; text-align:center;"
+                 aria-label="Go to page number">
+        </form>
+        of <strong><%= totalPages.toLocaleString() %></strong>
+      </span>
+
+      <% if (currentPage < totalPages) { %>
+        <a href="<%= paginationUrl(currentPage + 1) %>" class="btn btn-small" rel="next">Next ›</a>
+        <a href="<%= paginationUrl(totalPages) %>" class="btn btn-small" title="Last page">Last »</a>
+      <% } else { %>
+        <span class="btn btn-small disabled" aria-disabled="true">Next ›</span>
+        <span class="btn btn-small disabled" aria-disabled="true">Last »</span>
+      <% } %>
+    </div>
+
+    <div class="pagination-per-page">
+      <form method="GET" action="/admin/clicks" style="display:inline">
+        <% Object.entries(query).forEach(([k, v]) => { %>
+          <% if (k !== 'per' && k !== 'page_n' && v !== '' && v != null) { %>
+            <input type="hidden" name="<%= k %>" value="<%= v %>">
+          <% } %>
+        <% }) %>
+        <label class="muted" style="font-size:13px;">
+          Per page:
+          <select name="per" onchange="this.form.submit()">
+            <% perPageOptions.forEach(n => { %>
+              <option value="<%= n %>" <%= n === perPage ? 'selected' : '' %>><%= n %></option>
+            <% }) %>
+          </select>
+        </label>
+      </form>
+    </div>
+  </nav>
 <% } %>
 
 <%- include('../partials/footer') %>
