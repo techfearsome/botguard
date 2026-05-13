@@ -192,6 +192,16 @@ async function start() {
 
   await ensureDefaultWorkspace();
 
+  // Start background CIDR intelligence worker — analyses click traffic
+  // every 60s and flags suspicious subnets for admin review.
+  // Fire-and-forget; errors are logged internally, never crash the server.
+  try {
+    const { startCidrAnalyser } = require('./lib/cidrAnalyser');
+    startCidrAnalyser();
+  } catch (e) {
+    logger.warn('cidr_analyser_start_failed', { err: e.message });
+  }
+
   const port = Number(process.env.PORT) || 3000;
   const server = app.listen(port, () => {
     logger.info('server_started', { port, base_url: process.env.BASE_URL });

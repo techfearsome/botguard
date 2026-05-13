@@ -1,0 +1,341 @@
+<%- include('../partials/header', { ws, page, title: 'CIDR Intelligence - BotGuard', intelNewCount: stats.new }) %>
+
+<%
+function scoreColor(score) {
+  if (score >= 80) return '#ef4444';
+  if (score >= 60) return '#f97316';
+  if (score >= 40) return '#eab308';
+  return '#6b7280';
+}
+function scoreLabel(score) {
+  if (score >= 80) return 'CRITICAL';
+  if (score >= 60) return 'HIGH';
+  if (score >= 40) return 'MEDIUM';
+  return 'LOW';
+}
+function fmtRate(rate) {
+  return rate ? (rate * 100).toFixed(1) + '%' : '0%';
+}
+%>
+
+<div class="page-header">
+  <div>
+    <h1>CIDR Intelligence</h1>
+    <p class="muted">
+      Suspicious subnet detection — analysed every 60 seconds from your click traffic.
+      <% if (lastAnalysedAt) { %>
+        Last run: <strong><%- localTime(lastAnalysedAt) %></strong>
+      <% } else { %>
+        <em>First run pending...</em>
+      <% } %>
+    </p>
+  </div>
+  <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
+    <form method="POST" action="/admin/intelligence/run-now" style="display:inline">
+      <button type="submit" class="btn" title="Trigger analysis run immediately">↻ Run Now</button>
+    </form>
+    <a href="/admin/intelligence/export.csv?min_score=<%= minScore %>" class="btn btn-primary"
+       title="Export flagged CIDRs in Google Ads format and mark as exported">
+      Export Google Ads
+    </a>
+  </div>
+</div>
+
+<%# ── Stat cards ─────────────────────────────────────────────────── %>
+<div class="stat-grid" style="margin-bottom:16px;">
+  <div class="stat-card" style="border-left:3px solid #ef4444;">
+    <div class="stat-label">Critical (80+)</div>
+    <div class="stat-value" style="color:#ef4444;"><%= stats.new %></div>
+  </div>
+  <div class="stat-card" style="border-left:3px solid #f97316;">
+    <div class="stat-label">High (60+)</div>
+    <div class="stat-value" style="color:#f97316;"><%= stats.critical %></div>
+  </div>
+  <div class="stat-card" style="border-left:3px solid #eab308;">
+    <div class="stat-label">Watching (40+)</div>
+    <div class="stat-value" style="color:#eab308;"><%= stats.watching %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Shown</div>
+    <div class="stat-value"><%= entries.length %></div>
+  </div>
+</div>
+
+<%# ── Live indicator ────────────────────────────────────────────── %>
+<div id="live-indicator" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:13px; color:var(--text-secondary);">
+  <span class="nav-pulse" style="background:#22c55e;" aria-hidden="true"></span>
+  <span id="live-status">Live — checking every 30s</span>
+  <span id="new-alert" style="display:none; color:#ef4444; font-weight:600; margin-left:8px;"></span>
+</div>
+
+<%# ── Filters ────────────────────────────────────────────────────── %>
+<form method="GET" action="/admin/intelligence" class="filter-bar" id="filter-form">
+  <select name="status">
+    <option value="active"  <%= statusFilter === 'active'  ? 'selected' : '' %>>Active (unreviewed)</option>
+    <option value="all"     <%= statusFilter === 'all'     ? 'selected' : '' %>>All statuses</option>
+    <option value="exported"<%= statusFilter === 'exported'? 'selected' : '' %>>Exported</option>
+    <option value="blocked" <%= statusFilter === 'blocked' ? 'selected' : '' %>>Blocked</option>
+    <option value="dismissed"<%= statusFilter==='dismissed'? 'selected' : '' %>>Dismissed</option>
+  </select>
+
+  <select name="min_score">
+    <option value="80" <%= minScore >= 80 ? 'selected' : '' %>>Critical only (80+)</option>
+    <option value="60" <%= minScore >= 60 && minScore < 80 ? 'selected' : '' %>>High+ (60+)</option>
+    <option value="40" <%= minScore < 60 ? 'selected' : '' %>>All flagged (40+)</option>
+  </select>
+
+  <select name="version">
+    <option value="all" <%= versionFilter === 'all' ? 'selected' : '' %>>IPv4 + IPv6</option>
+    <option value="v6"  <%= versionFilter === 'v6'  ? 'selected' : '' %>>IPv6 only</option>
+    <option value="v4"  <%= versionFilter === 'v4'  ? 'selected' : '' %>>IPv4 only</option>
+  </select>
+
+  <button type="submit" class="btn">Filter</button>
+</form>
+
+<% if (entries.length === 0) { %>
+  <div class="empty-state">
+    <h3>No flagged CIDRs yet</h3>
+    <p class="muted">
+      The analyser runs every 60 seconds. As suspicious subnets are detected from your click traffic they'll appear here.
+      <br>Click "↻ Run Now" to trigger an immediate analysis pass.
+    </p>
+  </div>
+<% } else { %>
+
+<%# ── Bulk actions bar ───────────────────────────────────────────── %>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+  <label style="font-size:13px; color:var(--text-secondary); display:flex; align-items:center; gap:6px;">
+    <input type="checkbox" id="select-all" onchange="toggleAll(this)">
+    Select all
+  </label>
+  <form method="POST" action="/admin/intelligence/bulk" id="bulk-form" style="display:flex; gap:6px;">
+    <input type="hidden" name="ids" id="bulk-ids">
+    <button type="button" class="btn btn-small" onclick="bulkAction('exported')">Export selected</button>
+    <button type="button" class="btn btn-small" onclick="bulkAction('blocked')">Block selected</button>
+    <button type="button" class="btn btn-small" onclick="bulkAction('dismissed')">Dismiss selected</button>
+  </form>
+</div>
+
+<%# ── Main table ─────────────────────────────────────────────────── %>
+<div class="table-scroll" id="intel-table">
+  <table class="table">
+    <thead>
+      <tr>
+        <th style="width:24px;"></th>
+        <th>CIDR</th>
+        <th>Score</th>
+        <th>Signals</th>
+        <th>Hits</th>
+        <th>IPs</th>
+        <th>Conv</th>
+        <th>Days</th>
+        <th>ASN</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    <% entries.forEach(e => { %>
+      <tr data-id="<%= e._id %>" class="intel-row">
+        <td><input type="checkbox" class="row-select" value="<%= e._id %>"></td>
+
+        <%# CIDR + version badge %>
+        <td>
+          <span class="mono" style="font-size:12px;"><%= e.cidr %></span>
+          <span class="badge" style="font-size:10px; margin-left:4px; opacity:0.6;"><%= e.ip_version %></span>
+          <% if (e.fake_ua_count > 0) { %>
+            <br><span class="badge badge-block" style="font-size:10px;" title="<%= e.fake_ua_count %> hits with impossible iOS/Android version">🤖 fake UA ×<%= e.fake_ua_count %></span>
+          <% } %>
+        </td>
+
+        <%# Score pill %>
+        <td>
+          <span style="
+            display:inline-block; padding:3px 8px; border-radius:4px;
+            background:<%= scoreColor(e.score) %>22;
+            color:<%= scoreColor(e.score) %>;
+            font-weight:700; font-size:13px; font-family:monospace;
+          "><%= e.score %></span>
+          <div style="font-size:10px; color:<%= scoreColor(e.score) %>; margin-top:2px;"><%= scoreLabel(e.score) %></div>
+        </td>
+
+        <%# Signal breakdown mini-bar %>
+        <td style="min-width:140px;">
+          <% const sig = e.signals || {}; %>
+          <% const sigList = [
+            ['vol', sig.volume||0, 20, '#6366f1'],
+            ['conv', sig.conversion||0, 25, '#ef4444'],
+            ['rot', sig.rotation||0, 20, '#f97316'],
+            ['ua', sig.ua_uniform||0, 15, '#eab308'],
+            ['days', sig.persistence||0, 15, '#22c55e'],
+            ['fake', sig.fake_ua||0, 5, '#8b5cf6'],
+          ]; %>
+          <div style="display:flex; gap:2px; align-items:flex-end; height:20px;">
+          <% sigList.forEach(([label, val, max, color]) => { %>
+            <div title="<%= label %>: <%= val %>/<%= max %>" style="
+              width:16px; height:<%= Math.max(2, Math.round(val/max*20)) %>px;
+              background:<%= color %>; border-radius:2px; opacity:0.85;
+              flex-shrink:0;
+            "></div>
+          <% }); %>
+          </div>
+          <div style="display:flex; gap:2px; margin-top:2px;">
+          <% sigList.forEach(([label]) => { %>
+            <div style="width:16px; font-size:8px; text-align:center; color:var(--text-secondary); flex-shrink:0;"><%= label %></div>
+          <% }); %>
+          </div>
+        </td>
+
+        <td class="mono"><%= e.hit_count %></td>
+        <td class="mono"><%= e.unique_ip_count %></td>
+
+        <%# Conversion rate — red if zero, muted if low %>
+        <td>
+          <% const rate = e.conv_rate || 0; %>
+          <span style="color:<%= rate === 0 ? '#ef4444' : rate < 0.01 ? '#f97316' : 'inherit' %>; font-weight:<%= rate === 0 ? '700' : 'normal' %>;">
+            <%= fmtRate(rate) %>
+          </span>
+          <% if (e.conversion_count > 0) { %>
+            <small class="muted">(×<%= e.conversion_count %>)</small>
+          <% } %>
+        </td>
+
+        <%# Days seen — persistence indicator %>
+        <td>
+          <span title="<%= (e.days_seen_list||[]).join(', ') || 'unknown' %>">
+            <%= e.days_seen_count || 1 %> day<%= (e.days_seen_count||1) !== 1 ? 's' : '' %>
+          </span>
+          <% if (e.consecutive_days >= 2) { %>
+            <br><small style="color:#ef4444; font-size:10px;">↻ <%= e.consecutive_days %> in a row</small>
+          <% } %>
+        </td>
+
+        <td style="max-width:180px; font-size:12px;" class="cell-truncate-sm"><%= e.asn_org || '—' %></td>
+
+        <%# Status badge %>
+        <td>
+          <% const statusColors = { new:'#ef4444', reviewing:'#f97316', blocked:'#6b7280', exported:'#22c55e', dismissed:'#6b7280' }; %>
+          <span class="badge" style="background:<%= (statusColors[e.status]||'#6b7280') %>22; color:<%= statusColors[e.status]||'#6b7280' %>; font-size:11px;">
+            <%= e.status %>
+          </span>
+          <% if (e.last_seen) { %>
+            <br><small class="muted" style="font-size:10px;"><%- localTime(e.last_seen) %></small>
+          <% } %>
+        </td>
+
+        <%# Action buttons %>
+        <td style="white-space:nowrap;">
+          <div style="display:flex; gap:4px; flex-wrap:wrap;">
+            <a href="/admin/clicks?click_id=&range=today" class="btn btn-small" title="View clicks from this subnet">Clicks</a>
+
+            <% if (e.status !== 'exported') { %>
+            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline">
+              <input type="hidden" name="status" value="exported">
+              <button type="submit" class="btn btn-small btn-primary" title="Add to next Google Ads export">Export</button>
+            </form>
+            <% } %>
+
+            <% if (e.status !== 'blocked') { %>
+            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline">
+              <input type="hidden" name="status" value="blocked">
+              <button type="submit" class="btn btn-small" title="Add to BotGuard CIDR blacklist" style="border-color:#f97316; color:#f97316;">Block</button>
+            </form>
+            <% } %>
+
+            <% if (e.status !== 'dismissed') { %>
+            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline"
+                  onsubmit="return confirm('Dismiss this CIDR? It will be hidden from active view.')">
+              <input type="hidden" name="status" value="dismissed">
+              <button type="submit" class="btn btn-small" title="Not a threat — dismiss">✕</button>
+            </form>
+            <% } %>
+          </div>
+
+          <%# Sample IPs tooltip %>
+          <% if (e.sample_ips && e.sample_ips.length) { %>
+          <details style="margin-top:4px;">
+            <summary style="font-size:10px; cursor:pointer; color:var(--text-secondary);">sample IPs</summary>
+            <div style="font-size:10px; font-family:monospace; line-height:1.6; margin-top:2px;">
+              <% e.sample_ips.slice(0,5).forEach(ip => { %><div><%= ip %></div><% }); %>
+            </div>
+          </details>
+          <% } %>
+        </td>
+      </tr>
+    <% }); %>
+    </tbody>
+  </table>
+</div>
+
+<details style="margin-top:16px;">
+  <summary class="muted" style="cursor:pointer; font-size:13px;">How scoring works</summary>
+  <div style="margin-top:8px; font-size:13px; line-height:1.7; max-width:700px;">
+    <p>Each subnet is scored 0–100 across six signals:</p>
+    <table class="table table-dense" style="max-width:600px;">
+      <tr><td><strong>vol</strong></td><td>0–20</td><td>Hit volume — high traffic from one block</td></tr>
+      <tr><td><strong>conv</strong></td><td>0–25</td><td>Conversion rate — zero conv is the strongest bot signal</td></tr>
+      <tr><td><strong>rot</strong></td><td>0–20</td><td>IP rotation — many unique IPs per subnet = proxy pool</td></tr>
+      <tr><td><strong>ua</strong></td><td>0–15</td><td>UA uniformity — bots reuse the same browser string</td></tr>
+      <tr><td><strong>days</strong></td><td>0–15</td><td>Persistence — same subnet returning across multiple days</td></tr>
+      <tr><td><strong>fake</strong></td><td>0–5</td><td>Fake UA — impossible iOS/Android versions (iOS 26+ = bot)</td></tr>
+    </table>
+    <p><strong>80+</strong> = strong recommendation | <strong>60+</strong> = flag for review | <strong>40+</strong> = watch</p>
+    <p>Analysis runs every 60 seconds over the last 24h of click data. Use "Run Now" for immediate results.</p>
+  </div>
+</details>
+
+<% } %>
+
+<script>
+// ── Checkbox helpers ────────────────────────────────────────────────────
+function toggleAll(cb) {
+  document.querySelectorAll('.row-select').forEach(r => r.checked = cb.checked);
+}
+
+function bulkAction(status) {
+  const checked = [...document.querySelectorAll('.row-select:checked')].map(c => c.value);
+  if (!checked.length) { alert('Select at least one row.'); return; }
+  if (!confirm(`Mark ${checked.length} CIDR(s) as "${status}"?`)) return;
+  document.getElementById('bulk-ids').value = checked.join(',');
+  document.getElementById('bulk-form').querySelector('[name=status]')?.remove();
+  const input = document.createElement('input');
+  input.type = 'hidden'; input.name = 'status'; input.value = status;
+  document.getElementById('bulk-form').appendChild(input);
+  document.getElementById('bulk-form').submit();
+}
+
+// ── Live polling — checks for new detections every 30s ─────────────────
+(function() {
+  const pageLoadTime = new Date().toISOString();
+  let lastNewCount = <%= stats.new %>;
+  const statusEl = document.getElementById('live-status');
+  const alertEl  = document.getElementById('new-alert');
+
+  function poll() {
+    fetch('/admin/intelligence/summary?since=' + encodeURIComponent(pageLoadTime))
+      .then(r => r.json())
+      .then(data => {
+        if (data.newCount > lastNewCount) {
+          const delta = data.newCount - lastNewCount;
+          alertEl.textContent = `⚡ ${delta} new detection${delta > 1 ? 's' : ''} — click to refresh`;
+          alertEl.style.display = 'inline';
+          alertEl.style.cursor = 'pointer';
+          alertEl.onclick = () => location.reload();
+        }
+        lastNewCount = data.newCount;
+        statusEl.textContent = 'Live — last checked ' + new Date().toLocaleTimeString();
+      })
+      .catch(() => {
+        statusEl.textContent = 'Connection issue — retrying...';
+      });
+  }
+
+  // Poll every 30 seconds
+  setInterval(poll, 30000);
+  // First check after 10s
+  setTimeout(poll, 10000);
+})();
+</script>
+
+<%- include('../partials/footer') %>

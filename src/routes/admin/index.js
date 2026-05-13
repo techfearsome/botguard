@@ -1336,6 +1336,206 @@ router.get('/firewall/full.csv', async (req, res) => {
   res.send(lines.join('\r\n') + '\r\n');
 });
 
+// ---------- CIDR Intelligence (bot subnet detection) ----------
+
+const CidrIntelligence = require('../../models/CidrIntelligence');
+
+// Summary endpoint — polled every 30s by the live view for new detections
+router.get('/intelligence/summary', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const since = req.query.since ? new Date(req.query.since) : new Date(Date.now() - 5 * 60 * 1000);
+
+  const [newCount, criticalCount, totalActive] = await Promise.all([
+    CidrIntelligence.countDocuments({
+      workspace_id: ws._id,
+      status: 'new',
+      score: { $gte: 40 },
+      updatedAt: { $gte: since },
+    }),
+    CidrIntelligence.countDocuments({
+      workspace_id: ws._id,
+      status: 'new',
+      score: { $gte: 80 },
+    }),
+    CidrIntelligence.countDocuments({
+      workspace_id: ws._id,
+      status: { $in: ['new', 'reviewing'] },
+      score: { $gte: 40 },
+    }),
+  ]);
+
+  res.json({ newCount, criticalCount, totalActive, asOf: new Date() });
+});
+
+// Main intelligence list view
+router.get('/intelligence', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+
+  // Status filter — default shows unactioned only
+  const statusFilter = req.query.status || 'active';
+  let statusQuery;
+  if (statusFilter === 'active')    statusQuery = { $in: ['new', 'reviewing'] };
+  else if (statusFilter === 'all')  statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported', 'dismissed'] };
+  else                              statusQuery = statusFilter;
+
+  // Score filter
+  const minScore = parseInt(req.query.min_score, 10) || 40;
+
+  // IP version filter
+  const versionFilter = req.query.version || 'all';
+
+  const filter = {
+    workspace_id: ws._id,
+    status: statusQuery,
+    score: { $gte: minScore },
+  };
+  if (versionFilter !== 'all') filter.ip_version = versionFilter;
+
+  const entries = await CidrIntelligence.find(filter)
+    .sort({ score: -1, last_seen: -1 })
+    .limit(200)
+    .lean();
+
+  // Stats for summary bar
+  const [statNew, statCritical, statWatching] = await Promise.all([
+    CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 80 } }),
+    CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 60 } }),
+    CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 40 } }),
+  ]);
+
+  // Last analysis run time
+  const lastEntry = await CidrIntelligence.findOne({ workspace_id: ws._id })
+    .sort({ last_analysed_at: -1 }).select('last_analysed_at').lean();
+
+  res.render('admin/intelligence', {
+    ws,
+    page: 'intelligence',
+    entries,
+    statusFilter,
+    minScore,
+    versionFilter,
+    stats: { new: statNew, critical: statCritical, watching: statWatching },
+    lastAnalysedAt: lastEntry?.last_analysed_at || null,
+  });
+});
+
+// Update status — block / export / dismiss / reviewing
+router.post('/intelligence/:id/status', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { status, notes } = req.body;
+  const validStatuses = CidrIntelligence.schema.statics.STATUSES;
+  if (!validStatuses.includes(status)) return res.redirect('/admin/intelligence');
+
+  const update = { status, notes: (notes || '').slice(0, 500) };
+  if (status === 'blocked')  update.blocked_at  = new Date();
+  if (status === 'exported') update.exported_at  = new Date();
+  if (status === 'dismissed') update.dismissed_at = new Date();
+
+  await CidrIntelligence.updateOne(
+    { _id: req.params.id, workspace_id: ws._id },
+    { $set: update }
+  );
+  res.redirect('back');
+});
+
+// Bulk status update — select multiple CIDRs and act on them
+router.post('/intelligence/bulk', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const ids = String(req.body.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+  const status = req.body.status;
+  const validStatuses = ['blocked', 'exported', 'dismissed', 'reviewing'];
+  if (!ids.length || !validStatuses.includes(status)) return res.redirect('/admin/intelligence');
+
+  const update = { status };
+  if (status === 'blocked')   update.blocked_at  = new Date();
+  if (status === 'exported')  update.exported_at  = new Date();
+  if (status === 'dismissed') update.dismissed_at = new Date();
+
+  await CidrIntelligence.updateMany(
+    { _id: { $in: ids }, workspace_id: ws._id },
+    { $set: update }
+  );
+  res.redirect('/admin/intelligence');
+});
+
+// Delete a single entry
+router.post('/intelligence/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  await CidrIntelligence.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+  res.redirect('/admin/intelligence');
+});
+
+// Trigger manual analysis run
+router.post('/intelligence/run-now', async (req, res) => {
+  try {
+    const { runAnalysis } = require('../../lib/cidrAnalyser');
+    runAnalysis();  // fire and forget — runs in background
+  } catch (e) { /* logged inside */ }
+  res.redirect('/admin/intelligence');
+});
+
+// Export flagged CIDRs as Google Ads exclusion list
+// Format: IPv4 → x.x.x.* wildcard, IPv6 → compressed CIDR
+router.get('/intelligence/export.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+
+  const statusFilter = req.query.status === 'all'
+    ? { $in: ['new', 'reviewing', 'exported', 'blocked'] }
+    : { $in: ['exported', 'new', 'reviewing'] };
+
+  const minScore = parseInt(req.query.min_score, 10) || 60;
+
+  const entries = await CidrIntelligence.find({
+    workspace_id: ws._id,
+    status: statusFilter,
+    score: { $gte: minScore },
+  }).sort({ score: -1 }).limit(500).lean();
+
+  // Mark as exported
+  const ids = entries.map(e => e._id);
+  if (ids.length) {
+    await CidrIntelligence.updateMany(
+      { _id: { $in: ids } },
+      { $set: { status: 'exported', exported_at: new Date() } }
+    );
+  }
+
+  // Google Ads format
+  const lines = [
+    `# BotGuard CIDR Intelligence Export`,
+    `# Generated: ${new Date().toISOString()}`,
+    `# Entries: ${entries.length} (score >= ${minScore})`,
+    `# Add to: Google Ads > Settings > IP Exclusions`,
+    ``,
+  ];
+
+  // Group by score band
+  const critical = entries.filter(e => e.score >= 80);
+  const high     = entries.filter(e => e.score >= 60 && e.score < 80);
+  const medium   = entries.filter(e => e.score >= 40 && e.score < 60);
+
+  for (const [label, group] of [['CRITICAL (80+)', critical], ['HIGH (60-79)', high], ['MEDIUM (40-59)', medium]]) {
+    if (!group.length) continue;
+    lines.push(`# ── ${label} ── ${group.length} entries`);
+    for (const e of group) {
+      const cidr = e.cidr;
+      // Google Ads prefers wildcard for IPv4, CIDR for IPv6
+      if (e.ip_version === 'v4') {
+        const parts = cidr.split('/')[0].split('.');
+        lines.push(`${parts[0]}.${parts[1]}.${parts[2]}.*  # ${e.asn_org} score=${e.score} hits=${e.hit_count} days=${e.days_seen_count}`);
+      } else {
+        lines.push(`${cidr}  # ${e.asn_org} score=${e.score} hits=${e.hit_count} days=${e.days_seen_count}`);
+      }
+    }
+    lines.push('');
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="botguard-cidr-${today}.txt"`);
+  res.send(lines.join('\n'));
+});
+
 // ---------- Settings (API keys, password info) ----------
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);

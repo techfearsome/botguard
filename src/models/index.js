@@ -8,4 +8,5 @@ module.exports = {
   AsnBlacklist: require('./AsnBlacklist'),
   SitePage: require('./SitePage'),
   FirewallEntry: require('./FirewallEntry'),
+  CidrIntelligence: require('./CidrIntelligence'),
 };
