@@ -1384,21 +1384,33 @@ router.get('/intelligence', async (req, res) => {
   const { CidrDailySnapshot } = require('../../models');
 
   // ── Range handling ──────────────────────────────────────────────────
-  const rangeKey = req.query.range || 'today';
+  // The rules:
+  //   - If BOTH date_from and date_to are present, they win regardless of
+  //     dropdown selection. The dates are explicit; dropdown is a shortcut.
+  //     This treats `?range=today&date_from=X&date_to=Y` as custom-range mode.
+  //   - If range is `today` with no dates, use live mode (CidrIntelligence).
+  //   - Otherwise use parseRange to derive a window from the dropdown.
+  const rawRange  = req.query.range || 'today';
+  const dateFrom  = (req.query.date_from || '').trim();
+  const dateTo    = (req.query.date_to   || '').trim();
+  const hasDates  = !!(dateFrom && dateTo);
+  // Effective range string used for downstream UI labelling and parse
+  const rangeKey  = hasDates ? 'custom' : rawRange;
+
   let rangeStart = null, rangeEnd = null, rangeIsLive = false;
 
-  if (rangeKey === 'today' || !rangeKey) {
+  if (rangeKey === 'today' && !hasDates) {
+    // Truly live - no dates given, dropdown says today
     rangeIsLive = true;
   } else {
-    // Parse the date range. Reuse parseRange which understands today /
-    // yesterday / 7d / 30d / custom.
     const parsed = parseRange({
       range: rangeKey,
-      date_from: req.query.date_from,
-      date_to: req.query.date_to,
+      date_from: dateFrom,
+      date_to:   dateTo,
     });
     rangeStart = parsed.gte || null;
     rangeEnd   = parsed.lte || null;
+    rangeIsLive = false;
   }
 
   // Status filter — default shows unactioned only
@@ -1567,8 +1579,8 @@ router.get('/intelligence', async (req, res) => {
     rangeStart,
     rangeEnd,
     rangeIsLive,
-    dateFrom: req.query.date_from || '',
-    dateTo: req.query.date_to || '',
+    dateFrom: dateFrom,
+    dateTo: dateTo,
     stats: { new: statNew, critical: statCritical, watching: statWatching },
     lastAnalysedAt,
   });
@@ -1637,11 +1649,21 @@ router.post('/intelligence/run-now', async (req, res) => {
 // week's data and refresh the intelligence view."
 router.post('/intelligence/analyse-range', async (req, res) => {
   const ws = await resolveWorkspace(req);
-  const { range, date_from, date_to } = req.body;
+  const rawRange  = String(req.body.range || '').trim();
+  const dateFrom  = String(req.body.date_from || '').trim();
+  const dateTo    = String(req.body.date_to || '').trim();
+  const hasDates  = !!(dateFrom && dateTo);
+  // If user supplied both dates, treat as custom range regardless of dropdown.
+  // The dates are explicit; dropdown is a shortcut.
+  const effectiveRange = hasDates ? 'custom' : (rawRange || 'today');
 
   // Reuse the existing parseRange helper - matches the date selector pattern
   // used across the rest of the admin UI.
-  const parsed = parseRange({ range, date_from, date_to });
+  const parsed = parseRange({
+    range: effectiveRange,
+    date_from: dateFrom,
+    date_to: dateTo,
+  });
 
   const opts = {};
   if (parsed.gte) opts.windowStart = parsed.gte;
@@ -1659,7 +1681,7 @@ router.post('/intelligence/analyse-range', async (req, res) => {
   // For non-today ranges, write snapshots but DON'T pollute live state.
   // The 60-second worker would otherwise overwrite our results within a
   // minute, since it always uses the default 24h window.
-  const isToday = !range || range === 'today';
+  const isToday = effectiveRange === 'today';
   opts.writeLiveState = isToday;
   opts.writeSnapshots = true;
 
@@ -1672,10 +1694,11 @@ router.post('/intelligence/analyse-range', async (req, res) => {
     logger.warn('analyse_range_failed', { err: e.message });
   }
 
-  // Forward range params so the GET handler queries the right data source
-  const qs = new URLSearchParams({ range: range || 'today' });
-  if (date_from) qs.set('date_from', date_from);
-  if (date_to)   qs.set('date_to', date_to);
+  // Redirect with the actually-used range so the GET handler matches.
+  // (If user picked Yesterday but typed dates too, we ran custom, redirect with custom.)
+  const qs = new URLSearchParams({ range: effectiveRange });
+  if (dateFrom) qs.set('date_from', dateFrom);
+  if (dateTo)   qs.set('date_to', dateTo);
   res.redirect('/admin/intelligence?' + qs.toString());
 });
 
