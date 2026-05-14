@@ -154,10 +154,13 @@ function computeConsecutiveDays(dates) {
  *
  * @param {ObjectId|string} workspaceId
  * @param {object} opts
- *   - windowHours {number}      how far back to look (default 24)
- *   - windowStart {Date}        explicit start (overrides windowHours)
- *   - windowEnd   {Date}        explicit end (defaults to now)
- *   - writeSnapshots {boolean}  whether to upsert CidrDailySnapshot docs (default true)
+ *   - windowHours    {number}  how far back to look (default 24)
+ *   - windowStart    {Date}    explicit start (overrides windowHours)
+ *   - windowEnd      {Date}    explicit end (defaults to now)
+ *   - writeSnapshots {boolean} upsert CidrDailySnapshot docs (default true)
+ *   - writeLiveState {boolean} upsert CidrIntelligence docs (default true).
+ *                              Set false for ad-hoc past-range analysis so
+ *                              live state isn't polluted by past patterns.
  * @returns {object} run statistics
  */
 async function analyseWorkspace(workspaceId, opts = {}) {
@@ -168,6 +171,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
   const windowStart = opts.windowStart ||
     new Date(windowEnd.getTime() - windowHours * 60 * 60 * 1000);
   const writeSnapshots = opts.writeSnapshots !== false;
+  const writeLiveState = opts.writeLiveState !== false;
 
   // ── Full-window scan (no cursor — re-evaluates every run) ───────────
   const clicks = await Click.find({
@@ -317,9 +321,13 @@ async function analyseWorkspace(workspaceId, opts = {}) {
   }
 
   // ── Upsert CidrIntelligence (live state) ───────────────────────────
+  // Skipped when writeLiveState=false, used for ad-hoc past-range analysis
+  // where we want to populate CidrDailySnapshot without overwriting the
+  // current live view.
   let upserted = 0;
   const now = new Date();
 
+  if (writeLiveState) {
   for (const [cidr, agg] of cidrAggregate) {
     const uniqueIps = agg.uniqueIps.size;
     const convRate = agg.hits > 0 ? agg.conv / agg.hits : 0;
@@ -393,6 +401,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     );
     upserted++;
   }
+  }  // end if (writeLiveState)
 
   return {
     processed: clicks.length,

@@ -1368,8 +1368,38 @@ router.get('/intelligence/summary', async (req, res) => {
 });
 
 // Main intelligence list view
+//
+// Range-aware. Behaviour:
+//   - range=today (default): query live CidrIntelligence (60-second worker output)
+//   - any other range:       query CidrDailySnapshot for the date range,
+//                            aggregate per-CIDR across days, enrich with live
+//                            intelligence record where available (for ASN,
+//                            score, historical_match).
+//
+// This separation matters because the 60s worker keeps overwriting
+// CidrIntelligence with the current 24h window. Past ranges must come
+// from CidrDailySnapshot which is the immutable historical record.
 router.get('/intelligence', async (req, res) => {
   const ws = await resolveWorkspace(req);
+  const { CidrDailySnapshot } = require('../../models');
+
+  // ── Range handling ──────────────────────────────────────────────────
+  const rangeKey = req.query.range || 'today';
+  let rangeStart = null, rangeEnd = null, rangeIsLive = false;
+
+  if (rangeKey === 'today' || !rangeKey) {
+    rangeIsLive = true;
+  } else {
+    // Parse the date range. Reuse parseRange which understands today /
+    // yesterday / 7d / 30d / custom.
+    const parsed = parseRange({
+      range: rangeKey,
+      date_from: req.query.date_from,
+      date_to: req.query.date_to,
+    });
+    rangeStart = parsed.gte || null;
+    rangeEnd   = parsed.lte || null;
+  }
 
   // Status filter — default shows unactioned only
   const statusFilter = req.query.status || 'active';
@@ -1384,28 +1414,147 @@ router.get('/intelligence', async (req, res) => {
   // IP version filter
   const versionFilter = req.query.version || 'all';
 
-  const filter = {
-    workspace_id: ws._id,
-    status: statusQuery,
-    score: { $gte: minScore },
-  };
-  if (versionFilter !== 'all') filter.ip_version = versionFilter;
+  let entries = [];
+  let lastAnalysedAt = null;
 
-  const entries = await CidrIntelligence.find(filter)
-    .sort({ score: -1, last_seen: -1 })
-    .limit(200)
-    .lean();
+  if (rangeIsLive) {
+    // ── TODAY view: read live CidrIntelligence ─────────────────────
+    const filter = {
+      workspace_id: ws._id,
+      status: statusQuery,
+      score: { $gte: minScore },
+    };
+    if (versionFilter !== 'all') filter.ip_version = versionFilter;
 
-  // Stats for summary bar
-  const [statNew, statCritical, statWatching] = await Promise.all([
-    CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 80 } }),
-    CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 60 } }),
-    CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 40 } }),
-  ]);
+    entries = await CidrIntelligence.find(filter)
+      .sort({ score: -1, last_seen: -1 })
+      .limit(200)
+      .lean();
 
-  // Last analysis run time
-  const lastEntry = await CidrIntelligence.findOne({ workspace_id: ws._id })
-    .sort({ last_analysed_at: -1 }).select('last_analysed_at').lean();
+    const lastEntry = await CidrIntelligence.findOne({ workspace_id: ws._id })
+      .sort({ last_analysed_at: -1 }).select('last_analysed_at').lean();
+    lastAnalysedAt = lastEntry?.last_analysed_at || null;
+  } else {
+    // ── PAST range: aggregate from CidrDailySnapshot ────────────────
+    // Build date string range: snapshots store date as 'YYYY-MM-DD' strings
+    // so we compare lexicographically via $gte/$lte on string values.
+    const startStr = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
+    const endStr   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
+
+    const snapMatch = {
+      workspace_id: ws._id,
+      date: { $gte: startStr, $lte: endStr },
+    };
+    if (versionFilter !== 'all') snapMatch.ip_version = versionFilter;
+
+    // Aggregate per-CIDR within the window: sum hits, find max metrics,
+    // count distinct days.
+    const aggregated = await CidrDailySnapshot.aggregate([
+      { $match: snapMatch },
+      { $group: {
+          _id: '$cidr',
+          ip_version:             { $first: '$ip_version' },
+          asn_org:                { $last: '$asn_org' },
+          country:                { $last: '$country' },
+          hits:                   { $sum: '$hits' },
+          conversions:            { $sum: '$conversions' },
+          max_burst_5min:         { $max: '$max_burst_5min' },
+          rapid_duplicate_count:  { $sum: '$rapid_duplicate_count' },
+          single_ip_hammer_count: { $sum: '$single_ip_hammer_count' },
+          fake_ua_count:          { $sum: '$fake_ua_count' },
+          window_days_seen:       { $sum: 1 },                  // days within window
+          all_triggers:           { $push: '$triggers' },
+          all_sources:            { $addToSet: '$source' },
+          first_date_in_window:   { $min: '$date' },
+          last_date_in_window:    { $max: '$date' },
+      }},
+      { $sort: { hits: -1 } },
+      { $limit: 200 },
+    ]);
+
+    // Enrich with live intelligence records for score/status/historical_match
+    const cidrs = aggregated.map(a => a._id);
+    const liveDocs = cidrs.length === 0 ? [] : await CidrIntelligence.find({
+      workspace_id: ws._id,
+      cidr: { $in: cidrs },
+    }).lean();
+    const liveMap = new Map(liveDocs.map(d => [d.cidr, d]));
+
+    entries = aggregated.map(a => {
+      const live = liveMap.get(a._id) || {};
+      const triggerSet = new Set();
+      for (const t of a.all_triggers) for (const x of (t || [])) triggerSet.add(x);
+      const sources = a.all_sources || [];
+
+      return {
+        _id:               live._id,
+        cidr:              a._id,
+        ip_version:        a.ip_version,
+        asn_org:           a.asn_org || live.asn_org || '',
+        country:           a.country || live.country || '',
+        // For past ranges, the displayed score is the live score if available,
+        // else 0 (the snapshot itself doesn't store a score). UI shows snapshot
+        // metrics regardless.
+        score:             live.score || 0,
+        signals:           live.signals || {},
+        hit_count:         a.hits,
+        unique_ip_count:   live.unique_ip_count || 0,
+        conversion_count:  a.conversions,
+        conv_rate:         a.hits > 0 ? a.conversions / a.hits : 0,
+        fake_ua_count:     a.fake_ua_count,
+        max_burst_5min:    a.max_burst_5min,
+        rapid_duplicate_count: a.rapid_duplicate_count,
+        single_ip_hammer_count: a.single_ip_hammer_count,
+        triggers_in_window: [...triggerSet],
+        days_seen_count:   a.window_days_seen,
+        consecutive_days:  live.consecutive_days || 0,
+        first_seen:        a.first_date_in_window,
+        last_seen:         a.last_date_in_window,
+        top_uas:           live.top_uas || [],
+        sample_ips:        live.sample_ips || [],
+        status:            live.status || 'new',
+        historical_match:  live.historical_match || {
+          has_history:     true,
+          total_days_seen: a.window_days_seen,
+          prior_days_seen: a.window_days_seen,
+          first_seen_date: a.first_date_in_window,
+          last_seen_date:  a.last_date_in_window,
+          is_returning:    a.window_days_seen >= 2,
+          is_seeded:       sources.includes('seed'),
+        },
+        // Flag this row as a snapshot-derived entry so UI can render it
+        // slightly differently (e.g. score may be from live state, hits are
+        // from the window).
+        _from_snapshot:    true,
+      };
+    });
+
+    // Apply minScore filter post-aggregation (snapshots have no score field;
+    // we filter by aggregated hits as a proxy when score=0)
+    entries = entries.filter(e => {
+      if (e.score >= minScore) return true;
+      // No live score — fall back to hits-based threshold so the user still
+      // sees the active offenders in the past range
+      return e.hit_count >= 5;
+    });
+
+    lastAnalysedAt = null;
+  }
+
+  // Stats for summary bar — always count against the same dataset shown
+  let statNew, statCritical, statWatching;
+  if (rangeIsLive) {
+    [statNew, statCritical, statWatching] = await Promise.all([
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 80 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 60 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 40 } }),
+    ]);
+  } else {
+    // For snapshot-backed views, stats reflect the shown entries
+    statNew      = entries.filter(e => e.score >= 80).length;
+    statCritical = entries.filter(e => e.score >= 60).length;
+    statWatching = entries.length;
+  }
 
   res.render('admin/intelligence', {
     ws,
@@ -1414,8 +1563,14 @@ router.get('/intelligence', async (req, res) => {
     statusFilter,
     minScore,
     versionFilter,
+    rangeKey,
+    rangeStart,
+    rangeEnd,
+    rangeIsLive,
+    dateFrom: req.query.date_from || '',
+    dateTo: req.query.date_to || '',
     stats: { new: statNew, critical: statCritical, watching: statWatching },
-    lastAnalysedAt: lastEntry?.last_analysed_at || null,
+    lastAnalysedAt,
   });
 });
 
@@ -1491,7 +1646,7 @@ router.post('/intelligence/analyse-range', async (req, res) => {
   const opts = {};
   if (parsed.gte) opts.windowStart = parsed.gte;
   if (parsed.lte) opts.windowEnd = parsed.lte;
-  // If no explicit start, fall back to "today" range
+  // If no explicit start, fall back to "today" range (midnight UTC → now)
   if (!parsed.gte && !parsed.lte) {
     opts.windowStart = new Date();
     opts.windowStart.setHours(0, 0, 0, 0);
@@ -1501,15 +1656,27 @@ router.post('/intelligence/analyse-range', async (req, res) => {
   const windowMs = (opts.windowEnd || new Date()) - (opts.windowStart || new Date());
   opts.windowHours = Math.max(1, Math.round(windowMs / (60 * 60 * 1000)));
 
+  // For non-today ranges, write snapshots but DON'T pollute live state.
+  // The 60-second worker would otherwise overwrite our results within a
+  // minute, since it always uses the default 24h window.
+  const isToday = !range || range === 'today';
+  opts.writeLiveState = isToday;
+  opts.writeSnapshots = true;
+
   try {
     const { analyseWorkspace } = require('../../lib/cidrAnalyser');
-    // Fire and forget - results land in CidrIntelligence within a few seconds
-    analyseWorkspace(ws._id, opts).catch((e) =>
-      logger.warn('analyse_range_failed', { err: e.message })
-    );
-  } catch (e) { /* analyser unavailable - shouldn't happen */ }
+    // Await completion so the redirect lands on populated data, not empty.
+    // At 2,600 clicks/day scale this completes in <1 second.
+    await analyseWorkspace(ws._id, opts);
+  } catch (e) {
+    logger.warn('analyse_range_failed', { err: e.message });
+  }
 
-  res.redirect('/admin/intelligence?range=' + encodeURIComponent(range || 'today'));
+  // Forward range params so the GET handler queries the right data source
+  const qs = new URLSearchParams({ range: range || 'today' });
+  if (date_from) qs.set('date_from', date_from);
+  if (date_to)   qs.set('date_to', date_to);
+  res.redirect('/admin/intelligence?' + qs.toString());
 });
 
 // ---------- Snapshot history (CidrDailySnapshot) ----------

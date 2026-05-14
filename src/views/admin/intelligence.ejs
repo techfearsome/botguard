@@ -44,23 +44,40 @@ function fmtRate(rate) {
 </div>
 
 <%# ── Time frame selector ────────────────────────────────────────── %>
+<%
+  const currentRange = (typeof rangeKey !== 'undefined') ? rangeKey : 'today';
+  const isLive       = (typeof rangeIsLive !== 'undefined') ? rangeIsLive : true;
+  const dFrom        = (typeof dateFrom !== 'undefined') ? dateFrom : '';
+  const dTo          = (typeof dateTo   !== 'undefined') ? dateTo   : '';
+%>
 <form method="POST" action="/admin/intelligence/analyse-range" class="filter-bar" style="margin-bottom:12px;">
-  <span class="muted" style="align-self:center; font-size:13px;">Analyse:</span>
+  <span class="muted" style="align-self:center; font-size:13px;">Window:</span>
   <select name="range" style="min-width:140px;">
-    <option value="today">Today</option>
-    <option value="yesterday">Yesterday</option>
-    <option value="7d">Last 7 days</option>
-    <option value="30d">Last 30 days</option>
-    <option value="all">All time</option>
-    <option value="custom">Custom range</option>
+    <option value="today"     <%= currentRange === 'today'     ? 'selected' : '' %>>Today (live)</option>
+    <option value="yesterday" <%= currentRange === 'yesterday' ? 'selected' : '' %>>Yesterday</option>
+    <option value="7d"        <%= currentRange === '7d'        ? 'selected' : '' %>>Last 7 days</option>
+    <option value="30d"       <%= currentRange === '30d'       ? 'selected' : '' %>>Last 30 days</option>
+    <option value="all"       <%= currentRange === 'all'       ? 'selected' : '' %>>All time</option>
+    <option value="custom"    <%= currentRange === 'custom'    ? 'selected' : '' %>>Custom range</option>
   </select>
-  <input type="date" name="date_from" placeholder="From">
-  <input type="date" name="date_to" placeholder="To">
+  <input type="date" name="date_from" value="<%= dFrom %>" placeholder="From">
+  <input type="date" name="date_to"   value="<%= dTo %>"   placeholder="To">
   <button type="submit" class="btn">Re-analyse window</button>
   <span class="muted" style="align-self:center; font-size:12px; opacity:0.7;">
-    Updates the intelligence view with patterns from the selected window
+    <% if (isLive) { %>
+      Showing <strong style="color:#22c55e;">live data</strong> from last 24h
+    <% } else { %>
+      Showing <strong style="color:#3b82f6;">historical snapshots</strong> for <%= currentRange %><% if (dFrom || dTo) { %> (<%= dFrom || '…' %> → <%= dTo || '…' %>)<% } %>
+    <% } %>
   </span>
 </form>
+
+<%# Quick-switch link to return to live view when in a past range %>
+<% if (!isLive) { %>
+<div style="margin-bottom:12px;">
+  <a href="/admin/intelligence?range=today" class="btn btn-small" title="Switch back to live current-day view">← Back to live</a>
+</div>
+<% } %>
 
 <%# ── Stat cards ─────────────────────────────────────────────────── %>
 <div class="stat-grid" style="margin-bottom:16px;">
@@ -268,26 +285,30 @@ function fmtRate(rate) {
           <div style="display:flex; gap:4px; flex-wrap:wrap;">
             <a href="/admin/clicks?click_id=&range=today" class="btn btn-small" title="View clicks from this subnet">Clicks</a>
 
-            <% if (e.status !== 'exported') { %>
+            <% if (e._id && e.status !== 'exported') { %>
             <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline">
               <input type="hidden" name="status" value="exported">
               <button type="submit" class="btn btn-small btn-primary" title="Add to next Google Ads export">Export</button>
             </form>
             <% } %>
 
-            <% if (e.status !== 'blocked') { %>
+            <% if (e._id && e.status !== 'blocked') { %>
             <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline">
               <input type="hidden" name="status" value="blocked">
               <button type="submit" class="btn btn-small" title="Add to BotGuard CIDR blacklist" style="border-color:#f97316; color:#f97316;">Block</button>
             </form>
             <% } %>
 
-            <% if (e.status !== 'dismissed') { %>
+            <% if (e._id && e.status !== 'dismissed') { %>
             <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline"
                   onsubmit="return confirm('Dismiss this CIDR? It will be hidden from active view.')">
               <input type="hidden" name="status" value="dismissed">
               <button type="submit" class="btn btn-small" title="Not a threat — dismiss">✕</button>
             </form>
+            <% } %>
+
+            <% if (!e._id) { %>
+            <small class="muted" style="font-size:10px;">historical only</small>
             <% } %>
           </div>
 
