@@ -23,12 +23,13 @@ const mongoose = require('mongoose');
 const STATUSES = ['new', 'reviewing', 'blocked', 'exported', 'dismissed'];
 
 const SignalSchema = new mongoose.Schema({
-  volume:      { type: Number, default: 0 },  // 0-20
-  conversion:  { type: Number, default: 0 },  // 0-25
+  volume:      { type: Number, default: 0 },  // 0-15
+  conversion:  { type: Number, default: 0 },  // 0-20
   rotation:    { type: Number, default: 0 },  // 0-20
   ua_uniform:  { type: Number, default: 0 },  // 0-15
   persistence: { type: Number, default: 0 },  // 0-15
   fake_ua:     { type: Number, default: 0 },  // 0-5
+  click_id:    { type: Number, default: 0 },  // 0-15 (click-ID diversity / no-ID ratio)
 }, { _id: false });
 
 const CidrIntelligenceSchema = new mongoose.Schema({
@@ -66,6 +67,14 @@ const CidrIntelligenceSchema = new mongoose.Schema({
 
   // iOS 26+ (fake UA) hit count within this subnet
   fake_ua_count: { type: Number, default: 0 },
+
+  // ── Click-ID correlation (within current analysis window) ──────────
+  unique_gclids:         { type: Number, default: 0 },
+  unique_wbraids:        { type: Number, default: 0 },
+  unique_gbraids:        { type: Number, default: 0 },
+  unique_fbclids:        { type: Number, default: 0 },
+  unique_msclkids:       { type: Number, default: 0 },
+  hits_with_no_click_id: { type: Number, default: 0 },
 
   // ── Multi-day persistence ────────────────────────────────────────────
   // Array of 'YYYY-MM-DD' strings - calendar days this subnet was seen

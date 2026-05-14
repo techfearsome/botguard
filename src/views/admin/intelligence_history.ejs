@@ -129,6 +129,7 @@
           <th>Burst</th>
           <th>RapDup</th>
           <th>Hammer</th>
+          <th title="Click-ID diversity">Click IDs</th>
           <th>Conv</th>
           <th>Source</th>
         </tr>
@@ -151,6 +152,7 @@
                 <% } else if (t === 'burst') { %>background:#f9731622; color:#f97316;
                 <% } else if (t === 'hammer') { %>background:#a855f722; color:#a855f7;
                 <% } else if (t === 'volume') { %>background:#3b82f622; color:#3b82f6;
+                <% } else if (t === 'click_id_starved') { %>background:#06b6d422; color:#06b6d4;
                 <% } else if (t === 'seed') { %>background:#6b728022; color:#6b7280;
                 <% } %>"><%= t %></span>
             <% }); %>
@@ -160,6 +162,26 @@
           <td class="mono"><%= s.max_burst_5min %></td>
           <td class="mono"><%= s.rapid_duplicate_count %></td>
           <td class="mono"><%= s.single_ip_hammer_count %></td>
+          <td style="font-size:11px; line-height:1.3;">
+            <%
+              const gc = s.unique_gclids   || 0;
+              const wb = s.unique_wbraids  || 0;
+              const fb = s.unique_fbclids  || 0;
+              const ms = s.unique_msclkids || 0;
+              const noId = s.hits_with_no_click_id || 0;
+              const noIdPct = s.hits > 0 ? Math.round(100 * noId / s.hits) : 0;
+            %>
+            <% if (gc) { %><span title="unique gclids">g:<%= gc %></span><% } %>
+            <% if (wb) { %> <span title="unique wbraids">w:<%= wb %></span><% } %>
+            <% if (fb) { %> <span title="unique fbclids">f:<%= fb %></span><% } %>
+            <% if (ms) { %> <span title="unique msclkids">m:<%= ms %></span><% } %>
+            <% if (noId > 0) { %>
+              <div style="color:<%= noIdPct >= 60 ? '#ef4444' : (noIdPct >= 30 ? '#f97316' : 'inherit') %>;
+                          font-size:10px;">
+                no-id ×<%= noId %> (<%= noIdPct %>%)
+              </div>
+            <% } %>
+          </td>
           <td class="mono"><%= s.conversions %></td>
           <td style="font-size:11px;">
             <%= s.source %>

@@ -230,6 +230,106 @@ test('Bot 5x burst from same IP definitely qualifies (canonical TP test)', () =>
   assert.strictEqual(r.triggers.length, 4);
 });
 
+console.log('\nClick-ID starved trigger (mostly no-ID hits):');
+
+test('15 hits all with gclids does NOT trigger click_id_starved', () => {
+  const clicks = [];
+  for (let i = 0; i < 15; i++) {
+    // Each click has a unique gclid (real ad traffic)
+    clicks.push({
+      ts: new Date(Date.now() - i * 60000),
+      ip: `1.2.3.${i + 10}`,
+      gclid: `gclid_${i}`,
+    });
+  }
+  const r = detectTriggers(clicks);
+  assert.ok(!r.triggers.includes('click_id_starved'),
+    'all-with-IDs should not trigger click_id_starved');
+  assert.strictEqual(r.metrics.unique_gclids, 15);
+  assert.strictEqual(r.metrics.hits_with_no_click_id, 0);
+});
+
+test('15 hits all with NO click IDs DOES trigger click_id_starved', () => {
+  const clicks = [];
+  for (let i = 0; i < 15; i++) {
+    // Direct landing page hits - no ad attribution
+    clicks.push({
+      ts: new Date(Date.now() - i * 60000),
+      ip: `1.2.3.${i + 10}`,
+    });
+  }
+  const r = detectTriggers(clicks);
+  assert.ok(r.triggers.includes('click_id_starved'),
+    'all-no-IDs should trigger click_id_starved');
+  assert.strictEqual(r.metrics.hits_with_no_click_id, 15);
+});
+
+test('5 hits with no IDs does NOT trigger (under MIN_HITS=10)', () => {
+  const clicks = [];
+  for (let i = 0; i < 5; i++) {
+    clicks.push({ ts: new Date(Date.now() - i * 60000), ip: `1.2.3.${i + 10}` });
+  }
+  const r = detectTriggers(clicks);
+  assert.ok(!r.triggers.includes('click_id_starved'),
+    'low-volume no-ID traffic should not trigger - too noisy');
+});
+
+test('15 hits, 50% no-ID does NOT trigger (under 60% threshold)', () => {
+  const clicks = [];
+  for (let i = 0; i < 15; i++) {
+    const c = { ts: new Date(Date.now() - i * 60000), ip: `1.2.3.${i + 10}` };
+    if (i < 8) c.gclid = `g${i}`;  // 8 of 15 have IDs (~53%)
+    clicks.push(c);
+  }
+  const r = detectTriggers(clicks);
+  assert.ok(!r.triggers.includes('click_id_starved'));
+  assert.strictEqual(r.metrics.hits_with_no_click_id, 7);
+});
+
+test('15 hits, 70% no-ID triggers click_id_starved', () => {
+  const clicks = [];
+  for (let i = 0; i < 15; i++) {
+    const c = { ts: new Date(Date.now() - i * 60000), ip: `1.2.3.${i + 10}` };
+    if (i < 4) c.gclid = `g${i}`;  // 4 of 15 have IDs (~73% no-ID)
+    clicks.push(c);
+  }
+  const r = detectTriggers(clicks);
+  assert.ok(r.triggers.includes('click_id_starved'));
+});
+
+test('wbraid alone (no gclid) is sufficient attribution', () => {
+  // iOS in-app web traffic carries wbraid, not gclid
+  const clicks = [];
+  for (let i = 0; i < 15; i++) {
+    clicks.push({
+      ts: new Date(Date.now() - i * 60000),
+      ip: `1.2.3.${i + 10}`,
+      wbraid: `wb_${i}`,  // wbraid present, gclid absent - still legit
+    });
+  }
+  const r = detectTriggers(clicks);
+  assert.ok(!r.triggers.includes('click_id_starved'),
+    'wbraid-only traffic is legitimate iOS ads, should not trigger');
+  assert.strictEqual(r.metrics.unique_wbraids, 15);
+  assert.strictEqual(r.metrics.unique_gclids, 0);
+  assert.strictEqual(r.metrics.hits_with_no_click_id, 0);
+});
+
+test('Metrics report correct counts for mixed click IDs', () => {
+  const clicks = [
+    { ts: new Date(Date.now() - 5000), ip: '1.1.1.1', gclid: 'g1', wbraid: 'w1' },
+    { ts: new Date(Date.now() - 4000), ip: '1.1.1.2', gclid: 'g2' },
+    { ts: new Date(Date.now() - 3000), ip: '1.1.1.3', fbclid: 'f1' },
+    { ts: new Date(Date.now() - 2000), ip: '1.1.1.4' },  // no ID
+    { ts: new Date(Date.now() - 1000), ip: '1.1.1.5', gclid: 'g1' },  // replayed gclid
+  ];
+  const r = detectTriggers(clicks);
+  assert.strictEqual(r.metrics.unique_gclids, 2, 'g1 + g2');
+  assert.strictEqual(r.metrics.unique_wbraids, 1);
+  assert.strictEqual(r.metrics.unique_fbclids, 1);
+  assert.strictEqual(r.metrics.hits_with_no_click_id, 1);
+});
+
 console.log('\nThresholds match constants:');
 
 test('Constants are at expected values for documentation', () => {

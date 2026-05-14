@@ -57,24 +57,26 @@ function getSubnet(ip) {
   } catch { return null; }
 }
 
-// ── Scoring (unchanged semantics, kept for the CidrIntelligence record) ──
+// ── Scoring (rebalanced to accommodate click_id signal) ──────────────────
+// Total max remains 100. Click-ID gets 15 points - on par with UA uniformity.
+// Volume reduced 20→15, conversion reduced 25→20 to make room.
 
 function scoreVolume(hits) {
-  if (hits >= 200) return 20;
-  if (hits >= 100) return 17;
-  if (hits >= 50)  return 13;
-  if (hits >= 20)  return 8;
-  if (hits >= 10)  return 3;
+  if (hits >= 200) return 15;
+  if (hits >= 100) return 13;
+  if (hits >= 50)  return 10;
+  if (hits >= 20)  return 6;
+  if (hits >= 10)  return 2;
   return 0;
 }
 
 function scoreConversion(hits, conversions) {
   if (hits < 5) return 0;
-  if (conversions === 0) return hits >= 10 ? 25 : 12;
+  if (conversions === 0) return hits >= 10 ? 20 : 10;
   const rate = conversions / hits;
-  if (rate < 0.005) return 18;
-  if (rate < 0.010) return 10;
-  if (rate < 0.020) return 4;
+  if (rate < 0.005) return 15;
+  if (rate < 0.010) return 8;
+  if (rate < 0.020) return 3;
   return 0;
 }
 
@@ -129,6 +131,46 @@ function scoreFakeUA(fakeUACount) {
   return 0;
 }
 
+/**
+ * Click-ID diversity signal (0-15).
+ *
+ * Real paid ad traffic carries a gclid/wbraid/gbraid/fbclid/msclkid on each
+ * click - these are mint-fresh per ad impression. Bot traffic either:
+ *   - Hits the landing URL directly (no click IDs at all)
+ *   - Replays a captured click ID across many requests
+ *
+ * We score on TWO sub-signals:
+ *   1. no-click-id ratio above 60% on volume = strong bot indicator
+ *   2. very low unique-IDs-to-hits ratio when IDs ARE present = replay
+ *
+ * Below 10 hits we score 0 - too noisy to be reliable.
+ */
+function scoreClickIdSignal(hits, totalUniqueIds, hitsWithNoClickId) {
+  if (hits < 10) return 0;
+
+  const noIdRatio = hitsWithNoClickId / hits;
+  // Hits that DID have a click ID
+  const hitsWithId = hits - hitsWithNoClickId;
+
+  let score = 0;
+
+  // No-click-ID dominance
+  if (noIdRatio >= 0.90)      score += 12;  // 90%+ direct hits
+  else if (noIdRatio >= 0.70) score += 8;
+  else if (noIdRatio >= 0.50) score += 4;
+
+  // Click-ID replay (when there ARE IDs, but very few unique)
+  if (hitsWithId >= 10) {
+    const diversity = totalUniqueIds / hitsWithId;
+    // Real traffic: ~1.0. Below 0.5 means each ID is reused 2+ times.
+    if (diversity < 0.30)      score += 8;
+    else if (diversity < 0.50) score += 4;
+    else if (diversity < 0.70) score += 2;
+  }
+
+  return Math.min(score, 15);
+}
+
 function computeConsecutiveDays(dates) {
   if (!dates.length) return 0;
   const sorted = [...new Set(dates)].sort();
@@ -179,7 +221,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     decision: { $in: ['allow', 'would_block'] },
     ts: { $gte: windowStart, $lte: windowEnd },
   })
-    .select('ip ts decision conversion_count user_agent asn_org country')
+    .select('ip ts decision conversion_count user_agent asn_org country external_ids')
     .lean();
 
   if (!clicks.length) {
@@ -216,7 +258,16 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       bySubnet.set(date, day);
     }
 
-    day.clicks.push({ ts, ip: c.ip });
+    const eid = c.external_ids || {};
+    day.clicks.push({
+      ts,
+      ip: c.ip,
+      gclid:   eid.gclid   || '',
+      wbraid:  eid.wbraid  || '',
+      gbraid:  eid.gbraid  || '',
+      fbclid:  eid.fbclid  || '',
+      msclkid: eid.msclkid || '',
+    });
     day.conv += parseInt(c.conversion_count || 0, 10) || 0;
     day.asn = day.asn || c.asn_org || '';
     day.country = day.country || c.country || '';
@@ -248,6 +299,13 @@ async function analyseWorkspace(workspaceId, opts = {}) {
               rapid_duplicate_count:  trig.metrics.rapid_duplicate_count,
               single_ip_hammer_count: trig.metrics.single_ip_hammer_count,
               fake_ua_count:          day.fakeUACount,
+              // Click-ID correlation metrics
+              unique_gclids:          trig.metrics.unique_gclids,
+              unique_wbraids:         trig.metrics.unique_wbraids,
+              unique_gbraids:         trig.metrics.unique_gbraids,
+              unique_fbclids:         trig.metrics.unique_fbclids,
+              unique_msclkids:        trig.metrics.unique_msclkids,
+              hits_with_no_click_id:  trig.metrics.hits_with_no_click_id,
               asn_org:                day.asn,
               country:                day.country,
             },
@@ -279,6 +337,13 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       asn: '',
       country: '',
       sampleIps: new Set(),
+      // Click-ID dedup sets - merged across days within the window
+      gclids: new Set(),
+      wbraids: new Set(),
+      gbraids: new Set(),
+      fbclids: new Set(),
+      msclkids: new Set(),
+      hitsNoClickId: 0,
     };
     for (const day of byDay.values()) {
       agg.version = day.version;
@@ -286,6 +351,15 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       for (const c of day.clicks) {
         agg.uniqueIps.add(c.ip);
         if (agg.sampleIps.size < 10) agg.sampleIps.add(c.ip);
+        // Click-ID aggregation
+        if (c.gclid)   agg.gclids.add(c.gclid);
+        if (c.wbraid)  agg.wbraids.add(c.wbraid);
+        if (c.gbraid)  agg.gbraids.add(c.gbraid);
+        if (c.fbclid)  agg.fbclids.add(c.fbclid);
+        if (c.msclkid) agg.msclkids.add(c.msclkid);
+        if (!c.gclid && !c.wbraid && !c.gbraid && !c.fbclid && !c.msclkid) {
+          agg.hitsNoClickId++;
+        }
       }
       agg.conv += day.conv;
       agg.fakeUACount += day.fakeUACount;
@@ -340,13 +414,17 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     const isReturning   = priorDaysSeen >= 2;
     const isSeeded      = history.sources.has('seed');
 
+    const totalUniqueIds = agg.gclids.size + agg.wbraids.size + agg.gbraids.size
+                         + agg.fbclids.size + agg.msclkids.size;
+
     const signals = {
-      volume:      scoreVolume(agg.hits),
-      conversion:  scoreConversion(agg.hits, agg.conv),
-      rotation:    scoreRotation(agg.hits, uniqueIps),
-      ua_uniform:  scoreUAUniformity(agg.uaCounts, agg.hits, agg.fakeUACount),
-      persistence: scorePersistence(priorDaysSeen, isReturning),
-      fake_ua:     scoreFakeUA(agg.fakeUACount),
+      volume:         scoreVolume(agg.hits),
+      conversion:     scoreConversion(agg.hits, agg.conv),
+      rotation:       scoreRotation(agg.hits, uniqueIps),
+      ua_uniform:     scoreUAUniformity(agg.uaCounts, agg.hits, agg.fakeUACount),
+      persistence:    scorePersistence(priorDaysSeen, isReturning),
+      fake_ua:        scoreFakeUA(agg.fakeUACount),
+      click_id:       scoreClickIdSignal(agg.hits, totalUniqueIds, agg.hitsNoClickId),
     };
     const score = Object.values(signals).reduce((a, b) => a + b, 0);
 
@@ -375,6 +453,12 @@ async function analyseWorkspace(workspaceId, opts = {}) {
           top_uas:               topUAs,
           sample_ips:            [...agg.sampleIps],
           fake_ua_count:         agg.fakeUACount,
+          unique_gclids:         agg.gclids.size,
+          unique_wbraids:        agg.wbraids.size,
+          unique_gbraids:        agg.gbraids.size,
+          unique_fbclids:        agg.fbclids.size,
+          unique_msclkids:       agg.msclkids.size,
+          hits_with_no_click_id: agg.hitsNoClickId,
           days_seen_count:       totalDaysSeen,
           consecutive_days:      computeConsecutiveDays(allDates),
           last_seen:             now,

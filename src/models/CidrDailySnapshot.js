@@ -23,7 +23,7 @@
 
 const mongoose = require('mongoose');
 
-const TRIGGERS = ['burst', 'volume', 'hammer', 'rapid_duplicate', 'seed'];
+const TRIGGERS = ['burst', 'volume', 'hammer', 'rapid_duplicate', 'click_id_starved', 'seed'];
 const SOURCES  = ['analyser', 'seed', 'manual'];
 
 const CidrDailySnapshotSchema = new mongoose.Schema({
@@ -59,6 +59,24 @@ const CidrDailySnapshotSchema = new mongoose.Schema({
 
   // Bot UA signal (iOS 19+, headless markers, etc.) - lifted from scorer
   fake_ua_count: { type: Number, default: 0 },
+
+  // ── Click-ID correlation ────────────────────────────────────────────
+  // Tracks how many *distinct* tracking IDs this CIDR produced today.
+  // Real paid ad traffic has a near-1.0 ratio of unique-IDs-to-hits because
+  // Google/Bing/Facebook issue a fresh ID per ad click. A CIDR with 100 hits
+  // but only 10 unique gclids is replaying captured IDs (bot signature).
+  // A CIDR with high hits but zero click IDs is hitting the landing page
+  // URL directly, bypassing the ad funnel entirely.
+  unique_gclids:   { type: Number, default: 0 },
+  unique_wbraids:  { type: Number, default: 0 },
+  unique_gbraids:  { type: Number, default: 0 },
+  unique_fbclids:  { type: Number, default: 0 },
+  unique_msclkids: { type: Number, default: 0 },
+
+  // Count of hits where ALL click-ID fields were empty - direct landing
+  // page hits with no ad attribution. Should be near-zero for legitimate
+  // paid traffic.
+  hits_with_no_click_id: { type: Number, default: 0 },
 
   // Context for display
   asn_org: { type: String, default: '' },

@@ -168,6 +168,7 @@ function fmtRate(rate) {
         <th>IPs</th>
         <th>Conv</th>
         <th>Days</th>
+        <th title="Click-ID diversity: unique gclids/wbraids/fbclids and hits with NO click ID at all">Click IDs</th>
         <th>ASN</th>
         <th>Status</th>
         <th>Actions</th>
@@ -220,11 +221,12 @@ function fmtRate(rate) {
         <td style="min-width:140px;">
           <% const sig = e.signals || {}; %>
           <% const sigList = [
-            ['vol', sig.volume||0, 20, '#6366f1'],
-            ['conv', sig.conversion||0, 25, '#ef4444'],
+            ['vol', sig.volume||0, 15, '#6366f1'],
+            ['conv', sig.conversion||0, 20, '#ef4444'],
             ['rot', sig.rotation||0, 20, '#f97316'],
             ['ua', sig.ua_uniform||0, 15, '#eab308'],
             ['days', sig.persistence||0, 15, '#22c55e'],
+            ['id', sig.click_id||0, 15, '#06b6d4'],
             ['fake', sig.fake_ua||0, 5, '#8b5cf6'],
           ]; %>
           <div style="display:flex; gap:2px; align-items:flex-end; height:20px;">
@@ -264,6 +266,35 @@ function fmtRate(rate) {
           </span>
           <% if (e.consecutive_days >= 2) { %>
             <br><small style="color:#ef4444; font-size:10px;">↻ <%= e.consecutive_days %> in a row</small>
+          <% } %>
+        </td>
+
+        <%# Click IDs — unique counts + no-click-ID hit count %>
+        <td style="font-size:11px; line-height:1.4;">
+          <%
+            const gc = e.unique_gclids   || 0;
+            const wb = e.unique_wbraids  || 0;
+            const gb = e.unique_gbraids  || 0;
+            const fb = e.unique_fbclids  || 0;
+            const ms = e.unique_msclkids || 0;
+            const noId = e.hits_with_no_click_id || 0;
+            const noIdPct = e.hit_count > 0 ? Math.round(100 * noId / e.hit_count) : 0;
+            const idTotal = gc + wb + gb + fb + ms;
+          %>
+          <% if (gc) { %><div title="unique gclids">gclid: <strong><%= gc %></strong></div><% } %>
+          <% if (wb) { %><div title="unique wbraids (iOS in-app)">wbraid: <strong><%= wb %></strong></div><% } %>
+          <% if (gb) { %><div title="unique gbraids (iOS web→app)">gbraid: <strong><%= gb %></strong></div><% } %>
+          <% if (fb) { %><div title="unique fbclids (Facebook)">fbclid: <strong><%= fb %></strong></div><% } %>
+          <% if (ms) { %><div title="unique msclkids (Bing)">msclkid: <strong><%= ms %></strong></div><% } %>
+          <% if (idTotal === 0 && e.hit_count > 0) { %>
+            <div class="muted" style="font-size:10px;">no IDs</div>
+          <% } %>
+          <% if (noId > 0) { %>
+            <div title="<%= noId %> of <%= e.hit_count %> hits had no click ID at all"
+                 style="color:<%= noIdPct >= 60 ? '#ef4444' : (noIdPct >= 30 ? '#f97316' : 'inherit') %>;
+                        font-size:10px; font-weight:<%= noIdPct >= 60 ? '600' : 'normal' %>;">
+              no-id ×<%= noId %> (<%= noIdPct %>%)
+            </div>
           <% } %>
         </td>
 
@@ -331,13 +362,14 @@ function fmtRate(rate) {
 <details style="margin-top:16px;">
   <summary class="muted" style="cursor:pointer; font-size:13px;">How scoring works</summary>
   <div style="margin-top:8px; font-size:13px; line-height:1.7; max-width:700px;">
-    <p>Each subnet is scored 0–100 across six signals:</p>
+    <p>Each subnet is scored 0–100 across seven signals:</p>
     <table class="table table-dense" style="max-width:600px;">
-      <tr><td><strong>vol</strong></td><td>0–20</td><td>Hit volume — high traffic from one block</td></tr>
-      <tr><td><strong>conv</strong></td><td>0–25</td><td>Conversion rate — zero conv is the strongest bot signal</td></tr>
+      <tr><td><strong>vol</strong></td><td>0–15</td><td>Hit volume — high traffic from one block</td></tr>
+      <tr><td><strong>conv</strong></td><td>0–20</td><td>Conversion rate — zero conv is the strongest bot signal</td></tr>
       <tr><td><strong>rot</strong></td><td>0–20</td><td>IP rotation — many unique IPs per subnet = proxy pool</td></tr>
       <tr><td><strong>ua</strong></td><td>0–15</td><td>UA uniformity — bots reuse the same browser string</td></tr>
       <tr><td><strong>days</strong></td><td>0–15</td><td>Persistence — same subnet returning across multiple days</td></tr>
+      <tr><td><strong>id</strong></td><td>0–15</td><td>Click-ID diversity — direct hits with no gclid/wbraid, or replayed IDs</td></tr>
       <tr><td><strong>fake</strong></td><td>0–5</td><td>Fake UA — impossible iOS/Android versions (iOS 26+ = bot)</td></tr>
     </table>
     <p><strong>80+</strong> = strong recommendation | <strong>60+</strong> = flag for review | <strong>40+</strong> = watch</p>

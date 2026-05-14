@@ -34,6 +34,15 @@ const VOLUME_THRESHOLD        = 5;
 const HAMMER_THRESHOLD        = 3;               // same IP hits 3+ times
 const RAPID_DUPLICATE_WINDOW_MS = 60 * 1000;     // 60 seconds
 
+// click_id_starved trigger:
+//   - 10+ hits AND >60% have no click ID
+//   - means: high volume of direct landing-page hits with no ad attribution.
+//   Real paid traffic carries a gclid/wbraid/gbraid/fbclid/msclkid on most
+//   hits. A bot hitting the landing URL directly or replaying a single
+//   captured ID produces this signature.
+const CLICK_ID_STARVED_MIN_HITS = 10;
+const CLICK_ID_STARVED_RATIO    = 0.60;          // 60%+ with no ID
+
 /**
  * Analyse a list of click events from one CIDR within one day.
  *
@@ -45,10 +54,19 @@ function detectTriggers(clicks) {
     return { triggers: [], metrics: emptyMetrics(), qualifies: false };
   }
 
-  // Sort by timestamp - all subsequent algorithms need ordered events
+  // Sort by timestamp - all subsequent algorithms need ordered events.
+  // Carry through click-ID fields when present so we can compute diversity.
   const sorted = clicks
     .filter(c => c && c.ts)
-    .map(c => ({ ts: c.ts instanceof Date ? c.ts : new Date(c.ts), ip: c.ip }))
+    .map(c => ({
+      ts: c.ts instanceof Date ? c.ts : new Date(c.ts),
+      ip: c.ip,
+      gclid:   c.gclid   || '',
+      wbraid:  c.wbraid  || '',
+      gbraid:  c.gbraid  || '',
+      fbclid:  c.fbclid  || '',
+      msclkid: c.msclkid || '',
+    }))
     .sort((a, b) => a.ts - b.ts);
 
   if (sorted.length === 0) {
@@ -120,6 +138,35 @@ function detectTriggers(clicks) {
   // Unique IPs - used for display and for "rotation" detection downstream
   const uniqueIps = Object.keys(ipCounts).length;
 
+  // ── Trigger 5: click_id_starved (mostly direct/no-ID hits) ─────────
+  // Count distinct values for each click-ID type, plus hits with no ID at all.
+  // The trigger fires when the no-click-ID ratio is high on meaningful volume.
+  const gclidSet   = new Set();
+  const wbraidSet  = new Set();
+  const gbraidSet  = new Set();
+  const fbclidSet  = new Set();
+  const msclkidSet = new Set();
+  let hitsWithNoClickId = 0;
+
+  for (const c of sorted) {
+    if (c.gclid)   gclidSet.add(c.gclid);
+    if (c.wbraid)  wbraidSet.add(c.wbraid);
+    if (c.gbraid)  gbraidSet.add(c.gbraid);
+    if (c.fbclid)  fbclidSet.add(c.fbclid);
+    if (c.msclkid) msclkidSet.add(c.msclkid);
+    // Counts as "no click ID" only if ALL five fields are empty.
+    // This is deliberately strict - if any one tracking ID is present we
+    // assume the click had some attribution.
+    if (!c.gclid && !c.wbraid && !c.gbraid && !c.fbclid && !c.msclkid) {
+      hitsWithNoClickId++;
+    }
+  }
+
+  const noClickIdRatio = totalHits > 0 ? hitsWithNoClickId / totalHits : 0;
+  if (totalHits >= CLICK_ID_STARVED_MIN_HITS && noClickIdRatio >= CLICK_ID_STARVED_RATIO) {
+    triggers.add('click_id_starved');
+  }
+
   const metrics = {
     hits:                   totalHits,
     unique_ips:             uniqueIps,
@@ -127,6 +174,14 @@ function detectTriggers(clicks) {
     rapid_duplicate_count:  rapidDupes,
     rapid_duplicate_pairs:  rapidDupePairs,  // for downstream IP auto-block
     single_ip_hammer_count: hammerIpCount,
+    // Click-ID diversity metrics
+    unique_gclids:          gclidSet.size,
+    unique_wbraids:         wbraidSet.size,
+    unique_gbraids:         gbraidSet.size,
+    unique_fbclids:         fbclidSet.size,
+    unique_msclkids:        msclkidSet.size,
+    hits_with_no_click_id:  hitsWithNoClickId,
+    no_click_id_ratio:      noClickIdRatio,
   };
 
   return {
@@ -144,6 +199,13 @@ function emptyMetrics() {
     rapid_duplicate_count: 0,
     rapid_duplicate_pairs: [],
     single_ip_hammer_count: 0,
+    unique_gclids: 0,
+    unique_wbraids: 0,
+    unique_gbraids: 0,
+    unique_fbclids: 0,
+    unique_msclkids: 0,
+    hits_with_no_click_id: 0,
+    no_click_id_ratio: 0,
   };
 }
 
@@ -155,4 +217,6 @@ module.exports = {
   VOLUME_THRESHOLD,
   HAMMER_THRESHOLD,
   RAPID_DUPLICATE_WINDOW_MS,
+  CLICK_ID_STARVED_MIN_HITS,
+  CLICK_ID_STARVED_RATIO,
 };
