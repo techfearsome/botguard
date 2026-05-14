@@ -1,0 +1,119 @@
+<%- include('../partials/header', { ws, page, title: 'Seed Import - Intelligence' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Seed CIDR History</h1>
+    <p class="muted">
+      Import known-bad CIDRs from existing exclusion lists or block lists.
+      Seeded entries count as historical evidence — when matching traffic arrives
+      they're flagged as "returning offender" immediately.
+    </p>
+  </div>
+  <div>
+    <a href="/admin/intelligence" class="btn">← Back to Intelligence</a>
+  </div>
+</div>
+
+<% if (result) { %>
+<section class="panel" style="background:<%= result.imported > 0 ? '#22c55e15' : '#ef444415' %>; border-left:3px solid <%= result.imported > 0 ? '#22c55e' : '#ef4444' %>;">
+  <h3>Import results</h3>
+  <table class="table table-dense" style="max-width:500px;">
+    <tr><td>Valid CIDRs parsed</td><td><strong><%= result.valid_count %></strong></td></tr>
+    <tr><td>Imported</td><td><strong style="color:#22c55e;"><%= result.imported %></strong></td></tr>
+    <tr><td>Skipped (already present)</td><td><%= result.skipped %></td></tr>
+    <tr><td>Invalid lines</td><td><%= result.invalid_count %></td></tr>
+    <tr><td>Source tag</td><td class="mono"><%= result.seed_source %></td></tr>
+  </table>
+  <% if (result.invalid_samples && result.invalid_samples.length > 0) { %>
+    <details style="margin-top:8px;">
+      <summary class="muted" style="cursor:pointer;">Show invalid line samples</summary>
+      <pre style="font-size:11px; background:var(--bg-input); padding:8px; margin-top:8px; max-width:600px; overflow:auto;"><% result.invalid_samples.forEach(s => { %><%= s %>
+<% }) %></pre>
+    </details>
+  <% } %>
+</section>
+<% } %>
+
+<form method="POST" action="/admin/intelligence/seed" class="panel" style="max-width:900px;">
+  <h3>Import CIDRs</h3>
+  <p class="muted" style="margin-top:0;">
+    Paste a list of CIDRs, wildcards, or CSV. Accepts:
+  </p>
+  <ul class="muted" style="font-size:13px;">
+    <li>Wildcards: <code class="mono">1.2.3.*</code></li>
+    <li>IPv4 CIDR: <code class="mono">1.2.3.0/24</code></li>
+    <li>IPv6 CIDR: <code class="mono">2600:387::/32</code></li>
+    <li>CSV with CIDR in any column (header optional)</li>
+    <li>Lines starting with <code>#</code> are treated as comments</li>
+  </ul>
+
+  <p class="muted" style="font-size:13px;">
+    IPv4 entries are normalised to <code>/24</code> · IPv6 entries to <code>/32</code> ·
+    Duplicates within the input are deduplicated.
+  </p>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+    <label style="flex:1; min-width:200px;">
+      <span class="muted" style="font-size:13px;">Source tag</span>
+      <input type="text" name="seed_source"
+             value="manual_import"
+             placeholder="e.g. google_ads_account_exclusion"
+             style="width:100%; padding:6px 8px; margin-top:4px;">
+    </label>
+    <label style="flex:1; min-width:200px;">
+      <span class="muted" style="font-size:13px;">Seed date (defaults to 30 days ago)</span>
+      <input type="date" name="seed_date"
+             style="width:100%; padding:6px 8px; margin-top:4px;">
+    </label>
+  </div>
+
+  <label style="display:block; margin-bottom:6px; font-size:13px;">
+    <span class="muted">Paste CIDR list:</span>
+  </label>
+  <textarea name="text" rows="20" required
+            placeholder="# Paste your exclusion list here
+1.2.3.*
+4.5.6.0/24
+2600:387::/32
+..."
+            style="width:100%; font-family:monospace; font-size:12px; padding:10px;
+                   background:var(--bg-input); border:1px solid var(--border-default);
+                   color:var(--text-body); border-radius:4px;"></textarea>
+
+  <div style="display:flex; gap:8px; margin-top:12px;">
+    <button type="submit" class="btn btn-primary">Import seeds</button>
+    <a href="/admin/intelligence" class="btn">Cancel</a>
+  </div>
+</form>
+
+<details style="margin-top:16px;">
+  <summary class="muted" style="cursor:pointer; font-size:13px;">What is "seeding"?</summary>
+  <div style="margin-top:8px; font-size:13px; line-height:1.7; max-width:760px;">
+    <p>
+      The intelligence engine grows stronger as it accumulates daily snapshots
+      of suspicious CIDRs. Without history, every new bot subnet looks like a
+      fresh discovery — the system can't tell "we saw this same bot pool last
+      week" from "first time we've seen this CIDR."
+    </p>
+    <p>
+      Seeding pre-populates the snapshot collection with CIDRs you already know
+      are bad. Each seed gets a synthetic past date (default 30 days ago) so it
+      counts as historical evidence without polluting today's view.
+    </p>
+    <p>
+      When new traffic arrives, the analyser checks if the subnet has prior
+      snapshots (whether observed or seeded). If yes, the matching
+      <code>CidrIntelligence</code> record is flagged as a returning offender
+      with the seed source recorded in <code>historical_match.is_seeded</code>.
+    </p>
+    <p><strong>Good seed sources:</strong></p>
+    <ul>
+      <li>Your existing Google Ads account-level IP exclusion list</li>
+      <li>Your existing Google Ads campaign-level IP exclusion list</li>
+      <li>Curated firewall CSVs from past investigations</li>
+      <li>Industry blocklists for known proxy/VPN/datacenter ranges</li>
+    </ul>
+  </div>
+</details>
+
+<%- include('../partials/footer') %>

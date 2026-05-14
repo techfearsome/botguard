@@ -1,0 +1,176 @@
+<%- include('../partials/header', { ws, page, title: 'Snapshot History - Intelligence' }) %>
+
+<div class="page-header">
+  <div>
+    <h1>Snapshot History</h1>
+    <p class="muted">
+      Daily evidence record of CIDRs that triggered detection.
+      Used to identify recurring offenders across time.
+    </p>
+  </div>
+  <div>
+    <a href="/admin/intelligence" class="btn">← Back to Intelligence</a>
+  </div>
+</div>
+
+<%# Tabs: Default summary, by date, by cidr %>
+<div class="filter-bar" style="margin-bottom:16px;">
+  <a href="/admin/intelligence/history" class="btn <%= !date && !cidr ? 'btn-primary' : '' %>">Summary</a>
+  <% if (date) { %><span class="btn btn-primary">Date: <%= date %></span><% } %>
+  <% if (cidr) { %><span class="btn btn-primary">CIDR: <%= cidr %></span><% } %>
+</div>
+
+<% if (!date && !cidr) { %>
+  <%# ── Summary view: top recurring CIDRs + recent dates ────────────── %>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+
+    <section>
+      <h3>Most recurring CIDRs (by days seen)</h3>
+      <% if (cidrSummary.length === 0) { %>
+        <p class="muted">No snapshots yet. As suspicious traffic is detected, recurring CIDRs will appear here.</p>
+      <% } else { %>
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>CIDR</th>
+              <th style="width:60px;">Days</th>
+              <th style="width:80px;">Hits</th>
+              <th>First → Last</th>
+              <th>ASN</th>
+              <th>Src</th>
+            </tr>
+          </thead>
+          <tbody>
+          <% cidrSummary.slice(0, 50).forEach(c => { %>
+            <tr>
+              <td>
+                <a href="/admin/intelligence/history?view=cidr&cidr=<%= encodeURIComponent(c._id) %>" class="mono" style="font-size:12px;"><%= c._id %></a>
+                <span class="badge" style="font-size:10px; opacity:0.6;"><%= c.ip_version %></span>
+              </td>
+              <td>
+                <strong style="<% if (c.days >= 7) { %>color:#ef4444<% } else if (c.days >= 3) { %>color:#f97316<% } %>"><%= c.days %></strong>
+              </td>
+              <td class="mono"><%= c.total_hits %></td>
+              <td style="font-size:11px;" class="muted"><%= c.first_date %><br><%= c.last_date %></td>
+              <td style="font-size:11px;" class="cell-truncate-sm"><%= c.asn_org || '—' %></td>
+              <td>
+                <% if (c.sources && c.sources.includes('seed')) { %>
+                  <span class="badge" style="background:#3b82f622; color:#3b82f6; font-size:10px;">seed</span>
+                <% } %>
+                <% if (c.sources && c.sources.includes('analyser')) { %>
+                  <span class="badge" style="background:#22c55e22; color:#22c55e; font-size:10px;">obs</span>
+                <% } %>
+              </td>
+            </tr>
+          <% }); %>
+          </tbody>
+        </table>
+      </div>
+      <% } %>
+    </section>
+
+    <section>
+      <h3>Recent snapshot dates</h3>
+      <% if (dateSummary.length === 0) { %>
+        <p class="muted">No snapshots yet. The analyser writes one snapshot per qualifying CIDR per day.</p>
+      <% } else { %>
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th style="width:100px;">CIDRs flagged</th>
+              <th style="width:80px;">Total hits</th>
+            </tr>
+          </thead>
+          <tbody>
+          <% dateSummary.forEach(d => { %>
+            <tr>
+              <td><a href="/admin/intelligence/history?view=date&date=<%= encodeURIComponent(d._id) %>"><%= d._id %></a></td>
+              <td class="mono"><%= d.cidr_count %></td>
+              <td class="mono"><%= d.total_hits %></td>
+            </tr>
+          <% }); %>
+          </tbody>
+        </table>
+      </div>
+      <% } %>
+    </section>
+
+  </div>
+
+<% } else { %>
+  <%# ── Detail view: one date OR one CIDR ──────────────────────────── %>
+  <h3>
+    <% if (date) { %>
+      Snapshots from <strong><%= date %></strong> (<%= snapshots.length %> CIDRs)
+    <% } else if (cidr) { %>
+      All snapshots for <strong class="mono"><%= cidr %></strong>
+    <% } %>
+  </h3>
+
+  <% if (snapshots.length === 0) { %>
+    <p class="muted">No snapshots match this query.</p>
+  <% } else { %>
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <% if (cidr) { %>
+            <th>Date</th>
+          <% } else { %>
+            <th>CIDR</th>
+            <th>ASN</th>
+          <% } %>
+          <th>Triggers</th>
+          <th>Hits</th>
+          <th>IPs</th>
+          <th>Burst</th>
+          <th>RapDup</th>
+          <th>Hammer</th>
+          <th>Conv</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody>
+      <% snapshots.forEach(s => { %>
+        <tr>
+          <% if (cidr) { %>
+            <td><a href="/admin/intelligence/history?view=date&date=<%= encodeURIComponent(s.date) %>"><%= s.date %></a></td>
+          <% } else { %>
+            <td>
+              <a href="/admin/intelligence/history?view=cidr&cidr=<%= encodeURIComponent(s.cidr) %>" class="mono" style="font-size:12px;"><%= s.cidr %></a>
+            </td>
+            <td style="font-size:11px;" class="cell-truncate-sm"><%= s.asn_org || '—' %></td>
+          <% } %>
+          <td>
+            <% (s.triggers || []).forEach(t => { %>
+              <span class="badge" style="font-size:10px; margin-right:2px;
+                <% if (t === 'rapid_duplicate') { %>background:#ef444422; color:#ef4444;
+                <% } else if (t === 'burst') { %>background:#f9731622; color:#f97316;
+                <% } else if (t === 'hammer') { %>background:#a855f722; color:#a855f7;
+                <% } else if (t === 'volume') { %>background:#3b82f622; color:#3b82f6;
+                <% } else if (t === 'seed') { %>background:#6b728022; color:#6b7280;
+                <% } %>"><%= t %></span>
+            <% }); %>
+          </td>
+          <td class="mono"><%= s.hits %></td>
+          <td class="mono"><%= s.unique_ips %></td>
+          <td class="mono"><%= s.max_burst_5min %></td>
+          <td class="mono"><%= s.rapid_duplicate_count %></td>
+          <td class="mono"><%= s.single_ip_hammer_count %></td>
+          <td class="mono"><%= s.conversions %></td>
+          <td style="font-size:11px;">
+            <%= s.source %>
+            <% if (s.seed_source) { %><br><small class="muted"><%= s.seed_source %></small><% } %>
+          </td>
+        </tr>
+      <% }); %>
+      </tbody>
+    </table>
+  </div>
+  <% } %>
+<% } %>
+
+<%- include('../partials/footer') %>

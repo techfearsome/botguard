@@ -30,7 +30,9 @@ function fmtRate(rate) {
       <% } %>
     </p>
   </div>
-  <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
+  <div style="display:flex; gap:6px; align-items:flex-start; flex-wrap:wrap;">
+    <a href="/admin/intelligence/history" class="btn" title="Browse historical snapshots">History</a>
+    <a href="/admin/intelligence/seed" class="btn" title="Import known-bad CIDRs from external lists">Seed</a>
     <form method="POST" action="/admin/intelligence/run-now" style="display:inline">
       <button type="submit" class="btn" title="Trigger analysis run immediately">↻ Run Now</button>
     </form>
@@ -40,6 +42,25 @@ function fmtRate(rate) {
     </a>
   </div>
 </div>
+
+<%# ── Time frame selector ────────────────────────────────────────── %>
+<form method="POST" action="/admin/intelligence/analyse-range" class="filter-bar" style="margin-bottom:12px;">
+  <span class="muted" style="align-self:center; font-size:13px;">Analyse:</span>
+  <select name="range" style="min-width:140px;">
+    <option value="today">Today</option>
+    <option value="yesterday">Yesterday</option>
+    <option value="7d">Last 7 days</option>
+    <option value="30d">Last 30 days</option>
+    <option value="all">All time</option>
+    <option value="custom">Custom range</option>
+  </select>
+  <input type="date" name="date_from" placeholder="From">
+  <input type="date" name="date_to" placeholder="To">
+  <button type="submit" class="btn">Re-analyse window</button>
+  <span class="muted" style="align-self:center; font-size:12px; opacity:0.7;">
+    Updates the intelligence view with patterns from the selected window
+  </span>
+</form>
 
 <%# ── Stat cards ─────────────────────────────────────────────────── %>
 <div class="stat-grid" style="margin-bottom:16px;">
@@ -146,6 +167,24 @@ function fmtRate(rate) {
           <span class="badge" style="font-size:10px; margin-left:4px; opacity:0.6;"><%= e.ip_version %></span>
           <% if (e.fake_ua_count > 0) { %>
             <br><span class="badge badge-block" style="font-size:10px;" title="<%= e.fake_ua_count %> hits with impossible iOS/Android version">🤖 fake UA ×<%= e.fake_ua_count %></span>
+          <% } %>
+          <% const hm = e.historical_match || {}; %>
+          <% if (hm.is_returning) { %>
+            <br><span class="badge" style="font-size:10px; background:#ef444422; color:#ef4444; font-weight:600;"
+                title="Returned across <%= hm.prior_days_seen %> previous days. First: <%= hm.first_seen_date %>, last: <%= hm.last_seen_date %>">
+              ↻ Returning offender ×<%= hm.prior_days_seen %> days
+            </span>
+          <% } else if (hm.has_history) { %>
+            <br><span class="badge" style="font-size:10px; background:#f9731622; color:#f97316;"
+                title="Seen on 1 previous day: <%= hm.last_seen_date %>">
+              ⚠ Seen before
+            </span>
+          <% } %>
+          <% if (hm.is_seeded) { %>
+            <br><span class="badge" style="font-size:10px; background:#3b82f622; color:#3b82f6;"
+                title="Pre-loaded from a known-bad list">
+              🔖 seeded
+            </span>
           <% } %>
         </td>
 

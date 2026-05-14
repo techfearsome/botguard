@@ -1423,7 +1423,7 @@ router.get('/intelligence', async (req, res) => {
 router.post('/intelligence/:id/status', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { status, notes } = req.body;
-  const validStatuses = CidrIntelligence.schema.statics.STATUSES;
+  const validStatuses = CidrIntelligence.STATUSES || ['new', 'reviewing', 'blocked', 'exported', 'dismissed'];
   if (!validStatuses.includes(status)) return res.redirect('/admin/intelligence');
 
   const update = { status, notes: (notes || '').slice(0, 500) };
@@ -1472,6 +1472,150 @@ router.post('/intelligence/run-now', async (req, res) => {
     runAnalysis();  // fire and forget — runs in background
   } catch (e) { /* logged inside */ }
   res.redirect('/admin/intelligence');
+});
+
+// ---------- Run analysis over a specific time frame ----------
+//
+// Triggers a one-shot analysis pass over the chosen date range. This is what
+// the time frame selector in the UI calls. Unlike the 60-second worker which
+// always uses the configured default window, this lets you ask "analyse last
+// week's data and refresh the intelligence view."
+router.post('/intelligence/analyse-range', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { range, date_from, date_to } = req.body;
+
+  // Reuse the existing parseRange helper - matches the date selector pattern
+  // used across the rest of the admin UI.
+  const parsed = parseRange({ range, date_from, date_to });
+
+  const opts = {};
+  if (parsed.gte) opts.windowStart = parsed.gte;
+  if (parsed.lte) opts.windowEnd = parsed.lte;
+  // If no explicit start, fall back to "today" range
+  if (!parsed.gte && !parsed.lte) {
+    opts.windowStart = new Date();
+    opts.windowStart.setHours(0, 0, 0, 0);
+  }
+
+  // Compute windowHours for storage on the resulting intelligence record
+  const windowMs = (opts.windowEnd || new Date()) - (opts.windowStart || new Date());
+  opts.windowHours = Math.max(1, Math.round(windowMs / (60 * 60 * 1000)));
+
+  try {
+    const { analyseWorkspace } = require('../../lib/cidrAnalyser');
+    // Fire and forget - results land in CidrIntelligence within a few seconds
+    analyseWorkspace(ws._id, opts).catch((e) =>
+      logger.warn('analyse_range_failed', { err: e.message })
+    );
+  } catch (e) { /* analyser unavailable - shouldn't happen */ }
+
+  res.redirect('/admin/intelligence?range=' + encodeURIComponent(range || 'today'));
+});
+
+// ---------- Snapshot history (CidrDailySnapshot) ----------
+//
+// Browse snapshots by date or by CIDR. Shows which CIDRs have been flagged
+// historically and how often.
+router.get('/intelligence/history', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { CidrDailySnapshot } = require('../../models');
+
+  const view = req.query.view === 'cidr' ? 'cidr' : 'date';
+  const date = req.query.date || null;
+  const cidr = req.query.cidr || null;
+
+  let snapshots = [];
+  let cidrSummary = [];
+  let dateSummary = [];
+
+  if (view === 'date' && date) {
+    snapshots = await CidrDailySnapshot.find({
+      workspace_id: ws._id, date,
+    }).sort({ hits: -1 }).limit(500).lean();
+  } else if (view === 'cidr' && cidr) {
+    snapshots = await CidrDailySnapshot.find({
+      workspace_id: ws._id, cidr,
+    }).sort({ date: -1 }).limit(500).lean();
+  } else {
+    // Default summary view
+    const recurringAgg = await CidrDailySnapshot.aggregate([
+      { $match: { workspace_id: ws._id } },
+      { $group: {
+          _id: '$cidr',
+          days: { $sum: 1 },
+          total_hits: { $sum: '$hits' },
+          last_date: { $max: '$date' },
+          first_date: { $min: '$date' },
+          asn_org: { $last: '$asn_org' },
+          ip_version: { $last: '$ip_version' },
+          sources: { $addToSet: '$source' },
+      }},
+      { $sort: { days: -1 } },
+      { $limit: 100 },
+    ]);
+    cidrSummary = recurringAgg;
+
+    const dateAgg = await CidrDailySnapshot.aggregate([
+      { $match: { workspace_id: ws._id } },
+      { $group: {
+          _id: '$date',
+          cidr_count: { $sum: 1 },
+          total_hits: { $sum: '$hits' },
+      }},
+      { $sort: { _id: -1 } },
+      { $limit: 60 },
+    ]);
+    dateSummary = dateAgg;
+  }
+
+  res.render('admin/intelligence_history', {
+    ws, page: 'intelligence',
+    view, date, cidr,
+    snapshots, cidrSummary, dateSummary,
+  });
+});
+
+// ---------- Seed import ----------
+//
+// Accepts pasted text (plain CIDR list, wildcard list, or CSV) and creates
+// CidrDailySnapshot entries marked source='seed'. Used to import:
+//   - Existing Google Ads exclusion lists
+//   - The comprehensive firewall CSV
+//   - Any third-party blocklist
+router.get('/intelligence/seed', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  res.render('admin/intelligence_seed', {
+    ws, page: 'intelligence',
+    result: null,
+  });
+});
+
+router.post('/intelligence/seed', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { parseText, importSeeds } = require('../../lib/cidrSeed');
+
+  const text = String(req.body.text || '');
+  const seedSource = String(req.body.seed_source || 'manual_import').slice(0, 100);
+  const seedDate = req.body.seed_date && /^\d{4}-\d{2}-\d{2}$/.test(req.body.seed_date)
+    ? req.body.seed_date : undefined;
+
+  const { valid, invalid } = parseText(text);
+  let importResult = { imported: 0, skipped: 0 };
+  if (valid.length > 0) {
+    importResult = await importSeeds(ws._id, valid, { seedSource, seedDate });
+  }
+
+  res.render('admin/intelligence_seed', {
+    ws, page: 'intelligence',
+    result: {
+      valid_count: valid.length,
+      invalid_count: invalid.length,
+      invalid_samples: invalid.slice(0, 10),
+      imported: importResult.imported,
+      skipped: importResult.skipped,
+      seed_source: seedSource,
+    },
+  });
 });
 
 // Export flagged CIDRs as Google Ads exclusion list

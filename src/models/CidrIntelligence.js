@@ -87,6 +87,19 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   exported_at: { type: Date },
   dismissed_at: { type: Date },
   notes:      { type: String, default: '', maxlength: 500 },
+
+  // ── Historical correlation ──────────────────────────────────────────
+  // Populated by the analyser when this CIDR has prior snapshots in
+  // CidrDailySnapshot. Drives the "returning offender" badge in the UI.
+  historical_match: {
+    has_history:      { type: Boolean, default: false },
+    total_days_seen:  { type: Number,  default: 0 },     // lifetime distinct days with snapshots
+    prior_days_seen:  { type: Number,  default: 0 },     // distinct days excluding today
+    first_seen_date:  { type: String,  default: '' },    // 'YYYY-MM-DD'
+    last_seen_date:   { type: String,  default: '' },    // 'YYYY-MM-DD' (most recent prior snapshot)
+    is_returning:     { type: Boolean, default: false }, // true if prior_days_seen >= 2
+    is_seeded:        { type: Boolean, default: false }, // true if at least one snapshot came from seed
+  },
 }, {
   timestamps: true,  // adds createdAt, updatedAt
 });

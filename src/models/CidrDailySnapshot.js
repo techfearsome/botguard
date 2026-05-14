@@ -1,0 +1,91 @@
+/**
+ * CidrDailySnapshot - daily evidence record for CIDRs that triggered suspicion.
+ *
+ * One document per (workspace_id, cidr, date). Only written when a CIDR
+ * matches one of the four detection triggers within that day. Subnets with
+ * a single coincidental hit never produce a snapshot.
+ *
+ * Purpose: Persistent historical record that survives across days, enables
+ * "returning offender" detection, and lets us compare today's traffic against
+ * accumulated history.
+ *
+ * Storage estimate: ~150 snapshots/day at production scale, ~400 bytes each,
+ * = 60KB/day = 22MB/year. Kept forever - historical signal strengthens over time.
+ *
+ * Detection triggers (any one qualifies the CIDR for snapshotting):
+ *   - burst:           3+ hits within any 5-minute window
+ *   - volume:          5+ hits across the day
+ *   - hammer:          any single IP hit 3+ times
+ *   - rapid_duplicate: same IP within 60 seconds
+ */
+
+'use strict';
+
+const mongoose = require('mongoose');
+
+const TRIGGERS = ['burst', 'volume', 'hammer', 'rapid_duplicate', 'seed'];
+const SOURCES  = ['analyser', 'seed', 'manual'];
+
+const CidrDailySnapshotSchema = new mongoose.Schema({
+  workspace_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Workspace',
+    required: true,
+    index: true,
+  },
+
+  // Subnet identifier: '1.2.3.0/24' or '2600:387::/32'
+  cidr: { type: String, required: true },
+
+  // Calendar date as 'YYYY-MM-DD' string in UTC.
+  // String not Date because we want exact day-bucket equality, no timezone math.
+  date: { type: String, required: true, index: true },
+
+  // IP family for filtering
+  ip_version: { type: String, enum: ['v4', 'v6'], required: true },
+
+  // ── Detection evidence ──────────────────────────────────────────────
+  // Which triggers fired - typically multiple for actual bot subnets
+  triggers: { type: [String], enum: TRIGGERS, default: [] },
+
+  hits:        { type: Number, default: 0 },   // total clicks from this CIDR today
+  unique_ips:  { type: Number, default: 0 },   // distinct IP addresses seen
+  conversions: { type: Number, default: 0 },   // sum of conversion_count
+
+  // Burst metrics
+  max_burst_5min:         { type: Number, default: 0 },  // most hits in any 5-min window
+  rapid_duplicate_count:  { type: Number, default: 0 },  // same-IP hits within 60s
+  single_ip_hammer_count: { type: Number, default: 0 },  // count of IPs that hit 3+ times alone
+
+  // Bot UA signal (iOS 19+, headless markers, etc.) - lifted from scorer
+  fake_ua_count: { type: Number, default: 0 },
+
+  // Context for display
+  asn_org: { type: String, default: '' },
+  country: { type: String, default: '' },
+
+  // ── Provenance ─────────────────────────────────────────────────────
+  // 'analyser': written by the rollup worker from real click data
+  // 'seed':     imported from external source (existing exclusion files)
+  // 'manual':   added by admin from the UI
+  source: { type: String, enum: SOURCES, default: 'analyser' },
+
+  // If source='seed', records where the entry came from
+  seed_source: { type: String, default: '' },   // e.g. 'google_ads_account_exclusion'
+}, {
+  timestamps: true,
+});
+
+// Dedup: one snapshot per CIDR per day per workspace
+CidrDailySnapshotSchema.index({ workspace_id: 1, cidr: 1, date: 1 }, { unique: true });
+
+// Common query: "all snapshots for this CIDR ordered by date" → persistence calc
+CidrDailySnapshotSchema.index({ workspace_id: 1, cidr: 1, date: -1 });
+
+// Common query: "all CIDRs on this date" → daily history view
+CidrDailySnapshotSchema.index({ workspace_id: 1, date: -1 });
+
+CidrDailySnapshotSchema.statics.TRIGGERS = TRIGGERS;
+CidrDailySnapshotSchema.statics.SOURCES = SOURCES;
+
+module.exports = mongoose.model('CidrDailySnapshot', CidrDailySnapshotSchema);
