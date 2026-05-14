@@ -245,7 +245,12 @@ function fmtRate(rate) {
           </div>
         </td>
 
-        <td class="mono"><%= e.hit_count %></td>
+        <td class="mono">
+          <%= e.hit_count %>
+          <% if (e.blocked_hits > 0) { %>
+            <br><small style="color:#f97316; font-size:10px;" title="<%= e.blocked_hits %> hits from this subnet were already blocked by other gates (UTM, geo, paused campaign etc)">+<%= e.blocked_hits %> blocked</small>
+          <% } %>
+        </td>
         <td class="mono"><%= e.unique_ip_count %></td>
 
         <%# Conversion rate — red if zero, muted if low %>

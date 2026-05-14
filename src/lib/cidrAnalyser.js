@@ -216,9 +216,17 @@ async function analyseWorkspace(workspaceId, opts = {}) {
   const writeLiveState = opts.writeLiveState !== false;
 
   // ── Full-window scan (no cursor — re-evaluates every run) ───────────
+  // We include ALL decisions (allow, would_block, block) so the intelligence
+  // view reflects total subnet activity, not just allowed traffic. Blocked
+  // traffic still indicates a subnet is hostile - the only reason we caught
+  // it is that an earlier gate (UTM, country, proxy) filtered it out.
+  //
+  // Trigger detection runs only on allow + would_block (traffic that
+  // reached the landing page or would have). This avoids amplifying noisy
+  // UTM-gate blocks into bot signals - missing UTM params doesn't mean
+  // the subnet is automated.
   const clicks = await Click.find({
     workspace_id: workspaceId,
-    decision: { $in: ['allow', 'would_block'] },
     ts: { $gte: windowStart, $lte: windowEnd },
   })
     .select('ip ts decision conversion_count user_agent asn_org country external_ids')
@@ -247,7 +255,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     let day = bySubnet.get(date);
     if (!day) {
       day = {
-        clicks: [],
+        clicks: [],            // allow + would_block ONLY (fed to trigger detection)
+        blockedHits: 0,        // count of click rows that were already blocked
         uaCounts: {},
         fakeUACount: 0,
         conv: 0,
@@ -256,6 +265,19 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         version: sub.version,
       };
       bySubnet.set(date, day);
+    }
+
+    // ASN/country always recorded so we know who owns the subnet even when
+    // all traffic was blocked.
+    day.asn = day.asn || c.asn_org || '';
+    day.country = day.country || c.country || '';
+
+    if (c.decision === 'block') {
+      day.blockedHits++;
+      // Don't feed blocked clicks into trigger detection - they didn't
+      // reach the landing page and may have been blocked for benign reasons
+      // (missing UTM, paused campaign, geo).
+      continue;
     }
 
     const eid = c.external_ids || {};
@@ -269,8 +291,6 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       msclkid: eid.msclkid || '',
     });
     day.conv += parseInt(c.conversion_count || 0, 10) || 0;
-    day.asn = day.asn || c.asn_org || '';
-    day.country = day.country || c.country || '';
     const ua = c.user_agent || '';
     day.uaCounts[ua] = (day.uaCounts[ua] || 0) + 1;
     if (isFakeUA(ua)) day.fakeUACount++;
@@ -329,7 +349,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     const agg = {
       cidr,
       version: null,
-      hits: 0,
+      hits: 0,             // allow + would_block (what triggers see)
+      blockedHits: 0,      // already-blocked traffic from this subnet
       uniqueIps: new Set(),
       conv: 0,
       uaCounts: {},
@@ -348,6 +369,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     for (const day of byDay.values()) {
       agg.version = day.version;
       agg.hits += day.clicks.length;
+      agg.blockedHits += day.blockedHits || 0;
       for (const c of day.clicks) {
         agg.uniqueIps.add(c.ip);
         if (agg.sampleIps.size < 10) agg.sampleIps.add(c.ip);
@@ -428,9 +450,12 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     };
     const score = Object.values(signals).reduce((a, b) => a + b, 0);
 
-    // Only track subnets that score above min, OR that have history.
-    // Low-score with history is still worth surfacing as "returning offender".
-    if (score < 10 && !history.dates.length) continue;
+    // Surface a subnet to the live state if ANY of:
+    //   - Score >= 10 (the trigger detection found something on allowed traffic)
+    //   - Has prior snapshot history (returning offender, even if quiet today)
+    //   - Has 5+ blocked hits (significant hostile traffic, even if our gates
+    //     caught it - the subnet is still attacking and needs to be visible)
+    if (score < 10 && !history.dates.length && agg.blockedHits < 5) continue;
 
     const topUAs = Object.entries(agg.uaCounts)
       .sort((a, b) => b[1] - a[1])
@@ -447,6 +472,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
           score,
           signals,
           hit_count:             agg.hits,
+          blocked_hits:          agg.blockedHits,
           unique_ip_count:       uniqueIps,
           conversion_count:      agg.conv,
           conv_rate:             convRate,

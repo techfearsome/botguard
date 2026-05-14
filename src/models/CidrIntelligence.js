@@ -55,6 +55,7 @@ const CidrIntelligenceSchema = new mongoose.Schema({
 
   // ── Evidence ─────────────────────────────────────────────────────────
   hit_count:        { type: Number, default: 0 },
+  blocked_hits:     { type: Number, default: 0 },   // already-blocked traffic in window
   unique_ip_count:  { type: Number, default: 0 },
   conversion_count: { type: Number, default: 0 },
   conv_rate:        { type: Number, default: 0 },   // 0.0–1.0

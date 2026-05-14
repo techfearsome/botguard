@@ -1413,15 +1413,21 @@ router.get('/intelligence', async (req, res) => {
     rangeIsLive = false;
   }
 
-  // Status filter — default shows unactioned only
+  // Status filter — default shows everything still active (including exported
+  // entries that are still being hit). Only dismissed entries are hidden by
+  // default since those are user-acknowledged-not-a-threat.
   const statusFilter = req.query.status || 'active';
   let statusQuery;
-  if (statusFilter === 'active')    statusQuery = { $in: ['new', 'reviewing'] };
+  if (statusFilter === 'active')    statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported'] };
   else if (statusFilter === 'all')  statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported', 'dismissed'] };
   else                              statusQuery = statusFilter;
 
   // Score filter
-  const minScore = parseInt(req.query.min_score, 10) || 40;
+  // Default 20 (not 40): in small windows or fresh deploys, subnets that
+  // fire triggers can score 20-39 from current-window evidence alone, with
+  // persistence pushing them higher over time. Hiding 20-39 makes the page
+  // look empty even when triggers are firing.
+  const minScore = parseInt(req.query.min_score, 10) || 20;
 
   // IP version filter
   const versionFilter = req.query.version || 'all';
@@ -1557,9 +1563,9 @@ router.get('/intelligence', async (req, res) => {
   let statNew, statCritical, statWatching;
   if (rangeIsLive) {
     [statNew, statCritical, statWatching] = await Promise.all([
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 80 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 60 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'new', score: { $gte: 40 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'blocked', 'exported'] }, score: { $gte: 80 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'blocked', 'exported'] }, score: { $gte: 60 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'blocked', 'exported'] }, score: { $gte: 40 } }),
     ]);
   } else {
     // For snapshot-backed views, stats reflect the shown entries
