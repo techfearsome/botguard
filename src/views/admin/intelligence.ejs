@@ -109,11 +109,12 @@ function fmtRate(rate) {
 <%# ── Filters ────────────────────────────────────────────────────── %>
 <form method="GET" action="/admin/intelligence" class="filter-bar" id="filter-form">
   <select name="status">
-    <option value="active"  <%= statusFilter === 'active'  ? 'selected' : '' %>>Active (unreviewed)</option>
-    <option value="all"     <%= statusFilter === 'all'     ? 'selected' : '' %>>All statuses</option>
-    <option value="exported"<%= statusFilter === 'exported'? 'selected' : '' %>>Exported</option>
-    <option value="blocked" <%= statusFilter === 'blocked' ? 'selected' : '' %>>Blocked</option>
-    <option value="dismissed"<%= statusFilter==='dismissed'? 'selected' : '' %>>Dismissed</option>
+    <option value="active"      <%= statusFilter === 'active'      ? 'selected' : '' %>>Active (new)</option>
+    <option value="all_flagged" <%= statusFilter === 'all_flagged' ? 'selected' : '' %>>All flagged (inc. exported)</option>
+    <option value="all"         <%= statusFilter === 'all'         ? 'selected' : '' %>>All statuses</option>
+    <option value="exported"    <%= statusFilter === 'exported'    ? 'selected' : '' %>>Exported</option>
+    <option value="blocked"     <%= statusFilter === 'blocked'     ? 'selected' : '' %>>Blocked</option>
+    <option value="dismissed"   <%= statusFilter === 'dismissed'   ? 'selected' : '' %>>Dismissed</option>
   </select>
 
   <select name="min_score">
@@ -152,6 +153,13 @@ function fmtRate(rate) {
     <button type="button" class="btn btn-small" onclick="bulkAction('exported')">Export selected</button>
     <button type="button" class="btn btn-small" onclick="bulkAction('blocked')">Block selected</button>
     <button type="button" class="btn btn-small" onclick="bulkAction('dismissed')">Dismiss selected</button>
+  </form>
+  <form method="POST" action="/admin/intelligence/mark-exported" style="display:inline;">
+    <input type="hidden" name="min_score" value="<%= minScore %>">
+    <button type="submit" class="btn btn-small" style="background:#22c55e; color:#fff;"
+      onclick="return confirm('Mark all currently shown entries as exported?')">
+      ✓ Mark all exported
+    </button>
   </form>
 </div>
 

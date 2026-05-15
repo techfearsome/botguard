@@ -1413,14 +1413,14 @@ router.get('/intelligence', async (req, res) => {
     rangeIsLive = false;
   }
 
-  // Status filter — default shows everything still active (including exported
-  // entries that are still being hit). Only dismissed entries are hidden by
-  // default since those are user-acknowledged-not-a-threat.
+  // Status filter — default 'active' now EXCLUDES exported entries since those
+  // have already been dealt with. Users can choose 'all flagged' to see them.
   const statusFilter = req.query.status || 'active';
   let statusQuery;
-  if (statusFilter === 'active')    statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported'] };
-  else if (statusFilter === 'all')  statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported', 'dismissed'] };
-  else                              statusQuery = statusFilter;
+  if (statusFilter === 'active')           statusQuery = { $in: ['new', 'reviewing'] };
+  else if (statusFilter === 'all_flagged') statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported'] };
+  else if (statusFilter === 'all')         statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported', 'dismissed'] };
+  else                                     statusQuery = statusFilter;
 
   // Score filter
   // Default 20 (not 40): in small windows or fresh deploys, subnets that
@@ -1563,9 +1563,9 @@ router.get('/intelligence', async (req, res) => {
   let statNew, statCritical, statWatching;
   if (rangeIsLive) {
     [statNew, statCritical, statWatching] = await Promise.all([
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'blocked', 'exported'] }, score: { $gte: 80 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'blocked', 'exported'] }, score: { $gte: 60 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'blocked', 'exported'] }, score: { $gte: 40 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 80 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 60 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 40 } }),
     ]);
   } else {
     // For snapshot-backed views, stats reflect the shown entries
@@ -1816,64 +1816,56 @@ router.post('/intelligence/seed', async (req, res) => {
 
 // Export flagged CIDRs as Google Ads exclusion list
 // Format: IPv4 → x.x.x.* wildcard, IPv6 → compressed CIDR
+// Export — plain CIDR list, one per line, no comments. Google Ads ready.
+// GET does NOT change status (no side effects on download).
+// Only exports entries not yet exported, unless ?include_exported=1.
 router.get('/intelligence/export.csv', async (req, res) => {
   const ws = await resolveWorkspace(req);
 
-  const statusFilter = req.query.status === 'all'
-    ? { $in: ['new', 'reviewing', 'exported', 'blocked'] }
-    : { $in: ['exported', 'new', 'reviewing'] };
+  const includeExported = req.query.include_exported === '1';
+  const statusIn = includeExported
+    ? ['new', 'reviewing', 'blocked', 'exported']
+    : ['new', 'reviewing', 'blocked'];
 
   const minScore = parseInt(req.query.min_score, 10) || 60;
 
   const entries = await CidrIntelligence.find({
     workspace_id: ws._id,
-    status: statusFilter,
+    status: { $in: statusIn },
     score: { $gte: minScore },
   }).sort({ score: -1 }).limit(500).lean();
 
-  // Mark as exported
-  const ids = entries.map(e => e._id);
-  if (ids.length) {
-    await CidrIntelligence.updateMany(
-      { _id: { $in: ids } },
-      { $set: { status: 'exported', exported_at: new Date() } }
-    );
-  }
-
-  // Google Ads format
-  const lines = [
-    `# BotGuard CIDR Intelligence Export`,
-    `# Generated: ${new Date().toISOString()}`,
-    `# Entries: ${entries.length} (score >= ${minScore})`,
-    `# Add to: Google Ads > Settings > IP Exclusions`,
-    ``,
-  ];
-
-  // Group by score band
-  const critical = entries.filter(e => e.score >= 80);
-  const high     = entries.filter(e => e.score >= 60 && e.score < 80);
-  const medium   = entries.filter(e => e.score >= 40 && e.score < 60);
-
-  for (const [label, group] of [['CRITICAL (80+)', critical], ['HIGH (60-79)', high], ['MEDIUM (40-59)', medium]]) {
-    if (!group.length) continue;
-    lines.push(`# ── ${label} ── ${group.length} entries`);
-    for (const e of group) {
-      const cidr = e.cidr;
-      // Google Ads prefers wildcard for IPv4, CIDR for IPv6
-      if (e.ip_version === 'v4') {
-        const parts = cidr.split('/')[0].split('.');
-        lines.push(`${parts[0]}.${parts[1]}.${parts[2]}.*  # ${e.asn_org} score=${e.score} hits=${e.hit_count} days=${e.days_seen_count}`);
-      } else {
-        lines.push(`${cidr}  # ${e.asn_org} score=${e.score} hits=${e.hit_count} days=${e.days_seen_count}`);
-      }
+  // Plain list — one IP block per line, nothing else
+  const lines = entries.map(e => {
+    if (e.ip_version === 'v4') {
+      const parts = e.cidr.split('/')[0].split('.');
+      return `${parts[0]}.${parts[1]}.${parts[2]}.*`;
     }
-    lines.push('');
-  }
+    return e.cidr;
+  });
 
   const today = new Date().toISOString().slice(0, 10);
   res.set('Content-Type', 'text/plain; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="botguard-cidr-${today}.txt"`);
   res.send(lines.join('\n'));
+});
+
+// Mark exported — call AFTER pasting into Google Ads. Moves all
+// qualifying entries to 'exported' status so they disappear from
+// the active view.
+router.post('/intelligence/mark-exported', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const minScore = parseInt(req.body.min_score, 10) || 60;
+
+  const result = await CidrIntelligence.updateMany(
+    {
+      workspace_id: ws._id,
+      status: { $in: ['new', 'reviewing', 'blocked'] },
+      score: { $gte: minScore },
+    },
+    { $set: { status: 'exported', exported_at: new Date() } }
+  );
+  res.redirect('/admin/intelligence');
 });
 
 // ---------- Settings (API keys, password info) ----------
