@@ -163,6 +163,50 @@ function fmtRate(rate) {
   </form>
 </div>
 
+<%# ── Pagination helper ─────────────────────────────────────────── %>
+<%
+  // Build base URL preserving current filters
+  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}`;
+  function pgUrl(p, pp) { return `${paginationBase}&page=${p}&per_page=${pp}`; }
+  const cp = typeof currentPage !== 'undefined' ? currentPage : 1;
+  const tp = typeof totalPages !== 'undefined' ? totalPages : 1;
+  const pp = typeof perPage !== 'undefined' ? perPage : 50;
+  const te = typeof totalEntries !== 'undefined' ? totalEntries : entries.length;
+%>
+
+<%# ── Pagination bar (top) ──────────────────────────────────────── %>
+<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; padding:8px 12px; background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); font-size:13px;">
+  <div style="display:flex; align-items:center; gap:8px; color:var(--text-secondary);">
+    <span>Show:</span>
+    <% [50, 100, 200, 500].forEach(size => { %>
+      <% if (size === pp) { %>
+        <span style="padding:3px 8px; background:var(--accent); color:#fff; border-radius:4px; font-weight:600;"><%= size %></span>
+      <% } else { %>
+        <a href="<%= pgUrl(1, size) %>" style="padding:3px 8px; border-radius:4px; color:var(--text-secondary); text-decoration:none; border:1px solid var(--border-default);"
+           onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='transparent'"><%= size %></a>
+      <% } %>
+    <% }); %>
+    <span style="margin-left:8px; color:var(--text-muted);">of <strong><%= te %></strong> total</span>
+  </div>
+  <div style="display:flex; align-items:center; gap:4px;">
+    <% if (cp > 1) { %>
+      <a href="<%= pgUrl(1, pp) %>" class="btn btn-small" title="First page">« First</a>
+      <a href="<%= pgUrl(cp - 1, pp) %>" class="btn btn-small" title="Previous page">‹ Prev</a>
+    <% } else { %>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">« First</span>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">‹ Prev</span>
+    <% } %>
+    <span style="padding:0 10px; white-space:nowrap;">Page <strong><%= cp %></strong> of <strong><%= tp %></strong></span>
+    <% if (cp < tp) { %>
+      <a href="<%= pgUrl(cp + 1, pp) %>" class="btn btn-small" title="Next page">Next ›</a>
+      <a href="<%= pgUrl(tp, pp) %>" class="btn btn-small" title="Last page">Last »</a>
+    <% } else { %>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">Next ›</span>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">Last »</span>
+    <% } %>
+  </div>
+</div>
+
 <%# ── Main table ─────────────────────────────────────────────────── %>
 <div class="table-scroll" id="intel-table">
   <table class="table">
@@ -370,6 +414,30 @@ function fmtRate(rate) {
     <% }); %>
     </tbody>
   </table>
+</div>
+
+<%# ── Pagination bar (bottom) ───────────────────────────────────── %>
+<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px; padding:8px 12px; background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); font-size:13px;">
+  <span style="color:var(--text-secondary);">
+    Showing <%= (cp - 1) * pp + 1 %>–<%= Math.min(cp * pp, te) %> of <strong><%= te %></strong>
+  </span>
+  <div style="display:flex; align-items:center; gap:4px;">
+    <% if (cp > 1) { %>
+      <a href="<%= pgUrl(1, pp) %>" class="btn btn-small">« First</a>
+      <a href="<%= pgUrl(cp - 1, pp) %>" class="btn btn-small">‹ Prev</a>
+    <% } else { %>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">« First</span>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">‹ Prev</span>
+    <% } %>
+    <span style="padding:0 10px;">Page <strong><%= cp %></strong> / <strong><%= tp %></strong></span>
+    <% if (cp < tp) { %>
+      <a href="<%= pgUrl(cp + 1, pp) %>" class="btn btn-small">Next ›</a>
+      <a href="<%= pgUrl(tp, pp) %>" class="btn btn-small">Last »</a>
+    <% } else { %>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">Next ›</span>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">Last »</span>
+    <% } %>
+  </div>
 </div>
 
 <details style="margin-top:16px;">

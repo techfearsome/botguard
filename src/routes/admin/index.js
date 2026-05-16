@@ -1432,8 +1432,14 @@ router.get('/intelligence', async (req, res) => {
   // IP version filter
   const versionFilter = req.query.version || 'all';
 
+  // Pagination
+  const perPage = Math.min(Math.max(parseInt(req.query.per_page, 10) || 50, 10), 500);
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const skip = (page - 1) * perPage;
+
   let entries = [];
   let lastAnalysedAt = null;
+  let totalEntries = 0;
 
   if (rangeIsLive) {
     // ── TODAY view: read live CidrIntelligence ─────────────────────
@@ -1444,9 +1450,12 @@ router.get('/intelligence', async (req, res) => {
     };
     if (versionFilter !== 'all') filter.ip_version = versionFilter;
 
+    totalEntries = await CidrIntelligence.countDocuments(filter);
+
     entries = await CidrIntelligence.find(filter)
       .sort({ score: -1, last_seen: -1 })
-      .limit(200)
+      .skip(skip)
+      .limit(perPage)
       .lean();
 
     const lastEntry = await CidrIntelligence.findOne({ workspace_id: ws._id })
@@ -1556,6 +1565,10 @@ router.get('/intelligence', async (req, res) => {
       return e.hit_count >= 5;
     });
 
+    // Pagination for snapshot view (in-memory since it's already aggregated)
+    totalEntries = entries.length;
+    entries = entries.slice(skip, skip + perPage);
+
     lastAnalysedAt = null;
   }
 
@@ -1570,13 +1583,13 @@ router.get('/intelligence', async (req, res) => {
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 40 } }),
     ]);
   } else {
-    // For snapshot-backed views, count from full unfiltered entries
     statCritical = entries.filter(e => e.score >= 80).length;
     statHigh     = entries.filter(e => e.score >= 60).length;
-    statWatching = entries.length;
+    statWatching = totalEntries;
   }
-  // "Shown" always reflects the current filtered table
   statShown = entries.length;
+
+  const totalPages = Math.max(1, Math.ceil(totalEntries / perPage));
 
   res.render('admin/intelligence', {
     ws,
@@ -1593,6 +1606,11 @@ router.get('/intelligence', async (req, res) => {
     dateTo: dateTo,
     stats: { critical: statCritical, high: statHigh, watching: statWatching, shown: statShown },
     lastAnalysedAt,
+    // Pagination
+    currentPage: page,
+    perPage,
+    totalEntries,
+    totalPages,
   });
 });
 
