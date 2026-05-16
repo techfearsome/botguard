@@ -75,10 +75,11 @@ function fmtRate(rate) {
   </form>
   <%# Row 2: Status / score / version filters — all on one line %>
   <form method="GET" action="/admin/intelligence" id="filter-form" style="display:flex; flex-wrap:nowrap; gap:8px; align-items:center; border-top:1px solid var(--border-default); padding-top:10px;">
-    <%# Carry forward the current range/date so Filter doesn't reset the timeframe %>
+    <%# Carry forward the current range/date/sort so Filter doesn't reset %>
     <input type="hidden" name="range" value="<%= currentRange %>">
     <input type="hidden" name="date_from" value="<%= dFrom %>">
     <input type="hidden" name="date_to" value="<%= dTo %>">
+    <input type="hidden" name="sort" value="<%= typeof sortParam !== 'undefined' ? sortParam : 'score_desc' %>">
     <span class="muted" style="font-size:13px; white-space:nowrap;">Filter:</span>
     <select name="status" style="width:auto; min-width:180px; max-width:220px; padding:6px 10px; font-size:13px;">
       <option value="active"      <%= statusFilter === 'active'      ? 'selected' : '' %>>Active (new)</option>
@@ -182,8 +183,20 @@ function fmtRate(rate) {
 <%# ── Pagination helper ─────────────────────────────────────────── %>
 <%
   // Build base URL preserving current filters
-  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}`;
+  const sp = typeof sortParam !== 'undefined' ? sortParam : 'score_desc';
+  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${sp}`;
   function pgUrl(p, pp) { return `${paginationBase}&page=${p}&per_page=${pp}`; }
+  // Sort URL builder: clicking a header toggles between asc/desc
+  function sortUrl(field) {
+    const cur = sp;
+    const next = cur === field + '_desc' ? field + '_asc' : field + '_desc';
+    return `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${next}&per_page=${pp}`;
+  }
+  function sortArrow(field) {
+    if (sp === field + '_desc') return ' ▼';
+    if (sp === field + '_asc') return ' ▲';
+    return '';
+  }
   const cp = typeof currentPage !== 'undefined' ? currentPage : 1;
   const tp = typeof totalPages !== 'undefined' ? totalPages : 1;
   const pp = typeof perPage !== 'undefined' ? perPage : 50;
@@ -230,15 +243,15 @@ function fmtRate(rate) {
       <tr>
         <th style="width:24px;"></th>
         <th>CIDR</th>
-        <th>Score</th>
+        <th><a href="<%= sortUrl('score') %>" style="color:inherit; text-decoration:none;" title="Sort by score">Score<%- sortArrow('score') %></a></th>
         <th>Signals</th>
-        <th>Hits</th>
+        <th><a href="<%= sortUrl('hits') %>" style="color:inherit; text-decoration:none;" title="Sort by hits">Hits<%- sortArrow('hits') %></a></th>
         <th>IPs</th>
-        <th>Conv</th>
-        <th>Days</th>
+        <th><a href="<%= sortUrl('conv') %>" style="color:inherit; text-decoration:none;" title="Sort by conversion rate">Conv<%- sortArrow('conv') %></a></th>
+        <th><a href="<%= sortUrl('days') %>" style="color:inherit; text-decoration:none;" title="Sort by days seen">Days<%- sortArrow('days') %></a></th>
         <th title="Click-ID diversity: unique gclids/wbraids/fbclids and hits with NO click ID at all">Click IDs</th>
         <th>ASN</th>
-        <th>Status</th>
+        <th><a href="<%= sortUrl('last_seen') %>" style="color:inherit; text-decoration:none;" title="Sort by last seen">Status<%- sortArrow('last_seen') %></a></th>
         <th>Actions</th>
       </tr>
     </thead>

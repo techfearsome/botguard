@@ -1459,10 +1459,26 @@ router.get('/intelligence', async (req, res) => {
     if (cfFilter === 'cf_yes') filter.cf_exported = true;
     else if (cfFilter === 'cf_no') filter.cf_exported = { $ne: true };
 
+    // Sorting
+    const sortParam = req.query.sort || 'score_desc';
+    const SORT_MAP = {
+      score_desc:  { score: -1, last_seen: -1 },
+      score_asc:   { score: 1, last_seen: -1 },
+      hits_desc:   { hit_count: -1, score: -1 },
+      hits_asc:    { hit_count: 1, score: -1 },
+      days_desc:   { days_seen_count: -1, score: -1 },
+      days_asc:    { days_seen_count: 1, score: -1 },
+      conv_desc:   { conv_rate: -1, score: -1 },
+      conv_asc:    { conv_rate: 1, score: -1 },
+      last_seen_desc: { last_seen: -1 },
+      last_seen_asc:  { last_seen: 1 },
+    };
+    const sortOrder = SORT_MAP[sortParam] || SORT_MAP.score_desc;
+
     totalEntries = await CidrIntelligence.countDocuments(filter);
 
     entries = await CidrIntelligence.find(filter)
-      .sort({ score: -1, last_seen: -1 })
+      .sort(sortOrder)
       .skip(skip)
       .limit(perPage)
       .lean();
@@ -1608,6 +1624,7 @@ router.get('/intelligence', async (req, res) => {
     minScore,
     versionFilter,
     cfFilter,
+    sortParam: typeof sortParam !== 'undefined' ? sortParam : 'score_desc',
     rangeKey,
     rangeStart,
     rangeEnd,
