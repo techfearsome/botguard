@@ -79,16 +79,18 @@ function ipv6InCidr(ip, cidr) {
   return ipHex === rangeHex;
 }
 
-function checkIP(ip, blocklist) {
+function checkIP(ip, blocklist, asn) {
   if (!blocklist || !ip) return null;
   const isV6 = ip.includes(':');
 
+  // Check exact IP matches
   if (blocklist.ips) {
     for (const r of blocklist.ips) {
       if (r.ip === ip) return r.action || 'block';
     }
   }
 
+  // Check CIDR ranges
   if (blocklist.cidrs) {
     for (const r of blocklist.cidrs) {
       if (!r.cidr) continue;
@@ -97,6 +99,13 @@ function checkIP(ip, blocklist) {
       } else if (!isV6 && !r.cidr.includes(':')) {
         if (ipv4InCidr(ip, r.cidr)) return r.action || 'block';
       }
+    }
+  }
+
+  // Check ASN — Cloudflare provides the visitor's ASN via request.cf.asn
+  if (asn && blocklist.asns) {
+    for (const r of blocklist.asns) {
+      if (r.asn === asn) return r.action || 'block';
     }
   }
 
@@ -141,9 +150,11 @@ export default {
       return fetch(request);
     }
 
-    // Check the IP
+    // Check the IP and ASN
     const ip = request.headers.get('cf-connecting-ip');
-    const action = checkIP(ip, blocklist);
+    const cf = request.cf || {};
+    const visitorAsn = cf.asn ? Number(cf.asn) : null;
+    const action = checkIP(ip, blocklist, visitorAsn);
 
     if (action === 'block') {
       return new Response(
