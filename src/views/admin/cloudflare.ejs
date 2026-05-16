@@ -11,15 +11,23 @@
 </div>
 <% } %>
 
-<%# ── Controls: Enable/Disable + Scan Mode + Sync ────────────────── %>
+<%# ── Controls: Status + Enable/Disable + Scan Mode + Sync ─────────── %>
 <div style="background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:12px 14px; margin-bottom:16px;">
   <div style="display:flex; flex-wrap:nowrap; gap:12px; align-items:center;">
-    <%# Enable/Disable toggle %>
-    <form method="POST" action="/admin/cloudflare/toggle-enabled" style="display:inline;">
-      <button type="submit" class="btn btn-small" style="background:<%= cfSettings.enabled ? '#22c55e' : '#ef4444' %>; color:#fff; min-width:100px;">
-        <%= cfSettings.enabled ? '● Enabled' : '○ Disabled' %>
-      </button>
-    </form>
+    <%# Status indicator + toggle button %>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="display:flex; align-items:center; gap:6px; padding:6px 12px; border-radius:6px; border:1px solid <%= cfSettings.enabled ? '#22c55e' : '#ef4444' %>; background:<%= cfSettings.enabled ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)' %>;">
+        <span style="width:10px; height:10px; border-radius:50%; background:<%= cfSettings.enabled ? '#22c55e' : '#ef4444' %>; display:inline-block;<%= cfSettings.enabled ? ' box-shadow:0 0 6px rgba(34,197,94,0.5);' : '' %>"></span>
+        <span style="font-size:13px; font-weight:500; color:<%= cfSettings.enabled ? '#22c55e' : '#ef4444' %>;">
+          <%= cfSettings.enabled ? 'ACTIVE' : 'INACTIVE' %>
+        </span>
+      </div>
+      <form method="POST" action="/admin/cloudflare/toggle-enabled" style="display:inline;">
+        <button type="submit" class="btn btn-small" style="min-width:80px;">
+          <%= cfSettings.enabled ? 'Disable' : 'Enable' %>
+        </button>
+      </form>
+    </div>
 
     <%# Scan mode %>
     <form method="POST" action="/admin/cloudflare/scan-mode" style="display:flex; gap:6px; align-items:center;">
