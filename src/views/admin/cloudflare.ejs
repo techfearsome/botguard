@@ -119,13 +119,15 @@
   </form>
 </details>
 
-<%# ── CSV upload ─────────────────────────────────────────────────── %>
+<%# ── Bulk paste ──────────────────────────────────────────────────── %>
 <details style="margin-bottom:16px;">
-  <summary style="cursor:pointer; font-size:14px; font-weight:500;">↑ Upload CSV</summary>
-  <form method="POST" action="/admin/cloudflare/upload-csv" enctype="multipart/form-data" style="margin-top:10px; display:flex; gap:8px; align-items:center;">
-    <input type="file" name="csvfile" accept=".csv,.txt" style="font-size:13px;">
-    <button type="submit" class="btn">Upload</button>
-    <span class="muted" style="font-size:12px;">One per line: IP, CIDR, ASN, or wildcard (66.207.24.*). Optional: value,type,label</span>
+  <summary style="cursor:pointer; font-size:14px; font-weight:500;">↑ Bulk paste</summary>
+  <form method="POST" action="/admin/cloudflare/upload-csv" style="margin-top:10px;">
+    <textarea name="csv_text" rows="6" placeholder="Paste one entry per line:&#10;66.207.24.0/24&#10;2600:387::/32&#10;146.86.149.*&#10;7922&#10;&#10;Optional CSV: value,type,label" style="width:100%; padding:8px 10px; font-size:13px; font-family:var(--font-mono); resize:vertical;"></textarea>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+      <button type="submit" class="btn">Import</button>
+      <span class="muted" style="font-size:12px;">IPs, CIDRs, wildcards (66.207.24.*), or ASN numbers. One per line.</span>
+    </div>
   </form>
 </details>
 

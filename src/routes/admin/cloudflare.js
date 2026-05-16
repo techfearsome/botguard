@@ -11,8 +11,6 @@
 
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const CloudflareRule = require('../../models/CloudflareRule');
 const AsnBlacklist = require('../../models/AsnBlacklist');
@@ -109,13 +107,13 @@ router.post('/add', async (req, res) => {
   }
 });
 
-// ── CSV upload ───────────────────────────────────────────────────────
-router.post('/upload-csv', upload.single('csvfile'), async (req, res) => {
+// ── CSV / bulk paste ─────────────────────────────────────────────────
+router.post('/upload-csv', async (req, res) => {
   const ws = await resolveWorkspace(req);
-  if (!req.file) return res.redirect('/admin/cloudflare?flash=No+file+uploaded');
+  const text = req.body.csv_text || '';
+  if (!text.trim()) return res.redirect('/admin/cloudflare?flash=No+data+entered');
 
-  const lines = req.file.buffer.toString('utf-8')
-    .split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
 
   let added = 0, skipped = 0, invalid = 0;
   for (const line of lines) {
