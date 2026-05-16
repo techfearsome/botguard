@@ -47,18 +47,26 @@ function generateWorkerScript() {
  * Generated: ${new Date().toISOString()}
  */
 
-let cachedBlocklist = null;
+let cached = { config: null, cidrs: null, ips: null, asns: null };
 let cacheExpiry = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function getBlocklist(env) {
   const now = Date.now();
-  if (cachedBlocklist && now < cacheExpiry) return cachedBlocklist;
+  if (cached.config && now < cacheExpiry) return cached;
   try {
-    const data = await env.BLOCKLIST.get('blocklist', { type: 'json' });
-    if (data) { cachedBlocklist = data; cacheExpiry = now + CACHE_TTL_MS; }
+    const [config, cidrs, ips, asns] = await Promise.all([
+      env.BLOCKLIST.get('config', { type: 'json' }),
+      env.BLOCKLIST.get('cidrs', { type: 'json' }),
+      env.BLOCKLIST.get('ips', { type: 'json' }),
+      env.BLOCKLIST.get('asns', { type: 'json' }),
+    ]);
+    if (config) {
+      cached = { config, cidrs: cidrs || [], ips: ips || [], asns: asns || [] };
+      cacheExpiry = now + CACHE_TTL_MS;
+    }
   } catch (e) {}
-  return cachedBlocklist;
+  return cached;
 }
 
 function ipv4ToInt(ip) {
@@ -121,7 +129,6 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Health check
     if (url.pathname === '/__botguard_health') {
       return new Response(JSON.stringify({ status: 'active', ts: new Date().toISOString() }), {
         headers: { 'Content-Type': 'application/json' }
@@ -131,8 +138,8 @@ export default {
     if (url.pathname.startsWith('/admin/') || url.pathname.startsWith('/api/')) return fetch(request);
 
     const bl = await getBlocklist(env);
-    if (!bl || !bl.enabled) return fetch(request);
-    if (bl.scan_mode === 'utm' && !hasUTM(url)) return fetch(request);
+    if (!bl.config || !bl.config.enabled) return fetch(request);
+    if (bl.config.scan_mode === 'utm' && !hasUTM(url)) return fetch(request);
 
     const ip = request.headers.get('cf-connecting-ip');
     const cf = request.cf || {};
