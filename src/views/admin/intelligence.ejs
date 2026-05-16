@@ -99,6 +99,11 @@ function fmtRate(rate) {
       <option value="v4"  <%= versionFilter === 'v4'  ? 'selected' : '' %>>IPv4 only</option>
       <option value="v6"  <%= versionFilter === 'v6'  ? 'selected' : '' %>>IPv6 only</option>
     </select>
+    <select name="cf" style="width:auto; min-width:130px; max-width:170px; padding:6px 10px; font-size:13px;">
+      <option value="all"    <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'all'    ? 'selected' : '' %>>All (CF)</option>
+      <option value="cf_yes" <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'cf_yes' ? 'selected' : '' %>>In Cloudflare</option>
+      <option value="cf_no"  <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'cf_no'  ? 'selected' : '' %>>Not in Cloudflare</option>
+    </select>
     <button type="submit" class="btn btn-small">Filter</button>
   </form>
 </div>
@@ -177,7 +182,7 @@ function fmtRate(rate) {
 <%# ── Pagination helper ─────────────────────────────────────────── %>
 <%
   // Build base URL preserving current filters
-  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}`;
+  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}`;
   function pgUrl(p, pp) { return `${paginationBase}&page=${p}&per_page=${pp}`; }
   const cp = typeof currentPage !== 'undefined' ? currentPage : 1;
   const tp = typeof totalPages !== 'undefined' ? totalPages : 1;
@@ -374,6 +379,9 @@ function fmtRate(rate) {
           <span class="badge" style="background:<%= (statusColors[e.status]||'#6b7280') %>22; color:<%= statusColors[e.status]||'#6b7280' %>; font-size:11px;">
             <%= e.status %>
           </span>
+          <% if (e.cf_exported) { %>
+            <span class="badge" style="background:#f9731622; color:#f97316; font-size:10px; margin-left:2px;" title="Added to Cloudflare edge firewall">CF</span>
+          <% } %>
           <% if (e.last_seen) { %>
             <br><small class="muted" style="font-size:10px;"><%- localTime(e.last_seen) %></small>
           <% } %>

@@ -104,6 +104,10 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   dismissed_at:{ type: Date },
   notes:       { type: String, default: '', maxlength: 500 },
 
+  // ── Cloudflare edge firewall status ────────────────────────────────
+  cf_exported:    { type: Boolean, default: false, index: true },
+  cf_exported_at: { type: Date },
+
   // ── Historical correlation ─────────────────────────────────────────
   historical_match: {
     has_history:      { type: Boolean, default: false },

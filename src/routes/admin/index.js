@@ -1436,6 +1436,9 @@ router.get('/intelligence', async (req, res) => {
   // IP version filter
   const versionFilter = req.query.version || 'all';
 
+  // Cloudflare export filter
+  const cfFilter = req.query.cf || 'all';
+
   // Pagination
   const perPage = Math.min(Math.max(parseInt(req.query.per_page, 10) || 50, 10), 500);
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -1453,6 +1456,8 @@ router.get('/intelligence', async (req, res) => {
       score: { $gte: minScore },
     };
     if (versionFilter !== 'all') filter.ip_version = versionFilter;
+    if (cfFilter === 'cf_yes') filter.cf_exported = true;
+    else if (cfFilter === 'cf_no') filter.cf_exported = { $ne: true };
 
     totalEntries = await CidrIntelligence.countDocuments(filter);
 
@@ -1602,6 +1607,7 @@ router.get('/intelligence', async (req, res) => {
     statusFilter,
     minScore,
     versionFilter,
+    cfFilter,
     rangeKey,
     rangeStart,
     rangeEnd,

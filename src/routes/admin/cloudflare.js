@@ -183,6 +183,11 @@ router.post('/import-intelligence', async (req, res) => {
         notes: `Score ${entry.score}, ${entry.hit_count} hits, ${entry.days_seen_count} days`,
         source: 'intelligence', source_ref: entry._id.toString(), active: true,
       });
+      // Mark the intelligence entry as exported to Cloudflare
+      await CidrIntelligence.updateOne(
+        { _id: entry._id },
+        { $set: { cf_exported: true, cf_exported_at: new Date() } }
+      );
       added++;
     } catch (err) { if (err.code === 11000) skipped++; }
   }
