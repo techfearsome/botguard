@@ -1,0 +1,234 @@
+/**
+ * /admin/cloudflare routes — Cloudflare Worker edge firewall management.
+ *
+ * Config needed in .env:
+ *   CF_ACCOUNT_ID       — Cloudflare account ID
+ *   CF_API_TOKEN        — API token with Workers KV Storage Edit permission
+ *   CF_KV_NAMESPACE_ID  — KV namespace ID
+ */
+
+'use strict';
+
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+const CloudflareRule = require('../../models/CloudflareRule');
+const AsnBlacklist = require('../../models/AsnBlacklist');
+const CidrIntelligence = require('../../models/CidrIntelligence');
+const { buildBlocklist, syncToCloudflareKV } = require('../../lib/cloudflareSync');
+
+async function resolveWorkspace(req) {
+  const { Workspace } = require('../../models');
+  const { DEFAULT_SLUG } = require('../../lib/bootstrap');
+  const slug = req.params?.workspaceSlug || DEFAULT_SLUG;
+  return Workspace.findOne({ slug });
+}
+
+// ── Main list view ───────────────────────────────────────────────────
+router.get('/', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const typeFilter = req.query.type || 'all';
+  const statusFilter = req.query.status || 'active';
+
+  const filter = { workspace_id: ws._id };
+  if (typeFilter !== 'all') filter.rule_type = typeFilter;
+  if (statusFilter === 'active') filter.active = true;
+  else if (statusFilter === 'inactive') filter.active = false;
+
+  const entries = await CloudflareRule.find(filter)
+    .sort({ rule_type: 1, created_at: -1 }).lean();
+
+  const stats = {
+    total: await CloudflareRule.countDocuments({ workspace_id: ws._id, active: true }),
+    cidrs: await CloudflareRule.countDocuments({ workspace_id: ws._id, active: true, rule_type: 'cidr' }),
+    ips: await CloudflareRule.countDocuments({ workspace_id: ws._id, active: true, rule_type: 'ip' }),
+    asns: await CloudflareRule.countDocuments({ workspace_id: ws._id, active: true, rule_type: 'asn' }),
+    needs_sync: await CloudflareRule.countDocuments({ workspace_id: ws._id, active: true, needs_sync: true }),
+  };
+
+  const cfConfigured = !!(process.env.CF_ACCOUNT_ID && process.env.CF_API_TOKEN && process.env.CF_KV_NAMESPACE_ID);
+  const cfSettings = ws.settings?.cloudflare_settings || { enabled: false, scan_mode: 'utm' };
+
+  res.render('admin/cloudflare', {
+    ws, entries, stats, page: 'cloudflare',
+    typeFilter, statusFilter,
+    cfConfigured, cfSettings,
+    flash: req.query.flash || '',
+  });
+});
+
+// ── Enable / disable the Worker ──────────────────────────────────────
+router.post('/toggle-enabled', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const current = ws.settings?.cloudflare_settings?.enabled ?? false;
+  await ws.constructor.updateOne(
+    { _id: ws._id },
+    { $set: { 'settings.cloudflare_settings.enabled': !current } }
+  );
+  // Auto-sync so the Worker picks up the change
+  try { await syncToCloudflareKV(ws._id); } catch (e) { /* non-fatal */ }
+  res.redirect(`/admin/cloudflare?flash=Edge+firewall+${!current ? 'enabled' : 'disabled'}`);
+});
+
+// ── Switch scan mode ─────────────────────────────────────────────────
+router.post('/scan-mode', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const mode = req.body.scan_mode === 'all' ? 'all' : 'utm';
+  await ws.constructor.updateOne(
+    { _id: ws._id },
+    { $set: { 'settings.cloudflare_settings.scan_mode': mode } }
+  );
+  try { await syncToCloudflareKV(ws._id); } catch (e) { /* non-fatal */ }
+  res.redirect(`/admin/cloudflare?flash=Scan+mode+set+to+${mode}`);
+});
+
+// ── Add single rule ──────────────────────────────────────────────────
+router.post('/add', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { rule_type, value, asn_number, label, notes, action } = req.body;
+  try {
+    const doc = {
+      workspace_id: ws._id, rule_type,
+      action: action || 'block', label: label || '',
+      notes: notes || '', source: 'manual', active: true,
+    };
+    if (rule_type === 'asn') {
+      doc.asn_number = parseInt(asn_number, 10);
+      if (!doc.asn_number) throw new Error('Valid ASN number required');
+    } else {
+      doc.value = (value || '').trim();
+      if (!doc.value) throw new Error('IP or CIDR value required');
+    }
+    await CloudflareRule.create(doc);
+    res.redirect('/admin/cloudflare?flash=Rule+added');
+  } catch (err) {
+    if (err.code === 11000) res.redirect('/admin/cloudflare?flash=Rule+already+exists');
+    else res.redirect(`/admin/cloudflare?flash=Error:+${encodeURIComponent(err.message)}`);
+  }
+});
+
+// ── CSV upload ───────────────────────────────────────────────────────
+router.post('/upload-csv', upload.single('csvfile'), async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  if (!req.file) return res.redirect('/admin/cloudflare?flash=No+file+uploaded');
+
+  const lines = req.file.buffer.toString('utf-8')
+    .split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+
+  let added = 0, skipped = 0, invalid = 0;
+  for (const line of lines) {
+    const parts = line.split(',').map(p => p.trim());
+    let value = parts[0], ruleType = (parts[1] || '').toLowerCase(), label = parts[2] || '';
+
+    if (!ruleType || !['ip', 'cidr', 'asn'].includes(ruleType)) {
+      if (/^\d+$/.test(value)) ruleType = 'asn';
+      else if (value.includes('/')) ruleType = 'cidr';
+      else if (value.includes('*')) { value = value.replace('.*', '.0/24'); ruleType = 'cidr'; }
+      else if (/^[\d.:a-fA-F]+$/.test(value)) ruleType = 'ip';
+      else { invalid++; continue; }
+    }
+
+    try {
+      const doc = { workspace_id: ws._id, rule_type: ruleType, action: 'block', label, source: 'csv_upload', active: true };
+      if (ruleType === 'asn') { doc.asn_number = parseInt(value, 10); if (!doc.asn_number) { invalid++; continue; } }
+      else doc.value = value;
+      await CloudflareRule.create(doc);
+      added++;
+    } catch (err) { if (err.code === 11000) skipped++; else invalid++; }
+  }
+  res.redirect(`/admin/cloudflare?flash=CSV:+${added}+added,+${skipped}+existing,+${invalid}+invalid`);
+});
+
+// ── Import from /admin/asn ───────────────────────────────────────────
+router.post('/import-asn', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const ids = (req.body.ids || '').split(',').filter(Boolean);
+  if (!ids.length) return res.redirect('/admin/cloudflare?flash=No+rules+selected');
+
+  const asnRules = await AsnBlacklist.find({ _id: { $in: ids } }).lean();
+  let added = 0, skipped = 0;
+  for (const rule of asnRules) {
+    try {
+      const doc = {
+        workspace_id: ws._id,
+        rule_type: rule.asn ? 'asn' : (rule.cidr ? 'cidr' : 'ip'),
+        action: 'block', label: rule.asn_org || '',
+        notes: `From ASN blacklist (${rule.category})`,
+        source: 'asn_import', source_ref: rule._id.toString(), active: true,
+      };
+      if (rule.asn) doc.asn_number = rule.asn;
+      else if (rule.cidr) doc.value = rule.cidr;
+      else { skipped++; continue; }
+      await CloudflareRule.create(doc);
+      added++;
+    } catch (err) { if (err.code === 11000) skipped++; }
+  }
+  res.redirect(`/admin/cloudflare?flash=ASN+import:+${added}+added,+${skipped}+existing`);
+});
+
+// ── Import from /admin/intelligence ──────────────────────────────────
+router.post('/import-intelligence', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const ids = (req.body.ids || '').split(',').filter(Boolean);
+  if (!ids.length) return res.redirect('/admin/cloudflare?flash=No+blocks+selected');
+
+  const entries = await CidrIntelligence.find({ _id: { $in: ids } }).lean();
+  let added = 0, skipped = 0;
+  for (const entry of entries) {
+    try {
+      await CloudflareRule.create({
+        workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
+        action: 'block', label: entry.asn_org || '',
+        notes: `Score ${entry.score}, ${entry.hit_count} hits, ${entry.days_seen_count} days`,
+        source: 'intelligence', source_ref: entry._id.toString(), active: true,
+      });
+      added++;
+    } catch (err) { if (err.code === 11000) skipped++; }
+  }
+  res.redirect(`/admin/cloudflare?flash=Intelligence+import:+${added}+added,+${skipped}+existing`);
+});
+
+// ── Toggle / Delete ──────────────────────────────────────────────────
+router.post('/:id/toggle', async (req, res) => {
+  const rule = await CloudflareRule.findById(req.params.id);
+  if (rule) { rule.active = !rule.active; await rule.save(); }
+  res.redirect('/admin/cloudflare');
+});
+
+router.post('/:id/delete', async (req, res) => {
+  await CloudflareRule.deleteOne({ _id: req.params.id });
+  res.redirect('/admin/cloudflare');
+});
+
+router.post('/bulk-delete', async (req, res) => {
+  const ids = (req.body.ids || '').split(',').filter(Boolean);
+  if (ids.length) await CloudflareRule.deleteMany({ _id: { $in: ids } });
+  res.redirect(`/admin/cloudflare?flash=${ids.length}+rules+deleted`);
+});
+
+// ── Push to Cloudflare KV ────────────────────────────────────────────
+router.post('/sync', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  try {
+    const result = await syncToCloudflareKV(ws._id);
+    if (result.success) res.redirect(`/admin/cloudflare?flash=Synced+${result.rules}+rules+(${Math.round(result.payload_bytes/1024)}KB)`);
+    else res.redirect(`/admin/cloudflare?flash=Sync+failed:+${result.reason || JSON.stringify(result.errors)}`);
+  } catch (err) {
+    res.redirect(`/admin/cloudflare?flash=Sync+error:+${encodeURIComponent(err.message)}`);
+  }
+});
+
+// ── Export as plain text ─────────────────────────────────────────────
+router.get('/export', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const rules = await CloudflareRule.find({ workspace_id: ws._id, active: true })
+    .sort({ rule_type: 1, value: 1 }).lean();
+  const lines = rules.map(r => r.rule_type === 'asn' ? `AS${r.asn_number}` : r.value);
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="cloudflare-rules-${new Date().toISOString().slice(0,10)}.txt"`);
+  res.send(lines.join('\n'));
+});
+
+module.exports = router;

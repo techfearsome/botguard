@@ -10,4 +10,5 @@ module.exports = {
   FirewallEntry: require('./FirewallEntry'),
   CidrIntelligence: require('./CidrIntelligence'),
   CidrDailySnapshot: require('./CidrDailySnapshot'),
+  CloudflareRule: require('./CloudflareRule'),
 };

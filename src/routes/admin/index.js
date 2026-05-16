@@ -51,6 +51,10 @@ router.use((req, res, next) => {
   next();
 });
 
+// Mount Cloudflare edge firewall routes
+const cloudflareRoutes = require('./cloudflare');
+router.use('/cloudflare', cloudflareRoutes);
+
 // Resolve workspace - week 1 single tenant, defaults to env var workspace
 async function resolveWorkspace(req) {
   const slug = req.params.workspaceSlug || DEFAULT_SLUG;

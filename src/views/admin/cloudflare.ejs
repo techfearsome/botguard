@@ -1,0 +1,203 @@
+<% /* admin/cloudflare.ejs — Cloudflare Edge Firewall */ %>
+
+<h1>Cloudflare Edge Firewall</h1>
+<p class="muted" style="margin-bottom:16px;">
+  Edge-level IP blocking via Cloudflare Workers. Blocks bot traffic at Cloudflare's edge before it reaches your server.
+</p>
+
+<% if (flash) { %>
+<div style="background:var(--color-background-info,#E6F1FB); border:1px solid var(--color-border-info,#85B7EB); border-radius:var(--radius-md); padding:10px 14px; margin-bottom:16px; font-size:13px; color:var(--color-text-info,#185FA5);">
+  <%= flash %>
+</div>
+<% } %>
+
+<%# ── Controls: Enable/Disable + Scan Mode + Sync ────────────────── %>
+<div style="background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:12px 14px; margin-bottom:16px;">
+  <div style="display:flex; flex-wrap:nowrap; gap:12px; align-items:center;">
+    <%# Enable/Disable toggle %>
+    <form method="POST" action="/admin/cloudflare/toggle-enabled" style="display:inline;">
+      <button type="submit" class="btn btn-small" style="background:<%= cfSettings.enabled ? '#22c55e' : '#ef4444' %>; color:#fff; min-width:100px;">
+        <%= cfSettings.enabled ? '● Enabled' : '○ Disabled' %>
+      </button>
+    </form>
+
+    <%# Scan mode %>
+    <form method="POST" action="/admin/cloudflare/scan-mode" style="display:flex; gap:6px; align-items:center;">
+      <span class="muted" style="font-size:13px; white-space:nowrap;">Scan mode:</span>
+      <select name="scan_mode" style="width:auto; min-width:180px; padding:6px 10px; font-size:13px;">
+        <option value="utm" <%= cfSettings.scan_mode === 'utm' ? 'selected' : '' %>>UTM/Ad clicks only</option>
+        <option value="all" <%= cfSettings.scan_mode === 'all' ? 'selected' : '' %>>All traffic</option>
+      </select>
+      <button type="submit" class="btn btn-small">Set</button>
+    </form>
+
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <%# Sync button %>
+      <form method="POST" action="/admin/cloudflare/sync" style="display:inline;">
+        <button type="submit" class="btn btn-primary"
+          <%= cfConfigured ? '' : 'disabled title="Set CF_ACCOUNT_ID, CF_API_TOKEN, CF_KV_NAMESPACE_ID in .env"' %>>
+          ☁ Push to Cloudflare
+        </button>
+      </form>
+      <a href="/admin/cloudflare/export" class="btn">Export text</a>
+    </div>
+  </div>
+
+  <% if (!cfConfigured) { %>
+  <div style="margin-top:8px; font-size:12px; color:#f97316;">
+    ⚠ Set <code>CF_ACCOUNT_ID</code>, <code>CF_API_TOKEN</code>, and <code>CF_KV_NAMESPACE_ID</code> in your .env to enable Cloudflare sync.
+  </div>
+  <% } %>
+</div>
+
+<%# ── Stats ──────────────────────────────────────────────────────── %>
+<div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;">
+  <div class="stat-card" style="flex:1; min-width:90px;">
+    <div class="stat-label">Total</div>
+    <div class="stat-value"><%= stats.total %></div>
+  </div>
+  <div class="stat-card" style="flex:1; min-width:90px;">
+    <div class="stat-label">CIDRs</div>
+    <div class="stat-value"><%= stats.cidrs %></div>
+  </div>
+  <div class="stat-card" style="flex:1; min-width:90px;">
+    <div class="stat-label">IPs</div>
+    <div class="stat-value"><%= stats.ips %></div>
+  </div>
+  <div class="stat-card" style="flex:1; min-width:90px;">
+    <div class="stat-label">ASNs</div>
+    <div class="stat-value"><%= stats.asns %></div>
+  </div>
+  <div class="stat-card" style="flex:1; min-width:90px;">
+    <div class="stat-label">Pending sync</div>
+    <div class="stat-value" style="color:<%= stats.needs_sync > 0 ? '#f97316' : '#22c55e' %>;"><%= stats.needs_sync %></div>
+  </div>
+</div>
+
+<%# ── Filters ────────────────────────────────────────────────────── %>
+<div style="background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:12px 14px; margin-bottom:16px;">
+  <form method="GET" action="/admin/cloudflare" style="display:flex; flex-wrap:nowrap; gap:8px; align-items:center;">
+    <span class="muted" style="font-size:13px;">Filter:</span>
+    <select name="type" style="width:auto; min-width:120px; padding:6px 10px; font-size:13px;">
+      <option value="all"  <%= typeFilter === 'all'  ? 'selected' : '' %>>All types</option>
+      <option value="cidr" <%= typeFilter === 'cidr' ? 'selected' : '' %>>CIDR</option>
+      <option value="ip"   <%= typeFilter === 'ip'   ? 'selected' : '' %>>IP</option>
+      <option value="asn"  <%= typeFilter === 'asn'  ? 'selected' : '' %>>ASN</option>
+    </select>
+    <select name="status" style="width:auto; min-width:120px; padding:6px 10px; font-size:13px;">
+      <option value="active"   <%= statusFilter === 'active'   ? 'selected' : '' %>>Active</option>
+      <option value="inactive" <%= statusFilter === 'inactive' ? 'selected' : '' %>>Inactive</option>
+      <option value="all"      <%= statusFilter === 'all'      ? 'selected' : '' %>>All</option>
+    </select>
+    <button type="submit" class="btn btn-small">Filter</button>
+  </form>
+</div>
+
+<%# ── Add rule ───────────────────────────────────────────────────── %>
+<details style="margin-bottom:16px;">
+  <summary style="cursor:pointer; font-size:14px; font-weight:500;">+ Add rule</summary>
+  <form method="POST" action="/admin/cloudflare/add" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:end;">
+    <div>
+      <label class="muted" style="font-size:11px; display:block;">Type</label>
+      <select name="rule_type" id="cf-rt" style="padding:6px 10px; font-size:13px;" onchange="cfToggleType()">
+        <option value="cidr">CIDR</option><option value="ip">IP</option><option value="asn">ASN</option>
+      </select>
+    </div>
+    <div id="cf-v"><label class="muted" style="font-size:11px; display:block;">IP / CIDR</label>
+      <input name="value" placeholder="66.207.24.0/24" style="padding:6px 10px; font-size:13px; min-width:250px;"></div>
+    <div id="cf-a" style="display:none;"><label class="muted" style="font-size:11px; display:block;">ASN</label>
+      <input name="asn_number" placeholder="7922" style="padding:6px 10px; font-size:13px; min-width:100px;"></div>
+    <div><label class="muted" style="font-size:11px; display:block;">Label</label>
+      <input name="label" placeholder="Comcast" style="padding:6px 10px; font-size:13px; min-width:130px;"></div>
+    <div><label class="muted" style="font-size:11px; display:block;">Action</label>
+      <select name="action" style="padding:6px 10px; font-size:13px;">
+        <option value="block">Block (520)</option><option value="challenge">Challenge</option><option value="monitor">Monitor</option>
+      </select></div>
+    <div><label class="muted" style="font-size:11px; display:block;">Notes</label>
+      <input name="notes" placeholder="optional" style="padding:6px 10px; font-size:13px; min-width:130px;"></div>
+    <button type="submit" class="btn">Add</button>
+  </form>
+</details>
+
+<%# ── CSV upload ─────────────────────────────────────────────────── %>
+<details style="margin-bottom:16px;">
+  <summary style="cursor:pointer; font-size:14px; font-weight:500;">↑ Upload CSV</summary>
+  <form method="POST" action="/admin/cloudflare/upload-csv" enctype="multipart/form-data" style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+    <input type="file" name="csvfile" accept=".csv,.txt" style="font-size:13px;">
+    <button type="submit" class="btn">Upload</button>
+    <span class="muted" style="font-size:12px;">One per line: IP, CIDR, ASN, or wildcard (66.207.24.*). Optional: value,type,label</span>
+  </form>
+</details>
+
+<%# ── Bulk actions ───────────────────────────────────────────────── %>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+  <label style="font-size:13px; color:var(--text-secondary); display:flex; align-items:center; gap:6px;">
+    <input type="checkbox" id="cf-sa" onchange="document.querySelectorAll('.cf-rs').forEach(r=>r.checked=this.checked)"> Select all
+  </label>
+  <form method="POST" action="/admin/cloudflare/bulk-delete" id="cf-bf" style="display:inline;">
+    <input type="hidden" name="ids" id="cf-bi">
+    <button type="button" class="btn btn-small" style="background:#ef4444;color:#fff;" onclick="cfBD()">Delete selected</button>
+  </form>
+</div>
+
+<%# ── Table ──────────────────────────────────────────────────────── %>
+<% if (entries.length === 0) { %>
+  <div class="empty-state">
+    <h3>No rules yet</h3>
+    <p class="muted">Add rules manually, upload CSV, or import from ASN Blacklist / Intelligence.</p>
+  </div>
+<% } else { %>
+<div class="table-scroll">
+  <table class="table">
+    <thead><tr>
+      <th style="width:24px;"></th><th>Type</th><th>Value</th><th>Label</th>
+      <th>Action</th><th>Source</th><th>Status</th><th>Synced</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+    <% entries.forEach(e => { %>
+      <tr>
+        <td><input type="checkbox" class="cf-rs" value="<%= e._id %>"></td>
+        <td><span class="badge" style="font-size:10px;
+          <% if(e.rule_type==='cidr'){%>background:#EEEDFE;color:#534AB7;
+          <%}else if(e.rule_type==='asn'){%>background:#E1F5EE;color:#0F6E56;
+          <%}else{%>background:#E6F1FB;color:#185FA5;<%}%>
+        "><%= e.rule_type.toUpperCase() %></span></td>
+        <td class="mono" style="font-size:12px;"><% if(e.rule_type==='asn'){%>AS<%= e.asn_number %><%}else{%><%= e.value %><%}%></td>
+        <td style="font-size:12px;"><%= e.label %></td>
+        <td><span class="badge" style="font-size:10px;
+          <% if(e.action==='block'){%>background:#FCEBEB;color:#A32D2D;
+          <%}else if(e.action==='challenge'){%>background:#FAEEDA;color:#854F0B;
+          <%}else{%>background:#F1EFE8;color:#5F5E5A;<%}%>
+        "><%= e.action %></span></td>
+        <td style="font-size:11px;color:var(--text-secondary);"><%= e.source %></td>
+        <td><% if(e.active){%><span style="color:#22c55e;">●</span> on<%}else{%><span style="color:var(--text-secondary);">○</span> off<%}%></td>
+        <td style="font-size:11px;color:var(--text-secondary);">
+          <%if(e.synced_at){%><%= new Date(e.synced_at).toLocaleDateString() %><%}else{%><span style="color:#f97316;">pending</span><%}%>
+        </td>
+        <td style="white-space:nowrap;">
+          <form method="POST" action="/admin/cloudflare/<%= e._id %>/toggle" style="display:inline;">
+            <button type="submit" class="btn btn-small"><%= e.active ? 'Off' : 'On' %></button></form>
+          <form method="POST" action="/admin/cloudflare/<%= e._id %>/delete" style="display:inline;">
+            <button type="submit" class="btn btn-small" onclick="return confirm('Delete?')">Del</button></form>
+        </td>
+      </tr>
+    <% }); %>
+    </tbody>
+  </table>
+</div>
+<% } %>
+
+<script>
+function cfToggleType(){
+  const t=document.getElementById('cf-rt').value;
+  document.getElementById('cf-v').style.display=t==='asn'?'none':'';
+  document.getElementById('cf-a').style.display=t==='asn'?'':'none';
+}
+function cfBD(){
+  const c=[...document.querySelectorAll('.cf-rs:checked')].map(r=>r.value);
+  if(!c.length){alert('Select rules first.');return;}
+  if(!confirm('Delete '+c.length+' rule(s)?'))return;
+  document.getElementById('cf-bi').value=c.join(',');
+  document.getElementById('cf-bf').submit();
+}
+</script>

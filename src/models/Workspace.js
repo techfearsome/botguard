@@ -36,6 +36,14 @@ const WorkspaceSchema = new mongoose.Schema({
       // injecting arbitrary JS by setting an exotic value.
       clarity_project_id: { type: String, default: '' },
     },
+
+    // Cloudflare edge firewall settings
+    cloudflare_settings: {
+      enabled: { type: Boolean, default: false },
+      // 'all' = scan every request at the edge
+      // 'utm' = only scan requests with UTM/click-ID params (ad clicks only)
+      scan_mode: { type: String, enum: ['all', 'utm'], default: 'utm' },
+    },
   },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },

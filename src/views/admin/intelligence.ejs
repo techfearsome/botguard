@@ -154,6 +154,13 @@ function fmtRate(rate) {
     <button type="button" class="btn btn-small" onclick="bulkAction('blocked')">Block selected</button>
     <button type="button" class="btn btn-small" onclick="bulkAction('dismissed')">Dismiss selected</button>
   </form>
+  <form method="POST" action="/admin/cloudflare/import-intelligence" id="cf-import-form" style="display:inline;">
+    <input type="hidden" name="ids" id="cf-import-ids">
+    <button type="button" class="btn btn-small" style="background:#f97316; color:#fff;"
+      onclick="cfImport()">
+      ☁ Add to Cloudflare
+    </button>
+  </form>
   <form method="POST" action="/admin/intelligence/mark-exported" style="display:inline;">
     <input type="hidden" name="min_score" value="<%= minScore %>">
     <button type="submit" class="btn btn-small" style="background:#22c55e; color:#fff;"
@@ -476,6 +483,14 @@ function bulkAction(status) {
   input.type = 'hidden'; input.name = 'status'; input.value = status;
   document.getElementById('bulk-form').appendChild(input);
   document.getElementById('bulk-form').submit();
+}
+
+function cfImport() {
+  const checked = [...document.querySelectorAll('.row-select:checked')].map(c => c.value);
+  if (!checked.length) { alert('Select at least one row.'); return; }
+  if (!confirm(`Add ${checked.length} CIDR(s) to Cloudflare edge firewall?`)) return;
+  document.getElementById('cf-import-ids').value = checked.join(',');
+  document.getElementById('cf-import-form').submit();
 }
 
 // ── Live polling — checks for new detections every 30s ─────────────────

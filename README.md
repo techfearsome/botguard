@@ -1,196 +1,180 @@
-# BotGuard
+# BotGuard v2.1 — Complete Setup Guide
 
-Self-hosted landing page funnel tool with UTM tracking and bot protection.
+## Part 1: Intelligence Engine Upgrade
 
-## Week 1 status
+Drop-in replacement for 5 files in `src/`. No migration needed — Mongoose adds new fields automatically on next write cycle. See the existing README in previous patches for the 13-signal scoring details.
 
-**Done in week 1:**
-- Project skeleton (Express + Mongoose + EJS)
-- Multi-tenancy seams (workspace scoping from day one)
-- `/go/:slug` hot path with click logging
-- Full UTM + external ID capture (gclid, fbclid, msclkid, ttclid, li_fat_id)
-- UA parsing, device classification, in-app browser detection (FB/IG/TikTok/LinkedIn/Twitter/Snap/Pinterest/WeChat/Line)
-- Conversion tracking — pixel (`/px/conv`) and S2S postback (`/cb/postback`)
-- Admin panel: dashboard, campaigns CRUD, landing pages CRUD, click log
-- A/B variant rendering (weight-based)
-- **ASN blacklist model + admin UI** — fills ProxyCheck.io gaps for known VPN/proxy/Tor ASNs
-- Starter ASN seed list (Tor, M247, Cogent, AWS, GCP, Azure, DO, Linode, Vultr, Hetzner, OVH, Contabo, etc.)
-- Permissive defaults — log everything, decide later
 
-## Week 2 status
+## Part 2: Cloudflare Edge Firewall Setup
 
-**Done in week 2 (this build):**
-- **Full filter chain orchestrator** (`lib/filterChain.js`) — runs all 5 layers in parallel where possible
-- **Network filter** with ProxyCheck.io v3 client, ASN blacklist overlay, prefetcher detection
-- **Headers filter** — UA shape, sec-fetch-* consistency, Accept/Encoding/Language analysis
-- **Behavior filter** — canvas/WebGL/screen/timezone fingerprint scoring, headless detection (SwiftShader, Mesa OffScreen, navigator.webdriver)
-- **Pattern filter** — Redis-backed rate limits per IP/ASN/fingerprint, gracefully no-ops without Redis
-- **Referrer integrity filter** — utm_source vs referer matching for FB/Google/IG/TikTok/Twitter/LinkedIn/Reddit/Pinterest/etc.
-- **Source profiles** (`scoring/profiles.js`) — email/paid_ads/organic/affiliate/mixed with calibrated weights
-- **Decide engine** with hard-block flags, prefetcher always-allow, log_only vs enforce mode
-- **JS challenge** — client-side fingerprint collection, posts to `/go/fp` to update click record
-- **Prefetcher allowlist** — Outlook SafeLinks, Apple MPP (ASN-based), Gmail proxy, Mimecast, Proofpoint, Barracuda, Slack/Discord/Twitter unfurls
-- **Decision replay tool** — re-score historical clicks against new threshold/profile/mode settings
-- **Click detail page** — drill into any click, see all 5 layer scores, flags, fingerprint, conversions
-- **77 unit tests passing** (22 from Week 1 + 37 from Week 2 = 59 distinct tests, plus 18 of those exercise edge paths)
+This guide walks you through getting the three values needed for your `.env`:
 
-**Not yet (week 3+):**
-- Conversion postback firing (forward to ad platforms via `postback_url`)
-- Multi-page funnel chaining
-- Email prefetcher allowlist refresh job (auto-update Apple MPP IP ranges)
-- Bulk import of Tor exit nodes (cron from check.torproject.org)
-- Geo-targeting rules per campaign
-- Auth & SaaS billing (multi-tenant goes live)
+```
+CF_ACCOUNT_ID=
+CF_API_TOKEN=
+CF_KV_NAMESPACE_ID=
+```
 
-## Architecture notes
+---
 
-### Log-first, decide-later
-The system is built around a decision log, not a filter pipeline. Every click is scored on every signal and persisted, but the *block/allow* decision is a separate config layer. This means you can replay traffic against new rules retroactively, A/B test filter aggressiveness per campaign, and mark visits as "would have blocked" without actually blocking — gold for tuning.
+### Step 1: Get your CF_ACCOUNT_ID
 
-### ASN + Term blacklist as ProxyCheck overlay
-ProxyCheck.io has known gaps:
-- Some Tor exit nodes when their ASN rotates
-- Smaller / regional VPN providers
-- Residential proxy networks that look "clean"
-- Newly-registered datacenter ASNs
-- Operators that rebrand or shuffle ASNs but keep the same provider name
+1. Log into https://dash.cloudflare.com
+2. Click on your domain (e.g. cookingshow.space)
+3. Scroll down on the **Overview** page
+4. On the right sidebar, under **API**, you'll see **Account ID**
+5. Copy it — it's a 32-character hex string like `023e105f4ecef8ad9ca31a8372d0c353`
 
-The `AsnBlacklist` collection runs **after** ProxyCheck and supports two rule types:
+That's your `CF_ACCOUNT_ID`.
 
-1. **ASN rules** — exact match against the ASN number ProxyCheck returns. Fast, precise, narrow.
-2. **Term rules** — case-insensitive substring match against ProxyCheck's `provider` and/or `asn_org` fields. Broad, catches operators across multiple ASNs.
+---
 
-A term rule of `m247` catches every ASN M247 ever registers under that name. A term rule of `vpn` catches every provider with "VPN" in the name (NordVPN, ExpressVPN, ProtonVPN, etc.). Categories (`tor`, `vpn`, `proxy`, `datacenter`, `hosting`, `scraper`, `spam`, `other`) let scoring treat them differently per source profile.
+### Step 2: Create CF_API_TOKEN
 
-The blacklist can flip a "clean" verdict to "proxy", but never the reverse — ProxyCheck's positive matches are always trusted. When both an ASN rule and a term rule match the same click, the ASN rule wins (more specific) but the term match still gets logged as a flag. Manageable via the admin UI at `/admin/asn`.
+1. In the Cloudflare dashboard, click your **profile icon** (top right) → **My Profile**
+2. Click **API Tokens** in the left sidebar
+3. Click **Create Token**
+4. Choose **Create Custom Token** (not a template)
+5. Set the following:
+   - **Token name**: `BotGuard KV Writer`
+   - **Permissions**:
+     - Account → **Workers KV Storage** → **Edit**
+   - **Account Resources**:
+     - Include → **Your account name**
+   - Leave IP filtering and TTL blank (or set TTL to 1 year)
+6. Click **Continue to summary** → **Create Token**
+7. **COPY THE TOKEN NOW** — you won't see it again
+   - It looks like: `Sn3lZJTBX6kkg7OdcBUAxOO963GEIyGQqnFTOFYY`
 
-### Multi-tenancy seams
-Even though week 1 is single-tenant, every collection has `workspace_id` and the `/go` route accepts both `/go/:slug` (single tenant) and `/go/:workspaceSlug/:campaignSlug` (multi-tenant). When you flip on SaaS later, you add signup/billing — the data layer is already correct.
+That's your `CF_API_TOKEN`.
 
-## Week 3 status
+> **Important**: This token ONLY needs "Workers KV Storage: Edit" permission.
+> Don't give it broader access. If it's ever leaked, the attacker can only
+> read/write your KV store, not modify your DNS or Workers.
 
-**Done in week 3 (this build):**
-- **Auto-slug generation** — leave the slug field blank when creating a campaign or landing page; it's derived from the name
-- **Slug collision handling** — random suffix appended on collision
-- **UTM gate filter** — per-campaign toggle; failed visits routed to safe page without burning ProxyCheck quota
-- **Country gate filter** — per-campaign whitelist OR blacklist using ProxyCheck's country verdict
-- **Proxy gate filter** — hard route to safe page on proxy/VPN/Tor detection with per-category toggles
-- **ProxyCheck.io v3 API client fixed** — endpoint format and response shape both corrected, operator field handles rich object
-- **Per-device page routing** — six device classes (iphone/android/windows/mac/linux/other), per-campaign offer + safe overrides
-- **Site pages** — homepage, privacy policy, terms, and `/p/<slug>` pages managed under admin Settings → Site
-- **Responsive admin panel** — mobile-friendly nav, full-width inputs, horizontally-scrolling tables on mobile
-- **Cloudflare-aware** — `TRUST_PROXY=cloudflare` mode whitelists Cloudflare's IP ranges; `Cache-Control: no-store` on all dynamic routes prevents CDN caching of click responses; `CF-IPCountry` / `CF-IPCity` / `CF-Region` headers used as geo fallback when ProxyCheck unavailable; static assets get aggressive `max-age=86400` caching
-- **Redis-backed campaign cache** — `/go/:slug` hot path caches workspace + campaign for 60s, drops Mongo load by 90%+ on repeat traffic; auto-invalidates on admin update/delete; in-memory fallback when Redis unavailable
-- **Auto-conversion tracking** — per-page toggle that injects a small JS snippet matching button-text terms (Download / Subscribe / Place Order / etc., configurable). Fires `/cb/auto-conv` POST on click. 30-day session-cookie dedup enforced both client-side and server-side. Conversions show with an "auto" badge in the click log and click detail page. Never injected on safe pages, so blocked traffic can't fire fake conversions.
-- **Conversions admin route** at `/admin/conversions` — full table of all conversions with campaign, click ID, IP, country, provider, device, offer page name, page URL, event name, source, value, and matched term. Filterable by campaign / source / event / date range / auto-only. CSV export available.
-- **Configurable 404 page** — define a SitePage with slug `404` under Settings → Site. It's served for any unknown URL on your domain (with status 404, no caching, X-Robots-Tag noindex). When not configured, falls back to a hardcoded "Page not found" HTML. JSON clients still receive `{"error":"not_found"}` based on the Accept header.
-- **Microsoft Clarity tracking** — workspace-level setting at Settings → Page Tracking. Paste your Clarity project ID (e.g. `wjsr5hjt53`) to inject the official Clarity snippet into every offer AND safe page. Useful for session replay of both successful conversions and gate-blocked traffic. Project ID is validated to alphanumeric/hyphen 1-32 chars to prevent script injection. Cache invalidates immediately on save.
+---
 
-**Not yet (week 4+):**
-- FB CAPI / Google Enhanced Conversions outbound conversion forwarding
-- Multi-step funnel chaining (offer → upsell → thank-you, preserving click_id)
-- Outlook SafeLinks rescan deduplication
+### Step 3: Create KV Namespace and get CF_KV_NAMESPACE_ID
 
-## Setup
+1. In the Cloudflare dashboard, go to **Workers & Pages** (left sidebar)
+2. Click **KV** in the sub-menu
+3. Click **Create a namespace**
+4. Name it: `BOTGUARD_BLOCKLIST`
+5. Click **Add**
+6. The namespace appears in the list — click on it
+7. The **Namespace ID** is shown at the top (32-character hex string)
+   - Example: `0f2ac74b498b48028cb68387c421e279`
+
+That's your `CF_KV_NAMESPACE_ID`.
+
+---
+
+### Step 4: Add to your .env
 
 ```bash
-# 1. Install dependencies
-npm install
-
-# 2. Copy env template
-cp .env.example .env
-# edit .env - set MONGO_URI, SESSION_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD
-
-# 3. Start MongoDB locally (or point MONGO_URI at Atlas)
-
-# 4. Seed a demo campaign
-npm run seed
-
-# 5. Start the server
-npm run dev
+# Cloudflare Edge Firewall
+CF_ACCOUNT_ID=023e105f4ecef8ad9ca31a8372d0c353
+CF_API_TOKEN=Sn3lZJTBX6kkg7OdcBUAxOO963GEIyGQqnFTOFYY
+CF_KV_NAMESPACE_ID=0f2ac74b498b48028cb68387c421e279
 ```
 
-Then visit:
-- **Admin login**: http://localhost:3000/admin/login (use the username/password you set)
-- Test click: http://localhost:3000/go/demo?utm_source=test&utm_medium=email&utm_campaign=launch
-- Test conversion: http://localhost:3000/px/conv?cid=&lt;click_id&gt;&value=10
+Restart BotGuard. The `/admin/cloudflare` page will now show the sync button as active.
 
-### Setting the admin password
+---
 
-Two options:
+### Step 5: Deploy the Cloudflare Worker
 
-**Plain password (easy):**
-```bash
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=changeme
+1. In the Cloudflare dashboard, go to **Workers & Pages**
+2. Click **Create** → **Create Worker**
+3. Name it: `botguard-firewall`
+4. Click **Deploy** (deploys the hello-world default)
+5. Click **Edit Code**
+6. Replace the entire code with the contents of `cloudflare-worker.js` from this package
+7. Click **Save and Deploy**
+
+Now bind the KV namespace to the Worker:
+
+8. Go to the Worker's **Settings** → **Bindings**
+9. Click **Add binding** → **KV Namespace**
+10. Set:
+    - **Variable name**: `BLOCKLIST` (must be exactly this)
+    - **KV Namespace**: Select `BOTGUARD_BLOCKLIST`
+11. Click **Save**
+
+Finally, set up the route so the Worker runs on your domain:
+
+12. Go to the Worker's **Settings** → **Triggers** → **Routes**
+13. Click **Add route**
+14. Set:
+    - **Route**: `cookingshow.space/*` (your domain)
+    - **Zone**: Select your domain
+15. Click **Save**
+
+---
+
+### Step 6: Test it
+
+1. Go to `/admin/cloudflare` in BotGuard
+2. Add a test rule: Type = IP, Value = your own IP, Action = block
+3. Click **☁ Push to Cloudflare**
+4. Open your site in a new browser tab — you should see a 520 error
+5. Go back to BotGuard, delete the test rule, push again
+6. Your site loads normally again
+
+---
+
+## How to Use
+
+### Adding rules
+
+**From Intelligence**: Go to `/admin/intelligence`, select blocks with checkboxes, click **☁ Add to Cloudflare**. They appear in `/admin/cloudflare` with source "intelligence".
+
+**From ASN Blacklist**: Go to `/admin/asn`, select ASN rules, click **Export to Cloudflare** (when available). They appear with source "asn_import".
+
+**Manual**: In `/admin/cloudflare`, expand "+ Add rule", fill in the IP/CIDR/ASN.
+
+**CSV Upload**: Expand "↑ Upload CSV", upload a text file with one entry per line:
+- IPs: `146.86.149.221`
+- CIDRs: `66.207.24.0/24` or `2600:387::/32`
+- Wildcards: `66.207.24.*` (auto-converted to `/24`)
+- ASNs: `7922`
+- Optional CSV format: `value,type,label` (e.g. `66.207.24.0/24,cidr,Muscatine Power`)
+
+### Scan modes
+
+**UTM/Ad clicks only** (default): The Worker only blocks requests that have `utm_source`, `gclid`, `wbraid`, `fbclid`, `msclkid`, or any UTM parameter in the URL. Organic visitors and direct traffic pass through unchecked. Use this when you only want to block bot ad clicks.
+
+**All traffic**: The Worker checks every request. Full edge firewall. Use this when you want to completely deny access to bot IPs.
+
+### Enable / Disable
+
+The green/red toggle at the top of `/admin/cloudflare` enables or disables the entire edge firewall. When disabled, the Worker passes all traffic through. Rules stay saved — just not enforced. Toggling auto-syncs to Cloudflare so the change is instant.
+
+### Syncing
+
+After adding/removing/toggling rules, click **☁ Push to Cloudflare** to sync. This sends the entire ruleset as one KV write (1 of your 1,000/day limit). The "Pending sync" counter shows how many rules have changed since the last push.
+
+---
+
+## File List
+
 ```
-
-**Pre-hashed password (recommended for production):**
-```bash
-npm run hash-password
-# enter password when prompted, copy the output, then:
-ADMIN_PASSWORD_HASH=<paste here>
-# (don't set ADMIN_PASSWORD when using ADMIN_PASSWORD_HASH)
+cloudflare-worker.js              — Deploy to Cloudflare Workers dashboard
+src/lib/cloudflareSync.js         — KV push logic
+src/lib/cidrAnalyser.js           — v2.1 scoring engine (13 signals)
+src/lib/cidrTriggers.js           — 9 trigger types
+src/lib/dwellWriteback.js         — Dwell/bounce tracking pipeline
+src/lib/livePresence.js           — Modified: computes dwell_ms on leave
+src/models/CloudflareRule.js      — Edge firewall rule collection
+src/models/CidrIntelligence.js    — Extended with v2.1 fields
+src/models/Click.js               — Added dwell_ms field
+src/models/Workspace.js           — Added cloudflare_settings
+src/models/index.js               — Registers CloudflareRule
+src/routes/admin/cloudflare.js    — /admin/cloudflare routes
+src/routes/admin/index.js         — Mounts cloudflare routes + intelligence fixes
+src/views/admin/cloudflare.ejs    — Cloudflare dashboard UI
+src/views/admin/intelligence.ejs  — Added "Add to Cloudflare" button
+src/views/admin/_layout.ejs       — Added Cloudflare nav link
+src/server.js                     — Starts dwell writeback
+v1-backup/                        — Original files for rollback
 ```
-
-The session cookie is HMAC-signed by `SESSION_SECRET` (must be ≥16 chars). Generate one with:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-### Production deployment
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for full guides on **Coolify**, **Heroku**, and **Azure App Service** including Dockerfile usage, MongoDB setup, env-var configuration, and a comparison table to help you pick.
-
-## URL conventions
-
-| Route | Purpose |
-|---|---|
-| `GET /go/:slug` | Hot path - public landing page entry |
-| `GET /go/:wsSlug/:campSlug` | Multi-tenant landing page entry |
-| `GET /px/conv?cid=...&value=...` | Conversion pixel (1x1 GIF) |
-| `GET\|POST /cb/postback` | Server-to-server conversion |
-| `GET /admin` | Admin dashboard |
-| `GET /admin/campaigns` | Campaign CRUD |
-| `GET /admin/pages` | Landing page CRUD |
-| `GET /admin/clicks` | Click log with filters |
-| `GET /admin/asn` | ASN blacklist management |
-
-## Project layout
-
-```
-botguard/
-├── src/
-│   ├── server.js
-│   ├── routes/
-│   │   ├── go.js              # Hot path
-│   │   ├── pixel.js           # Conversion pixel
-│   │   ├── postback.js        # S2S postback
-│   │   └── admin/             # Admin panel
-│   ├── lib/
-│   │   ├── bootstrap.js       # Default workspace + ASN seed
-│   │   ├── click.js           # Click ID + writer
-│   │   ├── ip.js              # IP extraction
-│   │   ├── utm.js             # UTM parsing
-│   │   ├── inapp.js           # In-app browser detection
-│   │   ├── variant.js         # A/B picker
-│   │   ├── asnLookup.js       # Cached ASN blacklist lookup
-│   │   └── logger.js
-│   ├── models/                # Mongoose schemas
-│   └── views/                 # EJS templates
-├── public/css/admin.css
-└── scripts/seed.js
-```
-
-## Source profiles
-
-Each campaign picks a source profile that will (in week 2) determine how filter scores are weighted:
-
-| Profile | Network | Behavior | Notes |
-|---|---|---|---|
-| `email` | Low | Low | Tolerate Outlook / Gmail / Apple MPP prefetchers |
-| `paid_ads` | High | High | Click fraud is real |
-| `organic` | Medium | Medium | Search engine bots are legit, scrapers aren't |
-| `affiliate` | High | Medium | Highest fraud risk |
-| `mixed` | Medium | Medium | Default |
