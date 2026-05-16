@@ -1,4 +1,4 @@
-<%- include('../partials/header', { ws, page, title: 'CIDR Intelligence - BotGuard', intelNewCount: stats.new }) %>
+<%- include('../partials/header', { ws, page, title: 'CIDR Intelligence - BotGuard', intelNewCount: stats.critical }) %>
 
 <%
 function scoreColor(score) {
@@ -546,7 +546,7 @@ function cfImport() {
 // ── Live polling — checks for new detections every 30s ─────────────────
 (function() {
   const pageLoadTime = new Date().toISOString();
-  let lastNewCount = <%= stats.new %>;
+  let lastNewCount = <%= stats.critical || 0 %>;
   const statusEl = document.getElementById('live-status');
   const alertEl  = document.getElementById('new-alert');
 
