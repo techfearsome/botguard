@@ -108,25 +108,26 @@ function fmtRate(rate) {
 
 <%# ── Filters ────────────────────────────────────────────────────── %>
 <form method="GET" action="/admin/intelligence" class="filter-bar" id="filter-form">
-  <select name="status">
+  <select name="status" style="min-width:200px;">
     <option value="active"      <%= statusFilter === 'active'      ? 'selected' : '' %>>Active (new)</option>
     <option value="all_flagged" <%= statusFilter === 'all_flagged' ? 'selected' : '' %>>All flagged (inc. exported)</option>
+    <option value="exported"    <%= statusFilter === 'exported'    ? 'selected' : '' %>>Exported only</option>
+    <option value="blocked"     <%= statusFilter === 'blocked'     ? 'selected' : '' %>>Blocked only</option>
+    <option value="dismissed"   <%= statusFilter === 'dismissed'   ? 'selected' : '' %>>Dismissed only</option>
     <option value="all"         <%= statusFilter === 'all'         ? 'selected' : '' %>>All statuses</option>
-    <option value="exported"    <%= statusFilter === 'exported'    ? 'selected' : '' %>>Exported</option>
-    <option value="blocked"     <%= statusFilter === 'blocked'     ? 'selected' : '' %>>Blocked</option>
-    <option value="dismissed"   <%= statusFilter === 'dismissed'   ? 'selected' : '' %>>Dismissed</option>
   </select>
 
-  <select name="min_score">
+  <select name="min_score" style="min-width:160px;">
     <option value="80" <%= minScore >= 80 ? 'selected' : '' %>>Critical only (80+)</option>
     <option value="60" <%= minScore >= 60 && minScore < 80 ? 'selected' : '' %>>High+ (60+)</option>
-    <option value="40" <%= minScore < 60 ? 'selected' : '' %>>All flagged (40+)</option>
+    <option value="40" <%= (minScore >= 40 && minScore < 60) ? 'selected' : '' %>>Watching+ (40+)</option>
+    <option value="20" <%= (minScore >= 20 && minScore < 40) ? 'selected' : '' %>>All scored (20+)</option>
   </select>
 
-  <select name="version">
+  <select name="version" style="min-width:120px;">
     <option value="all" <%= versionFilter === 'all' ? 'selected' : '' %>>IPv4 + IPv6</option>
-    <option value="v6"  <%= versionFilter === 'v6'  ? 'selected' : '' %>>IPv6 only</option>
     <option value="v4"  <%= versionFilter === 'v4'  ? 'selected' : '' %>>IPv4 only</option>
+    <option value="v6"  <%= versionFilter === 'v6'  ? 'selected' : '' %>>IPv6 only</option>
   </select>
 
   <button type="submit" class="btn">Filter</button>
