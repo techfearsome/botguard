@@ -21,6 +21,7 @@ const SignalSchema = new mongoose.Schema({
   webview_ua:  { type: Number, default: 0 },  // 0-10 (reordered WebView UA)
   behavioral:  { type: Number, default: 0 },  // 0-10 (same-IP+UA repeat, UA diversity)
   slow_drip:   { type: Number, default: 0 },  // 0-10 (same IP returning across sessions)
+  bounce:      { type: Number, default: 0 },  // 0-10 (high bounce rate / low dwell time)
   known_list:  { type: Number, default: 0 },  // 0-15 (seeded/exported/blocked cross-ref)
 }, { _id: false });
 
@@ -79,6 +80,11 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   ip_return_tier3:    { type: Number, default: 0 },   // 30min+ returns
   ip_return_total_ips:{ type: Number, default: 0 },   // IPs with any return
   hits_per_ip:        { type: Number, default: 0 },
+
+  // ── v2.1: Dwell / bounce evidence ──────────────────────────────────
+  avg_dwell_ms:       { type: Number, default: null },   // average time on page (ms)
+  bounce_rate_5s:     { type: Number, default: null },   // ratio of visitors leaving < 5s
+  dwell_sample_count: { type: Number, default: 0 },      // how many clicks have dwell data
 
   // ── Multi-day persistence ──────────────────────────────────────────
   days_seen_list:    { type: [String], default: [] },

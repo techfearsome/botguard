@@ -208,6 +208,43 @@ function scoreIpReturn(tier1, tier2, tier3, returnIps, hitsPerIp) {
   return Math.min(s, 10);
 }
 
+// ── Bounce / dwell scoring (0–10) ────────────────────────────────────
+// If most visitors from a block leave within 5 seconds, it's bot traffic.
+// Real users who clicked an ad and landed on a relevant page stay at least
+// 10-15 seconds. Sub-5-second dwell = the page loaded and they bounced
+// (or the bot didn't even render it).
+function scoreBounce(dwellValues) {
+  if (!dwellValues || dwellValues.length < 3) return 0;  // need 3+ samples
+
+  const total = dwellValues.length;
+  const bounces_2s  = dwellValues.filter(d => d < 2000).length;
+  const bounces_5s  = dwellValues.filter(d => d < 5000).length;
+  const bounces_10s = dwellValues.filter(d => d < 10000).length;
+
+  const bounceRate_2s  = bounces_2s / total;
+  const bounceRate_5s  = bounces_5s / total;
+  const bounceRate_10s = bounces_10s / total;
+
+  // Average dwell
+  const avgDwell = dwellValues.reduce((a, b) => a + b, 0) / total;
+
+  let s = 0;
+  // Ultra-fast bounce: >80% leave within 2 seconds (max 6)
+  if (bounceRate_2s >= 0.80)      s += 6;
+  else if (bounceRate_2s >= 0.60) s += 4;
+  else if (bounceRate_2s >= 0.40) s += 2;
+
+  // Fast bounce: >80% leave within 5 seconds (max 4 more)
+  if (bounceRate_5s >= 0.90)      s += 4;
+  else if (bounceRate_5s >= 0.70) s += 3;
+  else if (bounceRate_5s >= 0.50) s += 2;
+
+  // Average dwell under 5s is suspicious even without extreme bounce rate
+  if (avgDwell < 3000 && total >= 5) s += 2;
+
+  return Math.min(s, 10);
+}
+
 // ── Known-list cross-reference scoring (0–15) ────────────────────────
 function scoreKnownList(isSeeded, wasExported, wasBlocked, priorDaysSeen) {
   let s = 0;
@@ -251,7 +288,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     workspace_id: workspaceId,
     ts: { $gte: windowStart, $lte: windowEnd },
   })
-    .select('ip ts decision conversion_count user_agent asn_org country external_ids')
+    .select('ip ts decision conversion_count user_agent asn_org country external_ids dwell_ms')
     .lean();
 
   if (!clicks.length) {
@@ -276,6 +313,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         clicks: [], blockedHits: 0, uaCounts: {},
         fakeUACount: 0, webviewBotCount: 0, conv: 0,
         asn: '', country: '', version: sub.version,
+        dwellValues: [],  // v2.1: collect dwell_ms for bounce scoring
       };
       bySubnet.set(date, day);
     }
@@ -297,6 +335,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     day.uaCounts[ua] = (day.uaCounts[ua] || 0) + 1;
     if (isFakeUA(ua)) day.fakeUACount++;
     if (isWebViewBot(ua)) day.webviewBotCount++;
+    // v2.1: collect dwell time for bounce scoring
+    if (c.dwell_ms != null && c.dwell_ms >= 0) day.dwellValues.push(c.dwell_ms);
   }
 
   // ── Per-day trigger detection + snapshots ──────────────────────────
@@ -372,6 +412,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       sameIpUaRepeats: 0, uaDiversityRatio: 1,
       slowDripIpCount: 0, hitsPerIp: 0,
       returnTier1: 0, returnTier2: 0, returnTier3: 0, returnTotalIps: 0,
+      dwellValues: [],  // all dwell_ms values across days
     };
     for (const [, day] of byDay) {
       agg.version = day.version;
@@ -394,6 +435,10 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       agg.fakeUACount += day.fakeUACount;
       agg.asn = agg.asn || day.asn;
       agg.country = agg.country || day.country;
+      // v2.1: merge dwell values
+      if (day.dwellValues && day.dwellValues.length) {
+        agg.dwellValues.push(...day.dwellValues);
+      }
       for (const [ua, n] of Object.entries(day.uaCounts)) {
         agg.uaCounts[ua] = (agg.uaCounts[ua] || 0) + n;
       }
@@ -481,6 +526,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         webview_ua:  scoreWebViewUA(agg.webviewBotCount, agg.hits),
         behavioral:  scoreBehavioral(agg.sameIpUaRepeats, agg.uaDiversityRatio, agg.hits),
         slow_drip:   scoreIpReturn(agg.returnTier1, agg.returnTier2, agg.returnTier3, agg.returnTotalIps, agg.hitsPerIp),
+        bounce:      scoreBounce(agg.dwellValues),
         known_list:  scoreKnownList(isSeeded, wasExported, wasBlocked, priorDaysSeen),
       };
       const score = Math.min(100, Object.values(signals).reduce((a, b) => a + b, 0));
@@ -533,6 +579,14 @@ async function analyseWorkspace(workspaceId, opts = {}) {
             ip_return_tier3: agg.returnTier3,
             ip_return_total_ips: agg.returnTotalIps,
             hits_per_ip: Math.round(agg.hitsPerIp * 100) / 100,
+            // v2.1: dwell/bounce evidence
+            avg_dwell_ms: agg.dwellValues.length > 0
+              ? Math.round(agg.dwellValues.reduce((a, b) => a + b, 0) / agg.dwellValues.length)
+              : null,
+            bounce_rate_5s: agg.dwellValues.length > 0
+              ? Math.round(agg.dwellValues.filter(d => d < 5000).length / agg.dwellValues.length * 1000) / 1000
+              : null,
+            dwell_sample_count: agg.dwellValues.length,
             historical_match: {
               has_history: history.dates.length > 0,
               total_days_seen: totalDaysSeen,

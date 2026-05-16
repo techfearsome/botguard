@@ -202,6 +202,16 @@ async function start() {
     logger.warn('cidr_analyser_start_failed', { err: e.message });
   }
 
+  // Start dwell-time writeback — persists visit duration from LivePresence
+  // to Click documents so the CIDR analyser can score blocks by engagement.
+  try {
+    const { live } = require('./lib/livePresence');
+    const { startDwellWriteback } = require('./lib/dwellWriteback');
+    startDwellWriteback(live);
+  } catch (e) {
+    logger.warn('dwell_writeback_start_failed', { err: e.message });
+  }
+
   const port = Number(process.env.PORT) || 3000;
   const server = app.listen(port, () => {
     logger.info('server_started', { port, base_url: process.env.BASE_URL });

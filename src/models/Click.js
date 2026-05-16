@@ -136,6 +136,12 @@ const ClickSchema = new mongoose.Schema({
 
   // Session linkage
   session_id: { type: String, index: true },
+
+  // Engagement — written back from LivePresence when visitor leaves.
+  // null = visitor hasn't left yet or heartbeat script didn't load (blocked/safe page).
+  // 0 = arrived and immediately left (no heartbeat received).
+  // Milliseconds from arrived_at to last heartbeat.
+  dwell_ms: { type: Number, default: null },
 }, {
   // Disable __v and avoid auto-creating updatedAt since this is an append-only event log
   versionKey: false,

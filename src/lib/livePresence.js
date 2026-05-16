@@ -190,15 +190,18 @@ class LivePresence extends EventEmitter {
 
   /**
    * Visitor explicitly left (page unload). Removes immediately.
+   * Computes dwell_ms and emits it so the writeback listener can persist it.
    */
   left(clickId) {
     if (!clickId || typeof clickId !== 'string') return false;
     const v = this.visitors.get(clickId);
     if (!v) return false;
+    const now = Date.now();
+    const dwell_ms = now - v.arrived_at;
     this.visitors.delete(clickId);
     this.emit('event', {
       type: 'left',
-      visitor: { ...v, left_at: Date.now() },
+      visitor: { ...v, left_at: now, dwell_ms },
     });
     return true;
   }
@@ -250,15 +253,18 @@ class LivePresence extends EventEmitter {
 
   /**
    * Periodic sweep - removes visitors whose last heartbeat is too old.
+   * Computes dwell_ms from arrived_at to last_seen_at (not now, since
+   * they stopped responding at last_seen_at).
    */
   sweep() {
     const cutoff = Date.now() - STALE_AFTER_MS;
     for (const [clickId, v] of this.visitors) {
       if (v.last_seen_at < cutoff) {
+        const dwell_ms = v.last_seen_at - v.arrived_at;
         this.visitors.delete(clickId);
         this.emit('event', {
           type: 'left',
-          visitor: { ...v, left_at: Date.now(), reason: 'stale' },
+          visitor: { ...v, left_at: Date.now(), dwell_ms, reason: 'stale' },
         });
       }
     }
