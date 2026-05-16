@@ -1559,20 +1559,24 @@ router.get('/intelligence', async (req, res) => {
     lastAnalysedAt = null;
   }
 
-  // Stats for summary bar — always count against the same dataset shown
-  let statNew, statCritical, statWatching;
+  // Stats for summary bar — ALWAYS show total active (new + reviewing) counts
+  // regardless of which status filter is selected. These are the "how much
+  // undealt work exists" numbers and shouldn't jump when you change filters.
+  let statCritical, statHigh, statWatching, statShown;
   if (rangeIsLive) {
-    [statNew, statCritical, statWatching] = await Promise.all([
+    [statCritical, statHigh, statWatching] = await Promise.all([
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 80 } }),
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 60 } }),
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 40 } }),
     ]);
   } else {
-    // For snapshot-backed views, stats reflect the shown entries
-    statNew      = entries.filter(e => e.score >= 80).length;
-    statCritical = entries.filter(e => e.score >= 60).length;
+    // For snapshot-backed views, count from full unfiltered entries
+    statCritical = entries.filter(e => e.score >= 80).length;
+    statHigh     = entries.filter(e => e.score >= 60).length;
     statWatching = entries.length;
   }
+  // "Shown" always reflects the current filtered table
+  statShown = entries.length;
 
   res.render('admin/intelligence', {
     ws,
@@ -1587,7 +1591,7 @@ router.get('/intelligence', async (req, res) => {
     rangeIsLive,
     dateFrom: dateFrom,
     dateTo: dateTo,
-    stats: { new: statNew, critical: statCritical, watching: statWatching },
+    stats: { critical: statCritical, high: statHigh, watching: statWatching, shown: statShown },
     lastAnalysedAt,
   });
 });

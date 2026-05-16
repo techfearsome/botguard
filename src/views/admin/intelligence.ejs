@@ -83,11 +83,11 @@ function fmtRate(rate) {
 <div class="stat-grid" style="margin-bottom:16px;">
   <div class="stat-card" style="border-left:3px solid #ef4444;">
     <div class="stat-label">Critical (80+)</div>
-    <div class="stat-value" style="color:#ef4444;"><%= stats.new %></div>
+    <div class="stat-value" style="color:#ef4444;"><%= stats.critical %></div>
   </div>
   <div class="stat-card" style="border-left:3px solid #f97316;">
     <div class="stat-label">High (60+)</div>
-    <div class="stat-value" style="color:#f97316;"><%= stats.critical %></div>
+    <div class="stat-value" style="color:#f97316;"><%= stats.high %></div>
   </div>
   <div class="stat-card" style="border-left:3px solid #eab308;">
     <div class="stat-label">Watching (40+)</div>
@@ -95,7 +95,7 @@ function fmtRate(rate) {
   </div>
   <div class="stat-card">
     <div class="stat-label">Shown</div>
-    <div class="stat-value"><%= entries.length %></div>
+    <div class="stat-value"><%= stats.shown %></div>
   </div>
 </div>
 
