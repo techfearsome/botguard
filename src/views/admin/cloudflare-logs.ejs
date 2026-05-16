@@ -1,0 +1,126 @@
+<%- include('../partials/header', { ws, page, title: 'Cloudflare Logs - BotGuard' }) %>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px;">Edge Firewall Logs</h1>
+    <p class="muted">All traffic decisions made by the Cloudflare Worker. Auto-expires after 30 days.</p>
+  </div>
+  <a href="/admin/cloudflare" class="btn">← Back to rules</a>
+</div>
+
+<%# ── Stats ──────────────────────────────────────────────────────── %>
+<div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;">
+  <div class="stat-card" style="flex:1; min-width:90px;">
+    <div class="stat-label">Last 24h</div>
+    <div class="stat-value"><%= stats.total24h %></div>
+  </div>
+  <div class="stat-card" style="flex:1; min-width:90px; border-left:3px solid #ef4444;">
+    <div class="stat-label">Blocked</div>
+    <div class="stat-value" style="color:#ef4444;"><%= stats.blocked24h %></div>
+  </div>
+  <div class="stat-card" style="flex:1; min-width:90px; border-left:3px solid #22c55e;">
+    <div class="stat-label">Allowed</div>
+    <div class="stat-value" style="color:#22c55e;"><%= stats.allowed24h %></div>
+  </div>
+  <div class="stat-card" style="flex:1; min-width:90px;">
+    <div class="stat-label">Block rate</div>
+    <div class="stat-value"><%= stats.total24h > 0 ? Math.round(stats.blocked24h / stats.total24h * 100) : 0 %>%</div>
+  </div>
+</div>
+
+<%# ── Filters ────────────────────────────────────────────────────── %>
+<div style="background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:12px 14px; margin-bottom:16px;">
+  <form method="GET" action="/admin/cloudflare/logs" style="display:flex; flex-wrap:nowrap; gap:8px; align-items:center;">
+    <span class="muted" style="font-size:13px;">Filter:</span>
+    <select name="action" style="width:auto; min-width:130px; padding:6px 10px; font-size:13px;">
+      <option value="all"   <%= actionFilter === 'all'   ? 'selected' : '' %>>All decisions</option>
+      <option value="block" <%= actionFilter === 'block' ? 'selected' : '' %>>Blocked only</option>
+      <option value="allow" <%= actionFilter === 'allow' ? 'selected' : '' %>>Allowed only</option>
+    </select>
+    <input name="ip" placeholder="Search IP..." value="<%= searchIp %>"
+      style="width:auto; min-width:160px; padding:6px 10px; font-size:13px;">
+    <button type="submit" class="btn btn-small">Filter</button>
+    <span class="muted" style="font-size:12px; margin-left:auto;"><%= totalLogs %> total logs</span>
+  </form>
+</div>
+
+<%# ── Pagination (top) ───────────────────────────────────────────── %>
+<% const pgBase = `/admin/cloudflare/logs?action=${actionFilter}&ip=${searchIp}`; %>
+<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; padding:8px 12px; background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); font-size:13px;">
+  <span style="color:var(--text-secondary);">
+    Showing <%= (currentPage - 1) * perPage + 1 %>–<%= Math.min(currentPage * perPage, totalLogs) %> of <strong><%= totalLogs %></strong>
+  </span>
+  <div style="display:flex; align-items:center; gap:4px;">
+    <% if (currentPage > 1) { %>
+      <a href="<%= pgBase %>&page=1&per_page=<%= perPage %>" class="btn btn-small">« First</a>
+      <a href="<%= pgBase %>&page=<%= currentPage - 1 %>&per_page=<%= perPage %>" class="btn btn-small">‹ Prev</a>
+    <% } else { %>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">« First</span>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">‹ Prev</span>
+    <% } %>
+    <span style="padding:0 10px;">Page <strong><%= currentPage %></strong> / <strong><%= totalPages %></strong></span>
+    <% if (currentPage < totalPages) { %>
+      <a href="<%= pgBase %>&page=<%= currentPage + 1 %>&per_page=<%= perPage %>" class="btn btn-small">Next ›</a>
+      <a href="<%= pgBase %>&page=<%= totalPages %>&per_page=<%= perPage %>" class="btn btn-small">Last »</a>
+    <% } else { %>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">Next ›</span>
+      <span class="btn btn-small" style="opacity:0.3; pointer-events:none;">Last »</span>
+    <% } %>
+  </div>
+</div>
+
+<%# ── Table ──────────────────────────────────────────────────────── %>
+<% if (logs.length === 0) { %>
+  <div class="empty-state">
+    <h3>No logs yet</h3>
+    <p class="muted">Logs will appear here once the Worker starts processing traffic. Make sure the Worker is deployed, enabled, and CF_SYNC_KEY is set in your .env.</p>
+  </div>
+<% } else { %>
+<div class="table-scroll">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>IP</th>
+        <th>ASN</th>
+        <th>Country</th>
+        <th>URL</th>
+        <th>Action</th>
+        <th>Reason</th>
+        <th>Matched</th>
+        <th>Mode</th>
+        <th>ms</th>
+      </tr>
+    </thead>
+    <tbody>
+    <% logs.forEach(l => { %>
+      <tr style="<%= l.action === 'block' ? 'background:rgba(239,68,68,0.05);' : '' %>">
+        <td style="font-size:11px; white-space:nowrap; color:var(--text-secondary);">
+          <%= new Date(l.ts).toLocaleString() %>
+        </td>
+        <td class="mono" style="font-size:12px;"><%= l.ip %></td>
+        <td style="font-size:12px;"><%= l.asn ? 'AS' + l.asn : '—' %></td>
+        <td style="font-size:12px;"><%= l.country || '—' %></td>
+        <td style="font-size:11px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+            title="<%= l.url %>"><%= l.url %></td>
+        <td>
+          <% if (l.action === 'block') { %>
+            <span class="badge" style="font-size:10px; background:#FCEBEB; color:#A32D2D;">BLOCK</span>
+          <% } else if (l.action === 'challenge') { %>
+            <span class="badge" style="font-size:10px; background:#FAEEDA; color:#854F0B;">CHALLENGE</span>
+          <% } else { %>
+            <span class="badge" style="font-size:10px; background:#EAF3DE; color:#3B6D11;">ALLOW</span>
+          <% } %>
+        </td>
+        <td style="font-size:11px; color:var(--text-secondary);"><%= l.reason %></td>
+        <td class="mono" style="font-size:11px;"><%= l.matched_rule || '—' %></td>
+        <td style="font-size:11px; color:var(--text-secondary);"><%= l.scan_mode %></td>
+        <td style="font-size:11px; color:var(--text-secondary);"><%= l.processing_ms %>ms</td>
+      </tr>
+    <% }); %>
+    </tbody>
+  </table>
+</div>
+<% } %>
+
+<%- include('../partials/footer') %>

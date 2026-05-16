@@ -226,7 +226,8 @@ router.post('/deploy', async (req, res) => {
   if (!domain) return res.redirect('/admin/cloudflare?flash=Domain+is+required');
 
   try {
-    const result = await deployWorker(domain);
+    const serverUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const result = await deployWorker(domain, serverUrl);
     await ws.constructor.updateOne(
       { _id: ws._id },
       { $set: {
@@ -277,6 +278,87 @@ router.post('/undeploy', async (req, res) => {
     res.redirect('/admin/cloudflare?flash=Worker+removed+from+Cloudflare');
   } catch (err) {
     res.redirect(`/admin/cloudflare?flash=Undeploy+failed:+${encodeURIComponent(err.message)}`);
+  }
+});
+
+// ── Logs view ────────────────────────────────────────────────────────
+router.get('/logs', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const CloudflareLog = require('../../models/CloudflareLog');
+
+  const actionFilter = req.query.action || 'all';
+  const searchIp = (req.query.ip || '').trim();
+  const perPage = Math.min(parseInt(req.query.per_page, 10) || 100, 500);
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+
+  const filter = { workspace_id: ws._id };
+  if (actionFilter !== 'all') filter.action = actionFilter;
+  if (searchIp) filter.ip = { $regex: searchIp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') };
+
+  const totalLogs = await CloudflareLog.countDocuments(filter);
+  const logs = await CloudflareLog.find(filter)
+    .sort({ ts: -1 })
+    .skip((page - 1) * perPage)
+    .limit(perPage)
+    .lean();
+
+  // Stats
+  const now = new Date();
+  const h24 = new Date(now - 24 * 60 * 60 * 1000);
+  const [total24h, blocked24h, allowed24h] = await Promise.all([
+    CloudflareLog.countDocuments({ workspace_id: ws._id, ts: { $gte: h24 } }),
+    CloudflareLog.countDocuments({ workspace_id: ws._id, ts: { $gte: h24 }, action: 'block' }),
+    CloudflareLog.countDocuments({ workspace_id: ws._id, ts: { $gte: h24 }, action: 'allow' }),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(totalLogs / perPage));
+
+  res.render('admin/cloudflare-logs', {
+    ws, page: 'cloudflare', logs,
+    actionFilter, searchIp,
+    stats: { total24h, blocked24h, allowed24h },
+    currentPage: page, perPage, totalLogs, totalPages,
+  });
+});
+
+// ── Log ingestion API (called by the Worker) ─────────────────────────
+// The Worker POSTs log data here after each decision.
+// Authenticated via CF_SYNC_KEY in the x-botguard-key header.
+// This route is NOT behind requireAdmin — it's called by the Worker.
+router.post('/api/log', async (req, res) => {
+  const syncKey = process.env.CF_SYNC_KEY;
+  if (!syncKey) return res.status(503).json({ error: 'CF_SYNC_KEY not set' });
+
+  const key = req.headers['x-botguard-key'];
+  if (!key || key !== syncKey) return res.status(401).json({ error: 'unauthorized' });
+
+  const CloudflareLog = require('../../models/CloudflareLog');
+  const { Workspace } = require('../../models');
+
+  // Get workspace
+  const ws = await Workspace.findOne().lean();
+  if (!ws) return res.status(404).json({ error: 'no workspace' });
+
+  const d = req.body;
+  try {
+    await CloudflareLog.create({
+      workspace_id: ws._id,
+      ip: d.ip || '',
+      asn: d.asn || null,
+      country: d.country || '',
+      user_agent: d.user_agent || '',
+      url: d.url || '',
+      method: d.method || 'GET',
+      action: d.action || 'allow',
+      reason: d.reason || '',
+      matched_rule: d.matched_rule || '',
+      scan_mode: d.scan_mode || '',
+      processing_ms: d.processing_ms || 0,
+      ts: new Date(),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

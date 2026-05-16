@@ -48,12 +48,13 @@
         </button>
       </form>
       <a href="/admin/cloudflare/export" class="btn">Export text</a>
+      <a href="/admin/cloudflare/logs" class="btn">View Logs</a>
     </div>
   </div>
 
   <% if (!cfConfigured) { %>
   <div style="margin-top:8px; font-size:12px; color:#f97316;">
-    ⚠ Set <code>CF_ACCOUNT_ID</code>, <code>CF_API_TOKEN</code>, and <code>CF_KV_NAMESPACE_ID</code> in your .env to enable Cloudflare sync.
+    ⚠ Set <code>CF_ACCOUNT_ID</code>, <code>CF_API_TOKEN</code>, <code>CF_KV_NAMESPACE_ID</code>, and <code>CF_SYNC_KEY</code> in your .env
   </div>
   <% } %>
 </div>

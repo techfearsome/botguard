@@ -1,15 +1,7 @@
 /**
- * Worker Deploy Service — auto-deploys the BotGuard edge firewall Worker
- * to Cloudflare via API. Creates the Worker script, binds KV, sets up
- * the domain route, and can undeploy (remove) everything cleanly.
+ * Worker Deploy Service — auto-deploys the BotGuard edge firewall Worker.
  *
- * Requires API token with permissions:
- *   - Account > Workers Scripts: Edit
- *   - Account > Workers KV Storage: Edit
- *   - Zone > Workers Routes: Edit
- *
- * Env vars (same as cloudflareSync.js):
- *   CF_ACCOUNT_ID, CF_API_TOKEN, CF_KV_NAMESPACE_ID
+ * Env vars: CF_ACCOUNT_ID, CF_API_TOKEN, CF_KV_NAMESPACE_ID, CF_SYNC_KEY
  */
 
 'use strict';
@@ -19,342 +11,312 @@ const CF_API = 'https://api.cloudflare.com/client/v4';
 
 function getConfig() {
   return {
-    accountId:    process.env.CF_ACCOUNT_ID,
-    apiToken:     process.env.CF_API_TOKEN,
+    accountId:     process.env.CF_ACCOUNT_ID,
+    apiToken:      process.env.CF_API_TOKEN,
     kvNamespaceId: process.env.CF_KV_NAMESPACE_ID,
-  };
-}
-
-function cfHeaders(token) {
-  return {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
+    syncKey:       process.env.CF_SYNC_KEY || '',
   };
 }
 
 /**
- * Generate the Worker script as a string.
- * The script uses the service-worker syntax (addEventListener) so it works
- * on the free plan without needing ES module support or wrangler.
+ * Generate the Worker script with log endpoint and key baked in.
  */
-function generateWorkerScript() {
-  // Use addEventListener syntax (not ES module export default) for
-  // maximum compatibility with dashboard-deployed Workers
-  return `
-/**
- * BotGuard Edge Firewall Worker
- * Auto-deployed by BotGuard — do not edit manually.
- * Generated: ${new Date().toISOString()}
- */
+function generateWorkerScript(logEndpoint, logKey) {
+  const LOG_EP = logEndpoint || '';
+  const LOG_K  = logKey || '';
 
-let cached = { config: null, cidrs: null, ips: null, asns: null };
-let cacheExpiry = 0;
-const CACHE_TTL_MS = 5 * 60 * 1000;
+  // The Worker script as a template string.
+  // Uses ES module syntax (export default) for KV binding support.
+  const script = [
+    '/**',
+    ' * BotGuard Edge Firewall Worker',
+    ' * Auto-deployed — do not edit manually.',
+    ' * Generated: ' + new Date().toISOString(),
+    ' */',
+    '',
+    'const LOG_ENDPOINT = "' + LOG_EP + '";',
+    'const LOG_KEY = "' + LOG_K + '";',
+    '',
+    'let cached = { config: null, cidrs: null, ips: null, asns: null };',
+    'let cacheExpiry = 0;',
+    'const CACHE_TTL_MS = 5 * 60 * 1000;',
+    '',
+    'async function getBlocklist(env) {',
+    '  const now = Date.now();',
+    '  if (cached.config && now < cacheExpiry) return cached;',
+    '  try {',
+    '    const [config, cidrs, ips, asns] = await Promise.all([',
+    '      env.BLOCKLIST.get("config", { type: "json" }),',
+    '      env.BLOCKLIST.get("cidrs", { type: "json" }),',
+    '      env.BLOCKLIST.get("ips", { type: "json" }),',
+    '      env.BLOCKLIST.get("asns", { type: "json" }),',
+    '    ]);',
+    '    if (config) {',
+    '      cached = { config, cidrs: cidrs || [], ips: ips || [], asns: asns || [] };',
+    '      cacheExpiry = now + CACHE_TTL_MS;',
+    '    }',
+    '  } catch (e) {}',
+    '  return cached;',
+    '}',
+    '',
+    'function ipv4ToInt(ip) {',
+    '  const p = ip.split(".");',
+    '  if (p.length !== 4) return null;',
+    '  return ((parseInt(p[0]) << 24) | (parseInt(p[1]) << 16) |',
+    '          (parseInt(p[2]) << 8) | parseInt(p[3])) >>> 0;',
+    '}',
+    '',
+    'function ipv4InCidr(ip, cidr) {',
+    '  const [range, bits] = cidr.split("/");',
+    '  const mask = bits ? (~0 << (32 - parseInt(bits))) >>> 0 : 0xFFFFFFFF;',
+    '  const a = ipv4ToInt(ip), b = ipv4ToInt(range);',
+    '  if (a === null || b === null) return false;',
+    '  return (a & mask) === (b & mask);',
+    '}',
+    '',
+    'function expandIPv6(ip) {',
+    '  let parts = ip.split(":");',
+    '  const ei = parts.indexOf("");',
+    '  if (ei !== -1) {',
+    '    const head = parts.slice(0, ei);',
+    '    const tail = parts.slice(ei + 1).filter(p => p !== "");',
+    '    parts = [...head, ...Array(8 - head.length - tail.length).fill("0"), ...tail];',
+    '  }',
+    '  return parts.map(p => p.padStart(4, "0")).join(":");',
+    '}',
+    '',
+    'function ipv6InCidr(ip, cidr) {',
+    '  const [range, bitsStr] = cidr.split("/");',
+    '  const bits = parseInt(bitsStr || "128");',
+    '  const n = Math.ceil(bits / 4);',
+    '  return expandIPv6(ip).replace(/:/g, "").substring(0, n) ===',
+    '         expandIPv6(range).replace(/:/g, "").substring(0, n);',
+    '}',
+    '',
+    'function checkIP(ip, bl, asn) {',
+    '  if (!bl || !ip) return null;',
+    '  const v6 = ip.includes(":");',
+    '  if (bl.ips) for (const r of bl.ips) {',
+    '    if (r.ip === ip) return { action: r.action || "block", reason: "ip", matched: r.ip };',
+    '  }',
+    '  if (bl.cidrs) for (const r of bl.cidrs) {',
+    '    if (!r.cidr) continue;',
+    '    if (v6 && r.cidr.includes(":") && ipv6InCidr(ip, r.cidr))',
+    '      return { action: r.action || "block", reason: "cidr", matched: r.cidr };',
+    '    if (!v6 && !r.cidr.includes(":") && ipv4InCidr(ip, r.cidr))',
+    '      return { action: r.action || "block", reason: "cidr", matched: r.cidr };',
+    '  }',
+    '  if (asn && bl.asns) for (const r of bl.asns) {',
+    '    if (r.asn === asn) return { action: r.action || "block", reason: "asn", matched: "AS" + r.asn };',
+    '  }',
+    '  return null;',
+    '}',
+    '',
+    'const UTM_PARAMS = ["utm_source","utm_medium","utm_campaign","utm_term",',
+    '  "utm_content","gclid","wbraid","gbraid","fbclid","msclkid"];',
+    '',
+    'function hasUTM(url) {',
+    '  const p = url.searchParams;',
+    '  for (const k of UTM_PARAMS) if (p.has(k)) return true;',
+    '  return false;',
+    '}',
+    '',
+    'async function sendLog(data) {',
+    '  if (!LOG_ENDPOINT || !LOG_KEY) return;',
+    '  try {',
+    '    await fetch(LOG_ENDPOINT, {',
+    '      method: "POST",',
+    '      headers: { "Content-Type": "application/json", "x-botguard-key": LOG_KEY },',
+    '      body: JSON.stringify(data),',
+    '    });',
+    '  } catch (e) {}',
+    '}',
+    '',
+    'export default {',
+    '  async fetch(request, env, ctx) {',
+    '    const start = Date.now();',
+    '    const url = new URL(request.url);',
+    '',
+    '    if (url.pathname === "/__botguard_health") {',
+    '      return new Response(JSON.stringify({ status: "active", ts: new Date().toISOString() }), {',
+    '        headers: { "Content-Type": "application/json" }',
+    '      });',
+    '    }',
+    '',
+    '    if (url.pathname.startsWith("/admin/") || url.pathname.startsWith("/api/")) return fetch(request);',
+    '',
+    '    const ip = request.headers.get("cf-connecting-ip");',
+    '    const cf = request.cf || {};',
+    '    const asn = cf.asn ? Number(cf.asn) : null;',
+    '    const bl = await getBlocklist(env);',
+    '',
+    '    if (!bl.config || !bl.config.enabled) return fetch(request);',
+    '    if (bl.config.scan_mode === "utm" && !hasUTM(url)) return fetch(request);',
+    '',
+    '    const result = checkIP(ip, bl, asn);',
+    '    const action = result ? result.action : "allow";',
+    '    const reason = result ? result.reason : "no_match";',
+    '    const matched = result ? result.matched : "";',
+    '',
+    '    const logData = {',
+    '      ip, asn, country: cf.country || "",',
+    '      user_agent: request.headers.get("user-agent") || "",',
+    '      url: url.pathname + url.search, method: request.method,',
+    '      action, reason, matched_rule: matched,',
+    '      scan_mode: bl.config.scan_mode,',
+    '      processing_ms: Date.now() - start,',
+    '    };',
+    '    ctx.waitUntil(sendLog(logData));',
+    '',
+    '    if (action === "block") {',
+    '      return new Response(',
+    '        "<!DOCTYPE html><html><head><title>Error</title></head><body><h1>520</h1><p>Web server is returning an unknown error</p></body></html>",',
+    '        { status: 520, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }',
+    '      );',
+    '    }',
+    '',
+    '    return fetch(request);',
+    '  }',
+    '};',
+  ].join('\n');
 
-async function getBlocklist(env) {
-  const now = Date.now();
-  if (cached.config && now < cacheExpiry) return cached;
-  try {
-    const [config, cidrs, ips, asns] = await Promise.all([
-      env.BLOCKLIST.get('config', { type: 'json' }),
-      env.BLOCKLIST.get('cidrs', { type: 'json' }),
-      env.BLOCKLIST.get('ips', { type: 'json' }),
-      env.BLOCKLIST.get('asns', { type: 'json' }),
-    ]);
-    if (config) {
-      cached = { config, cidrs: cidrs || [], ips: ips || [], asns: asns || [] };
-      cacheExpiry = now + CACHE_TTL_MS;
-    }
-  } catch (e) {}
-  return cached;
-}
-
-function ipv4ToInt(ip) {
-  const p = ip.split('.');
-  if (p.length !== 4) return null;
-  return ((parseInt(p[0]) << 24) | (parseInt(p[1]) << 16) |
-          (parseInt(p[2]) << 8) | parseInt(p[3])) >>> 0;
-}
-
-function ipv4InCidr(ip, cidr) {
-  const [range, bits] = cidr.split('/');
-  const mask = bits ? (~0 << (32 - parseInt(bits))) >>> 0 : 0xFFFFFFFF;
-  const a = ipv4ToInt(ip), b = ipv4ToInt(range);
-  if (a === null || b === null) return false;
-  return (a & mask) === (b & mask);
-}
-
-function expandIPv6(ip) {
-  let parts = ip.split(':');
-  const ei = parts.indexOf('');
-  if (ei !== -1) {
-    const head = parts.slice(0, ei);
-    const tail = parts.slice(ei + 1).filter(p => p !== '');
-    parts = [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail];
-  }
-  return parts.map(p => p.padStart(4, '0')).join(':');
-}
-
-function ipv6InCidr(ip, cidr) {
-  const [range, bitsStr] = cidr.split('/');
-  const bits = parseInt(bitsStr || '128');
-  const n = Math.ceil(bits / 4);
-  return expandIPv6(ip).replace(/:/g, '').substring(0, n) ===
-         expandIPv6(range).replace(/:/g, '').substring(0, n);
-}
-
-function checkIP(ip, bl, asn) {
-  if (!bl || !ip) return null;
-  const v6 = ip.includes(':');
-  if (bl.ips) for (const r of bl.ips) if (r.ip === ip) return r.action || 'block';
-  if (bl.cidrs) for (const r of bl.cidrs) {
-    if (!r.cidr) continue;
-    if (v6 && r.cidr.includes(':') && ipv6InCidr(ip, r.cidr)) return r.action || 'block';
-    if (!v6 && !r.cidr.includes(':') && ipv4InCidr(ip, r.cidr)) return r.action || 'block';
-  }
-  if (asn && bl.asns) for (const r of bl.asns) if (r.asn === asn) return r.action || 'block';
-  return null;
-}
-
-const UTM_PARAMS = ['utm_source','utm_medium','utm_campaign','utm_term',
-  'utm_content','gclid','wbraid','gbraid','fbclid','msclkid'];
-
-function hasUTM(url) {
-  const p = url.searchParams;
-  for (const k of UTM_PARAMS) if (p.has(k)) return true;
-  return false;
-}
-
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    if (url.pathname === '/__botguard_health') {
-      return new Response(JSON.stringify({ status: 'active', ts: new Date().toISOString() }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    if (url.pathname.startsWith('/admin/') || url.pathname.startsWith('/api/')) return fetch(request);
-
-    const bl = await getBlocklist(env);
-    if (!bl.config || !bl.config.enabled) return fetch(request);
-    if (bl.config.scan_mode === 'utm' && !hasUTM(url)) return fetch(request);
-
-    const ip = request.headers.get('cf-connecting-ip');
-    const cf = request.cf || {};
-    const asn = cf.asn ? Number(cf.asn) : null;
-    const action = checkIP(ip, bl, asn);
-
-    if (action === 'block') {
-      return new Response(
-        '<!DOCTYPE html><html><head><title>Error</title></head><body><h1>520</h1><p>Web server is returning an unknown error</p></body></html>',
-        { status: 520, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
-      );
-    }
-
-    return fetch(request);
-  }
-};
-`.trim();
+  return script;
 }
 
 // ── Cloudflare API helpers ───────────────────────────────────────────
 
-async function cfFetch(path, token, opts = {}) {
-  const res = await fetch(`${CF_API}${path}`, {
-    ...opts,
-    headers: { ...cfHeaders(token), ...opts.headers },
-  });
+function cfHeaders(token) {
+  return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+}
+
+async function cfFetch(path, token, opts) {
+  opts = opts || {};
+  const res = await fetch(CF_API + path, Object.assign({}, opts, {
+    headers: Object.assign({}, cfHeaders(token), opts.headers || {}),
+  }));
   return res.json();
 }
 
-/**
- * Find the Cloudflare zone ID for a domain.
- */
 async function getZoneId(domain, token) {
   const parts = domain.split('.');
   const root = parts.slice(-2).join('.');
-  const data = await cfFetch(`/zones?name=${root}`, token);
-  if (!data.success || !data.result?.length) {
-    throw new Error(`Zone not found for ${domain}. Is it added to your Cloudflare account?`);
+  const data = await cfFetch('/zones?name=' + root, token);
+  if (!data.success || !data.result || !data.result.length) {
+    throw new Error('Zone not found for ' + domain);
   }
   return data.result[0].id;
 }
 
-/**
- * Upload Worker script to Cloudflare.
- * Uses multipart form to attach the KV binding metadata alongside the script.
- */
 async function uploadWorkerScript(accountId, workerName, script, kvNamespaceId, token) {
-  // Metadata tells Cloudflare to bind the KV namespace as "BLOCKLIST"
   const metadata = {
     main_module: 'worker.js',
-    bindings: [
-      {
-        type: 'kv_namespace',
-        name: 'BLOCKLIST',
-        namespace_id: kvNamespaceId,
-      },
-    ],
+    bindings: [{ type: 'kv_namespace', name: 'BLOCKLIST', namespace_id: kvNamespaceId }],
     compatibility_date: '2024-01-01',
   };
 
-  // Cloudflare Workers API expects multipart form with metadata + script
   const formData = new FormData();
   formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
   formData.append('worker.js', new Blob([script], { type: 'application/javascript+module' }), 'worker.js');
 
   const res = await fetch(
-    `${CF_API}/accounts/${accountId}/workers/scripts/${workerName}`,
-    {
-      method: 'PUT',
-      headers: { 'Authorization': `Bearer ${token}` },
-      body: formData,
-    }
+    CF_API + '/accounts/' + accountId + '/workers/scripts/' + workerName,
+    { method: 'PUT', headers: { 'Authorization': 'Bearer ' + token }, body: formData }
   );
 
   const data = await res.json();
   if (!data.success) {
-    const msg = data.errors?.[0]?.message || 'Unknown error';
-    throw new Error(`Worker upload failed: ${msg}`);
+    throw new Error('Worker upload failed: ' + (data.errors && data.errors[0] ? data.errors[0].message : 'Unknown'));
   }
   return data;
 }
 
-/**
- * Create or update a Worker route for a domain.
- */
 async function setupRoute(zoneId, workerName, domain, token) {
-  const pattern = `${domain}/*`;
-
-  // Check existing routes
-  const existing = await cfFetch(`/zones/${zoneId}/workers/routes`, token);
+  const pattern = domain + '/*';
+  const existing = await cfFetch('/zones/' + zoneId + '/workers/routes', token);
   if (existing.success && existing.result) {
-    const found = existing.result.find(r => r.pattern === pattern);
+    const found = existing.result.find(function(r) { return r.pattern === pattern; });
     if (found) {
-      // Update existing route
-      await cfFetch(`/zones/${zoneId}/workers/routes/${found.id}`, token, {
-        method: 'PUT',
-        body: JSON.stringify({ pattern, script: workerName }),
+      await cfFetch('/zones/' + zoneId + '/workers/routes/' + found.id, token, {
+        method: 'PUT', body: JSON.stringify({ pattern: pattern, script: workerName }),
       });
       return found.id;
     }
   }
-
-  // Create new route
-  const data = await cfFetch(`/zones/${zoneId}/workers/routes`, token, {
-    method: 'POST',
-    body: JSON.stringify({ pattern, script: workerName }),
+  const data = await cfFetch('/zones/' + zoneId + '/workers/routes', token, {
+    method: 'POST', body: JSON.stringify({ pattern: pattern, script: workerName }),
   });
-
   if (!data.success) {
-    throw new Error(`Route creation failed: ${data.errors?.[0]?.message || 'Unknown'}`);
+    throw new Error('Route creation failed: ' + (data.errors && data.errors[0] ? data.errors[0].message : 'Unknown'));
   }
   return data.result.id;
 }
 
-/**
- * Delete a Worker script.
- */
 async function deleteWorker(accountId, workerName, token) {
-  const res = await fetch(`${CF_API}/accounts/${accountId}/workers/scripts/${workerName}`, {
-    method: 'DELETE',
-    headers: { 'Authorization': `Bearer ${token}` },
+  const res = await fetch(CF_API + '/accounts/' + accountId + '/workers/scripts/' + workerName, {
+    method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token },
   });
   return res.ok;
 }
 
-/**
- * Delete a Worker route.
- */
 async function deleteRoute(zoneId, routeId, token) {
-  const res = await fetch(`${CF_API}/zones/${zoneId}/workers/routes/${routeId}`, {
-    method: 'DELETE',
-    headers: { 'Authorization': `Bearer ${token}` },
+  const res = await fetch(CF_API + '/zones/' + zoneId + '/workers/routes/' + routeId, {
+    method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token },
   });
   return res.ok;
 }
 
-/**
- * Check if a Worker exists in Cloudflare.
- */
 async function workerExists(accountId, workerName, token) {
-  const res = await fetch(`${CF_API}/accounts/${accountId}/workers/scripts/${workerName}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
+  const res = await fetch(CF_API + '/accounts/' + accountId + '/workers/scripts/' + workerName, {
+    headers: { 'Authorization': 'Bearer ' + token },
   });
   return res.ok;
 }
 
 // ── Public API ───────────────────────────────────────────────────────
 
-/**
- * Deploy the BotGuard Worker to Cloudflare.
- * Creates the script with KV binding and sets up the domain route.
- *
- * @param {string} domain — e.g. "cookingshow.space"
- * @returns {object} — { success, workerName, routeId, zoneId }
- */
-async function deployWorker(domain) {
-  const { accountId, apiToken, kvNamespaceId } = getConfig();
-  if (!accountId || !apiToken || !kvNamespaceId) {
+async function deployWorker(domain, serverUrl) {
+  const cfg = getConfig();
+  if (!cfg.accountId || !cfg.apiToken || !cfg.kvNamespaceId) {
     throw new Error('Missing CF_ACCOUNT_ID, CF_API_TOKEN, or CF_KV_NAMESPACE_ID');
   }
 
-  const workerName = `botguard-${domain.replace(/[^a-z0-9]/gi, '-').toLowerCase().slice(0, 50)}`;
+  const workerName = 'botguard-' + domain.replace(/[^a-z0-9]/gi, '-').toLowerCase().slice(0, 50);
+  const logEndpoint = (serverUrl || '').replace(/\/$/, '') + '/admin/cloudflare/api/log';
 
-  // 1. Get zone ID
-  const zoneId = await getZoneId(domain, apiToken);
-  logger.info('cf_deploy_zone', { domain, zoneId });
+  const zoneId = await getZoneId(domain, cfg.apiToken);
+  logger.info('cf_deploy_zone', { domain: domain, zoneId: zoneId });
 
-  // 2. Generate and upload Worker script
-  const script = generateWorkerScript();
-  await uploadWorkerScript(accountId, workerName, script, kvNamespaceId, apiToken);
-  logger.info('cf_deploy_script', { workerName });
+  const script = generateWorkerScript(logEndpoint, cfg.syncKey);
+  await uploadWorkerScript(cfg.accountId, workerName, script, cfg.kvNamespaceId, cfg.apiToken);
+  logger.info('cf_deploy_script', { workerName: workerName });
 
-  // 3. Set up route
-  const routeId = await setupRoute(zoneId, workerName, domain, apiToken);
-  logger.info('cf_deploy_route', { pattern: `${domain}/*`, routeId });
+  const routeId = await setupRoute(zoneId, workerName, domain, cfg.apiToken);
+  logger.info('cf_deploy_route', { pattern: domain + '/*', routeId: routeId });
 
-  return { success: true, workerName, routeId, zoneId };
+  return { success: true, workerName: workerName, routeId: routeId, zoneId: zoneId };
 }
 
-/**
- * Undeploy — remove the Worker route and script from Cloudflare.
- */
 async function undeployWorker(domain, workerName, zoneId, routeId) {
-  const { accountId, apiToken } = getConfig();
-  if (!accountId || !apiToken) throw new Error('Missing Cloudflare credentials');
+  const cfg = getConfig();
+  if (!cfg.accountId || !cfg.apiToken) throw new Error('Missing Cloudflare credentials');
 
-  // Delete route first (so traffic stops going to the Worker)
   if (routeId && zoneId) {
-    try { await deleteRoute(zoneId, routeId, apiToken); } catch (e) {
+    try { await deleteRoute(zoneId, routeId, cfg.apiToken); } catch (e) {
       logger.warn('cf_undeploy_route_err', { err: e.message });
     }
   }
-
-  // Delete Worker script
   if (workerName) {
-    await deleteWorker(accountId, workerName, apiToken);
+    await deleteWorker(cfg.accountId, workerName, cfg.apiToken);
   }
-
-  logger.info('cf_undeploy_done', { domain, workerName });
+  logger.info('cf_undeploy_done', { domain: domain, workerName: workerName });
   return { success: true };
 }
 
-/**
- * Check if the Worker is actually deployed in Cloudflare.
- */
 async function verifyDeployment(workerName) {
-  const { accountId, apiToken } = getConfig();
-  if (!accountId || !apiToken || !workerName) return { deployed: false };
-  const exists = await workerExists(accountId, workerName, apiToken);
-  return { deployed: exists, workerName };
+  const cfg = getConfig();
+  if (!cfg.accountId || !cfg.apiToken || !workerName) return { deployed: false };
+  const exists = await workerExists(cfg.accountId, workerName, cfg.apiToken);
+  return { deployed: exists, workerName: workerName };
 }
 
-module.exports = {
-  deployWorker,
-  undeployWorker,
-  verifyDeployment,
-  generateWorkerScript,
-};
+module.exports = { deployWorker, undeployWorker, verifyDeployment, generateWorkerScript };
