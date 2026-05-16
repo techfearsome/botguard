@@ -75,6 +75,10 @@ function fmtRate(rate) {
   </form>
   <%# Row 2: Status / score / version filters — all on one line %>
   <form method="GET" action="/admin/intelligence" id="filter-form" style="display:flex; flex-wrap:nowrap; gap:8px; align-items:center; border-top:1px solid var(--border-default); padding-top:10px;">
+    <%# Carry forward the current range/date so Filter doesn't reset the timeframe %>
+    <input type="hidden" name="range" value="<%= currentRange %>">
+    <input type="hidden" name="date_from" value="<%= dFrom %>">
+    <input type="hidden" name="date_to" value="<%= dTo %>">
     <span class="muted" style="font-size:13px; white-space:nowrap;">Filter:</span>
     <select name="status" style="width:auto; min-width:180px; max-width:220px; padding:6px 10px; font-size:13px;">
       <option value="active"      <%= statusFilter === 'active'      ? 'selected' : '' %>>Active (new)</option>
@@ -173,7 +177,7 @@ function fmtRate(rate) {
 <%# ── Pagination helper ─────────────────────────────────────────── %>
 <%
   // Build base URL preserving current filters
-  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}`;
+  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}`;
   function pgUrl(p, pp) { return `${paginationBase}&page=${p}&per_page=${pp}`; }
   const cp = typeof currentPage !== 'undefined' ? currentPage : 1;
   const tp = typeof totalPages !== 'undefined' ? totalPages : 1;
