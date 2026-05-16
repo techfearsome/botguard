@@ -40,9 +40,15 @@ const WorkspaceSchema = new mongoose.Schema({
     // Cloudflare edge firewall settings
     cloudflare_settings: {
       enabled: { type: Boolean, default: false },
-      // 'all' = scan every request at the edge
-      // 'utm' = only scan requests with UTM/click-ID params (ad clicks only)
       scan_mode: { type: String, enum: ['all', 'utm'], default: 'utm' },
+      // Worker deployment state
+      worker_deployed: { type: Boolean, default: false },
+      worker_name: { type: String, default: '' },
+      worker_zone_id: { type: String, default: '' },
+      worker_route_id: { type: String, default: '' },
+      worker_domain: { type: String, default: '' },
+      last_deployed_at: { type: Date },
+      deploy_error: { type: String, default: '' },
     },
   },
   created_at: { type: Date, default: Date.now },

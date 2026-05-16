@@ -58,6 +58,53 @@
   <% } %>
 </div>
 
+<%# ── Worker Deployment ──────────────────────────────────────────── %>
+<div style="background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:12px 14px; margin-bottom:16px;">
+  <div style="display:flex; flex-wrap:nowrap; gap:12px; align-items:center;">
+    <span style="font-size:13px; font-weight:500;">Worker:</span>
+
+    <% if (cfSettings.worker_deployed) { %>
+      <div style="display:flex; align-items:center; gap:6px; padding:6px 12px; border-radius:6px; border:1px solid #22c55e; background:rgba(34,197,94,0.1);">
+        <span style="width:10px; height:10px; border-radius:50%; background:#22c55e; display:inline-block; box-shadow:0 0 6px rgba(34,197,94,0.5);"></span>
+        <span style="font-size:13px; font-weight:500; color:#22c55e;">DEPLOYED</span>
+      </div>
+      <span class="muted" style="font-size:12px;">
+        <code><%= cfSettings.worker_domain %></code> →
+        <code><%= cfSettings.worker_name %></code>
+        <% if (cfSettings.last_deployed_at) { %>
+          · deployed <%= new Date(cfSettings.last_deployed_at).toLocaleDateString() %>
+        <% } %>
+      </span>
+      <form method="POST" action="/admin/cloudflare/undeploy" style="margin-left:auto;">
+        <button type="submit" class="btn btn-small" style="background:#ef4444; color:#fff;"
+          onclick="return confirm('Remove the Worker from Cloudflare? Traffic will pass through unfiltered.')">
+          Remove Worker
+        </button>
+      </form>
+    <% } else { %>
+      <div style="display:flex; align-items:center; gap:6px; padding:6px 12px; border-radius:6px; border:1px solid var(--border-default); background:rgba(239,68,68,0.05);">
+        <span style="width:10px; height:10px; border-radius:50%; background:#ef4444; display:inline-block;"></span>
+        <span style="font-size:13px; font-weight:500; color:#ef4444;">NOT DEPLOYED</span>
+      </div>
+      <form method="POST" action="/admin/cloudflare/deploy" style="display:flex; gap:6px; align-items:center; margin-left:auto;">
+        <input name="domain" placeholder="cookingshow.space" required
+          style="padding:6px 10px; font-size:13px; min-width:200px;"
+          value="<%= cfSettings.worker_domain || '' %>">
+        <button type="submit" class="btn btn-small" style="background:#22c55e; color:#fff;"
+          <%= cfConfigured ? '' : 'disabled' %>>
+          Deploy Worker
+        </button>
+      </form>
+    <% } %>
+  </div>
+
+  <% if (cfSettings.deploy_error) { %>
+  <div style="margin-top:8px; font-size:12px; color:#ef4444;">
+    Last error: <%= cfSettings.deploy_error %>
+  </div>
+  <% } %>
+</div>
+
 <%# ── Stats ──────────────────────────────────────────────────────── %>
 <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;">
   <div class="stat-card" style="flex:1; min-width:90px;">

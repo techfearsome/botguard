@@ -16,6 +16,7 @@ const CloudflareRule = require('../../models/CloudflareRule');
 const AsnBlacklist = require('../../models/AsnBlacklist');
 const CidrIntelligence = require('../../models/CidrIntelligence');
 const { buildBlocklist, syncToCloudflareKV } = require('../../lib/cloudflareSync');
+const { deployWorker, undeployWorker, verifyDeployment } = require('../../lib/workerDeploy');
 
 async function resolveWorkspace(req) {
   const { Workspace } = require('../../models');
@@ -215,6 +216,67 @@ router.post('/sync', async (req, res) => {
     else res.redirect(`/admin/cloudflare?flash=Sync+failed:+${result.reason || JSON.stringify(result.errors)}`);
   } catch (err) {
     res.redirect(`/admin/cloudflare?flash=Sync+error:+${encodeURIComponent(err.message)}`);
+  }
+});
+
+// ── Deploy Worker to Cloudflare ──────────────────────────────────────
+router.post('/deploy', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const domain = req.body.domain || '';
+  if (!domain) return res.redirect('/admin/cloudflare?flash=Domain+is+required');
+
+  try {
+    const result = await deployWorker(domain);
+    await ws.constructor.updateOne(
+      { _id: ws._id },
+      { $set: {
+        'settings.cloudflare_settings.worker_deployed': true,
+        'settings.cloudflare_settings.worker_name': result.workerName,
+        'settings.cloudflare_settings.worker_zone_id': result.zoneId,
+        'settings.cloudflare_settings.worker_route_id': result.routeId,
+        'settings.cloudflare_settings.worker_domain': domain,
+        'settings.cloudflare_settings.last_deployed_at': new Date(),
+        'settings.cloudflare_settings.deploy_error': '',
+      }}
+    );
+    // Auto-sync rules so the Worker has data immediately
+    try { await syncToCloudflareKV(ws._id); } catch (e) { /* non-fatal */ }
+    res.redirect(`/admin/cloudflare?flash=Worker+deployed+to+${encodeURIComponent(domain)}`);
+  } catch (err) {
+    await ws.constructor.updateOne(
+      { _id: ws._id },
+      { $set: { 'settings.cloudflare_settings.deploy_error': err.message } }
+    );
+    res.redirect(`/admin/cloudflare?flash=Deploy+failed:+${encodeURIComponent(err.message)}`);
+  }
+});
+
+// ── Undeploy Worker from Cloudflare ──────────────────────────────────
+router.post('/undeploy', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const cfSettings = ws.settings?.cloudflare_settings || {};
+  try {
+    await undeployWorker(
+      cfSettings.worker_domain,
+      cfSettings.worker_name,
+      cfSettings.worker_zone_id,
+      cfSettings.worker_route_id
+    );
+    await ws.constructor.updateOne(
+      { _id: ws._id },
+      { $set: {
+        'settings.cloudflare_settings.worker_deployed': false,
+        'settings.cloudflare_settings.worker_name': '',
+        'settings.cloudflare_settings.worker_zone_id': '',
+        'settings.cloudflare_settings.worker_route_id': '',
+        'settings.cloudflare_settings.worker_domain': '',
+        'settings.cloudflare_settings.enabled': false,
+        'settings.cloudflare_settings.deploy_error': '',
+      }}
+    );
+    res.redirect('/admin/cloudflare?flash=Worker+removed+from+Cloudflare');
+  } catch (err) {
+    res.redirect(`/admin/cloudflare?flash=Undeploy+failed:+${encodeURIComponent(err.message)}`);
   }
 });
 
