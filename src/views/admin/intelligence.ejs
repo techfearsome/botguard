@@ -400,42 +400,47 @@ function fmtRate(rate) {
           <% } %>
         </td>
 
-        <%# Action buttons %>
-        <td style="white-space:nowrap;">
-          <div style="display:flex; gap:4px; flex-wrap:wrap;">
-            <a href="/admin/clicks?click_id=&range=today" class="btn btn-small" title="View clicks from this subnet">Clicks</a>
-
-            <% if (e._id && e.status !== 'exported') { %>
-            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline">
+        <%# Three-dot action menu %>
+        <td style="position:relative;">
+          <% if (e._id) { %>
+          <button class="btn btn-small action-toggle" onclick="toggleMenu(this)" style="font-size:16px; padding:2px 8px; line-height:1;">⋯</button>
+          <div class="action-menu" style="display:none; position:absolute; right:0; top:100%; z-index:50; background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); box-shadow:0 4px 12px rgba(0,0,0,0.3); min-width:190px; padding:4px 0;">
+            <a href="/admin/clicks?cidr=<%= encodeURIComponent(e.cidr) %>&range=today" class="action-item">View clicks</a>
+            <% if (e.status !== 'exported') { %>
+            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="margin:0;">
               <input type="hidden" name="status" value="exported">
-              <button type="submit" class="btn btn-small btn-primary" title="Add to next Google Ads export">Export</button>
+              <button type="submit" class="action-item" style="color:#22c55e;">Export to Google Ads</button>
             </form>
             <% } %>
-
-            <% if (e._id && e.status !== 'blocked') { %>
-            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline">
+            <% if (e.status !== 'blocked') { %>
+            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="margin:0;">
               <input type="hidden" name="status" value="blocked">
-              <button type="submit" class="btn btn-small" title="Add to BotGuard CIDR blacklist" style="border-color:#f97316; color:#f97316;">Block</button>
+              <button type="submit" class="action-item" style="color:#f97316;">Block internally</button>
             </form>
             <% } %>
-
-            <% if (e._id && e.status !== 'dismissed') { %>
-            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="display:inline"
-                  onsubmit="return confirm('Dismiss this CIDR? It will be hidden from active view.')">
+            <% if (!e.cf_exported) { %>
+            <form method="POST" action="/admin/cloudflare/import-intelligence" style="margin:0;">
+              <input type="hidden" name="ids" value="<%= e._id %>">
+              <button type="submit" class="action-item" style="color:#3b82f6;">☁ Add to Cloudflare</button>
+            </form>
+            <% } else { %>
+            <span class="action-item" style="color:var(--text-secondary); opacity:0.5; cursor:default;">☁ Already in Cloudflare</span>
+            <% } %>
+            <% if (e.status !== 'dismissed') { %>
+            <div style="border-top:1px solid var(--border-default); margin:4px 0;"></div>
+            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="margin:0;"
+                  onsubmit="return confirm('Dismiss this CIDR?')">
               <input type="hidden" name="status" value="dismissed">
-              <button type="submit" class="btn btn-small" title="Not a threat — dismiss">✕</button>
+              <button type="submit" class="action-item" style="color:var(--text-secondary);">Dismiss</button>
             </form>
-            <% } %>
-
-            <% if (!e._id) { %>
-            <small class="muted" style="font-size:10px;">historical only</small>
             <% } %>
           </div>
-
-          <%# Sample IPs tooltip %>
+          <% } else { %>
+            <small class="muted" style="font-size:10px;">historical</small>
+          <% } %>
           <% if (e.sample_ips && e.sample_ips.length) { %>
           <details style="margin-top:4px;">
-            <summary style="font-size:10px; cursor:pointer; color:var(--text-secondary);">sample IPs</summary>
+            <summary style="font-size:10px; cursor:pointer; color:var(--text-secondary);">▸ IPs</summary>
             <div style="font-size:10px; font-family:monospace; line-height:1.6; margin-top:2px;">
               <% e.sample_ips.slice(0,5).forEach(ip => { %><div><%= ip %></div><% }); %>
             </div>
@@ -492,7 +497,27 @@ function fmtRate(rate) {
 
 <% } %>
 
+<style>
+.action-item {
+  display: block; width: 100%; text-align: left; padding: 8px 14px;
+  font-size: 13px; color: var(--text-primary); background: none;
+  border: none; cursor: pointer; text-decoration: none;
+}
+.action-item:hover { background: var(--bg-hover) !important; }
+</style>
 <script>
+function toggleMenu(btn) {
+  const menu = btn.nextElementSibling;
+  // Close all other menus first
+  document.querySelectorAll('.action-menu').forEach(m => { if (m !== menu) m.style.display = 'none'; });
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+// Close menus when clicking outside
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.action-toggle') && !e.target.closest('.action-menu')) {
+    document.querySelectorAll('.action-menu').forEach(m => m.style.display = 'none');
+  }
+});
 // ── Checkbox helpers ────────────────────────────────────────────────────
 function toggleAll(cb) {
   document.querySelectorAll('.row-select').forEach(r => r.checked = cb.checked);

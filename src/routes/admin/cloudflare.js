@@ -191,7 +191,7 @@ router.post('/import-intelligence', async (req, res) => {
       added++;
     } catch (err) { if (err.code === 11000) skipped++; }
   }
-  res.redirect(`/admin/cloudflare?flash=Intelligence+import:+${added}+added,+${skipped}+existing`);
+  res.redirect(`/admin/intelligence?flash=Cloudflare:+${added}+added,+${skipped}+existing`);
 });
 
 // ── Toggle / Delete ──────────────────────────────────────────────────
