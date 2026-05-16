@@ -1,4 +1,4 @@
-<% /* admin/cloudflare.ejs — Cloudflare Edge Firewall */ %>
+<%- include('../partials/header', { ws, page, title: 'Cloudflare Edge Firewall - BotGuard' }) %>
 
 <h1>Cloudflare Edge Firewall</h1>
 <p class="muted" style="margin-bottom:16px;">
@@ -203,3 +203,5 @@ function cfBD(){
   document.getElementById('cf-bf').submit();
 }
 </script>
+
+<%- include('../partials/footer') %>
