@@ -100,6 +100,11 @@ router.post('/add', async (req, res) => {
       doc.value = (value || '').trim();
       if (!doc.value) throw new Error('IP or CIDR value required');
     }
+    // Check for existing
+    const existsQ = { workspace_id: ws._id, rule_type };
+    if (rule_type === 'asn') existsQ.asn_number = doc.asn_number;
+    else existsQ.value = doc.value;
+    if (await CloudflareRule.findOne(existsQ)) return res.redirect('/admin/cloudflare?flash=Rule+already+exists');
     await CloudflareRule.create(doc);
     res.redirect('/admin/cloudflare?flash=Rule+added');
   } catch (err) {
@@ -133,6 +138,12 @@ router.post('/upload-csv', async (req, res) => {
       const doc = { workspace_id: ws._id, rule_type: ruleType, action: 'block', label, source: 'csv_upload', active: true };
       if (ruleType === 'asn') { doc.asn_number = parseInt(value, 10); if (!doc.asn_number) { invalid++; continue; } }
       else doc.value = value;
+      // Check for existing before create
+      const existsQuery = { workspace_id: ws._id, rule_type: ruleType };
+      if (ruleType === 'asn') existsQuery.asn_number = doc.asn_number;
+      else existsQuery.value = value;
+      const exists = await CloudflareRule.findOne(existsQuery);
+      if (exists) { skipped++; continue; }
       await CloudflareRule.create(doc);
       added++;
     } catch (err) { if (err.code === 11000) skipped++; else invalid++; }
@@ -150,16 +161,23 @@ router.post('/import-asn', async (req, res) => {
   let added = 0, skipped = 0;
   for (const rule of asnRules) {
     try {
+      const ruleType = rule.asn ? 'asn' : (rule.cidr ? 'cidr' : 'ip');
+      // Check for existing rule
+      const existsQuery = { workspace_id: ws._id, rule_type: ruleType };
+      if (ruleType === 'asn') existsQuery.asn_number = rule.asn;
+      else if (rule.cidr) existsQuery.value = rule.cidr;
+      else { skipped++; continue; }
+      const exists = await CloudflareRule.findOne(existsQuery);
+      if (exists) { skipped++; continue; }
+
       const doc = {
-        workspace_id: ws._id,
-        rule_type: rule.asn ? 'asn' : (rule.cidr ? 'cidr' : 'ip'),
+        workspace_id: ws._id, rule_type: ruleType,
         action: 'block', label: rule.asn_org || '',
         notes: `From ASN blacklist (${rule.category})`,
         source: 'asn_import', source_ref: rule._id.toString(), active: true,
       };
-      if (rule.asn) doc.asn_number = rule.asn;
-      else if (rule.cidr) doc.value = rule.cidr;
-      else { skipped++; continue; }
+      if (ruleType === 'asn') doc.asn_number = rule.asn;
+      else doc.value = rule.cidr;
       await CloudflareRule.create(doc);
       added++;
     } catch (err) { if (err.code === 11000) skipped++; }
@@ -176,6 +194,14 @@ router.post('/import-intelligence', async (req, res) => {
   const entries = await CidrIntelligence.find({ _id: { $in: ids } }).lean();
   let added = 0, skipped = 0;
   for (const entry of entries) {
+    // Check if this CIDR already exists in CloudflareRule
+    const exists = await CloudflareRule.findOne({
+      workspace_id: ws._id,
+      rule_type: 'cidr',
+      value: entry.cidr,
+    });
+    if (exists) { skipped++; continue; }
+
     try {
       await CloudflareRule.create({
         workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
