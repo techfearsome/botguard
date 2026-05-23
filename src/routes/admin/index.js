@@ -1986,18 +1986,26 @@ router.post('/intelligence/seed', async (req, res) => {
 //   /intelligence/export.txt  — plain CIDR list, one per line. This is the
 //                               format Google Ads accepts when pasting into
 //                               an IP exclusion list. IPv4 emitted as /24
-//                               CIDR; IPv6 as the stored /32 CIDR. Kept at
-//                               this path because consumers (Google Ads
-//                               paste, simple grep/diff tooling) only want
-//                               the addresses.
+//                               CIDR; IPv6 as the stored /32 CIDR.
 //
-//   /intelligence/export.csv  — full grid CSV for spreadsheet/audit use.
-//                               Includes score breakdown, evidence, status,
-//                               ASN, and timing. Use this for review
-//                               outside the admin UI.
+//   /intelligence/export-detailed.csv — full grid CSV for spreadsheet/audit
+//                                       use. Includes score breakdown,
+//                                       evidence, status, ASN, and timing.
 //
-// Both honour the same filters: min_score, status, version, cf. include_exported
-// kept for backwards compat with existing dashboards/bookmarks.
+// Both endpoints are RANGE-AWARE. They mirror the main /intelligence GET
+// route's branching:
+//
+//   - range=today (default) OR no dates: read live CidrIntelligence (24h)
+//   - any other range:                   aggregate from CidrDailySnapshot
+//                                        within the window, intersected
+//                                        with the live-state filters.
+//
+// This matches what the user sees on screen. Without this, the export
+// always returned live state regardless of the date selector — which made
+// "export what I'm looking at" effectively impossible for past ranges.
+//
+// Filters honoured by both:
+//   min_score, status, version, cf, range, date_from, date_to, include_exported
 
 function buildExportFilter(ws, query) {
   const includeExported = query.include_exported === '1';
@@ -2012,10 +2020,11 @@ function buildExportFilter(ws, query) {
     ? ['new', 'reviewing', 'watchlist', 'blocked', 'exported']
     : ['new', 'reviewing', 'blocked'];
 
-  if (statusParam === 'watchlist')        statusIn = ['watchlist'];
+  if (statusParam === 'active')           statusIn = ['new', 'reviewing', 'watchlist'];
+  else if (statusParam === 'watchlist')   statusIn = ['watchlist'];
   else if (statusParam === 'all_flagged') statusIn = ['new', 'reviewing', 'watchlist', 'blocked', 'exported'];
   else if (statusParam === 'all')         statusIn = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
-  else if (statusParam && statusIn.indexOf(statusParam) >= 0) statusIn = [statusParam];
+  else if (statusParam && ['new', 'reviewing', 'blocked', 'exported', 'dismissed'].includes(statusParam)) statusIn = [statusParam];
 
   const filter = {
     workspace_id: ws._id,
@@ -2026,6 +2035,124 @@ function buildExportFilter(ws, query) {
   if (cf === 'cf_yes') filter.cf_exported = true;
   else if (cf === 'cf_no') filter.cf_exported = { $ne: true };
   return filter;
+}
+
+// Decide whether the caller wants live (today) or past-range data.
+// Mirrors the logic in the main GET route handler.
+function resolveExportRange(query) {
+  const rawRange = (query.range || 'today').toLowerCase();
+  const dateFrom = (query.date_from || '').trim();
+  const dateTo   = (query.date_to   || '').trim();
+  const hasDates = !!(dateFrom && dateTo);
+  const isLive   = (rawRange === 'today' && !hasDates);
+  return { isLive, rawRange, dateFrom, dateTo, hasDates };
+}
+
+// Resolve the set of entries that should be exported. Returns a uniform
+// array of "entry"-shaped objects matching what the EJS view receives.
+// Used by both export.txt and export-detailed.csv so they stay in sync
+// with the on-screen list.
+async function resolveEntriesForExport(ws, query, hardLimit) {
+  const liveFilter = buildExportFilter(ws, query);
+  const { isLive, rawRange, dateFrom, dateTo } = resolveExportRange(query);
+
+  if (isLive) {
+    // Live mode: straight read from CidrIntelligence
+    const entries = await CidrIntelligence.find(liveFilter)
+      .sort({ score: -1 })
+      .limit(hardLimit)
+      .lean();
+    return entries;
+  }
+
+  // Past-range: aggregate snapshots in the window, intersect with the
+  // live-state filter, return enriched entries.
+  const { CidrDailySnapshot } = require('../../models');
+  const parsed = parseRange({
+    range: dateFrom && dateTo ? 'custom' : rawRange,
+    date_from: dateFrom,
+    date_to: dateTo,
+  });
+
+  const startStr = parsed.gte ? parsed.gte.toISOString().slice(0, 10) : '0000-01-01';
+  const endStr   = parsed.lte ? parsed.lte.toISOString().slice(0, 10) : '9999-12-31';
+
+  // Resolve which CIDRs match the live-state filter first
+  const allowedDocs = await CidrIntelligence.find(liveFilter)
+    .select('cidr').lean();
+  if (allowedDocs.length === 0) return [];
+  const allowedCidrs = allowedDocs.map(d => d.cidr);
+
+  const snapMatch = {
+    workspace_id: ws._id,
+    date: { $gte: startStr, $lte: endStr },
+    cidr: { $in: allowedCidrs },
+  };
+  const versionFilter = query.version || 'all';
+  if (versionFilter !== 'all') snapMatch.ip_version = versionFilter;
+
+  const aggregated = await CidrDailySnapshot.aggregate([
+    { $match: snapMatch },
+    { $group: {
+        _id: '$cidr',
+        ip_version:             { $first: '$ip_version' },
+        asn_org:                { $last: '$asn_org' },
+        country:                { $last: '$country' },
+        hits:                   { $sum: '$hits' },
+        conversions:            { $sum: '$conversions' },
+        max_burst_5min:         { $max: '$max_burst_5min' },
+        rapid_duplicate_count:  { $sum: '$rapid_duplicate_count' },
+        single_ip_hammer_count: { $sum: '$single_ip_hammer_count' },
+        fake_ua_count:          { $sum: '$fake_ua_count' },
+        window_days_seen:       { $sum: 1 },
+        first_date_in_window:   { $min: '$date' },
+        last_date_in_window:    { $max: '$date' },
+    }},
+    { $sort: { hits: -1 } },
+    { $limit: hardLimit },
+  ]);
+
+  if (aggregated.length === 0) return [];
+
+  // Re-fetch full live docs for the visible CIDRs to get full signal/status/etc
+  const visibleCidrs = aggregated.map(a => a._id);
+  const liveDocs = await CidrIntelligence.find({
+    workspace_id: ws._id,
+    cidr: { $in: visibleCidrs },
+  }).lean();
+  const liveMap = new Map(liveDocs.map(d => [d.cidr, d]));
+
+  // Merge: aggregated window metrics override the live 24h hit_count/
+  // conversion_count so the CSV reflects what the user saw on screen for
+  // the chosen window.
+  return aggregated.map(a => {
+    const live = liveMap.get(a._id) || {};
+    return {
+      ...live,
+      cidr: a._id,
+      ip_version: a.ip_version,
+      asn_org: a.asn_org || live.asn_org || '',
+      country: a.country || live.country || '',
+      // Window-scoped metrics override live's 24h numbers
+      hit_count: a.hits,
+      conversion_count: a.conversions,
+      conv_rate: a.hits > 0 ? a.conversions / a.hits : 0,
+      max_burst_5min: a.max_burst_5min,
+      rapid_duplicate_count: a.rapid_duplicate_count,
+      single_ip_hammer_count: a.single_ip_hammer_count,
+      fake_ua_count: a.fake_ua_count,
+      days_seen_count: a.window_days_seen,
+      first_seen_date: a.first_date_in_window,
+      last_seen_date:  a.last_date_in_window,
+      // Score/signals/status come from live state — there's only one of
+      // those regardless of window, and that's the authoritative value
+      // the operator acts on.
+      score: live.score || 0,
+      signals: live.signals || {},
+      status: live.status || 'new',
+      cf_exported: !!live.cf_exported,
+    };
+  });
 }
 
 // CSV escaping — wraps the value in quotes only when needed and escapes
@@ -2042,13 +2169,8 @@ function csvCell(v) {
 // Plain CIDR list — one entry per line. Format Google Ads expects.
 async function handleExportTxt(req, res) {
   const ws = await resolveWorkspace(req);
-  const filter = buildExportFilter(ws, req.query);
   const limit = Math.min(parseInt(req.query.limit, 10) || 500, 5000);
-
-  const entries = await CidrIntelligence.find(filter)
-    .sort({ score: -1 })
-    .limit(limit)
-    .lean();
+  const entries = await resolveEntriesForExport(ws, req.query, limit);
 
   // Plain list — one IP block per line, nothing else.
   // For v4 we emit wildcard form (1.2.3.*) because that's what the existing
@@ -2085,13 +2207,8 @@ router.get('/intelligence/export.csv', async (req, res) => {
 // Full CSV with all evidence columns — for spreadsheet review and audit.
 async function handleExportCsv(req, res) {
   const ws = await resolveWorkspace(req);
-  const filter = buildExportFilter(ws, req.query);
   const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
-
-  const entries = await CidrIntelligence.find(filter)
-    .sort({ score: -1 })
-    .limit(limit)
-    .lean();
+  const entries = await resolveEntriesForExport(ws, req.query, limit);
 
   const headers = [
     'cidr', 'ip_version', 'asn_org', 'country', 'score',

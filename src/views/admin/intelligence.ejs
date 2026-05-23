@@ -36,12 +36,23 @@ function fmtRate(rate) {
     <form method="POST" action="/admin/intelligence/run-now" style="display:inline">
       <button type="submit" class="btn" title="Trigger analysis run immediately">↻ Run Now</button>
     </form>
-    <a href="/admin/intelligence/export.txt?min_score=<%= minScore %>&status=<%= statusFilter %>&version=<%= versionFilter %>&cf=<%= typeof cfFilter !== 'undefined' ? cfFilter : 'all' %>" class="btn btn-primary"
-       title="Plain CIDR list — paste into Google Ads IP exclusion">
+    <%# Export URLs preserve the current range AND filters so the download
+        matches what's on screen. Without the range/date params the export
+        would always return live (last 24h) data regardless of the window
+        selector. %>
+    <%
+      const _exportRange = (typeof rangeKey  !== 'undefined') ? rangeKey  : 'today';
+      const _exportFrom  = (typeof dateFrom  !== 'undefined') ? dateFrom  : '';
+      const _exportTo    = (typeof dateTo    !== 'undefined') ? dateTo    : '';
+      const _exportCf    = (typeof cfFilter  !== 'undefined') ? cfFilter  : 'all';
+      const _exportQs    = `min_score=${minScore}&status=${statusFilter}&version=${versionFilter}&cf=${_exportCf}&range=${_exportRange}&date_from=${_exportFrom}&date_to=${_exportTo}`;
+    %>
+    <a href="/admin/intelligence/export.txt?<%= _exportQs %>" class="btn btn-primary"
+       title="Plain CIDR list — paste into Google Ads IP exclusion. Reflects the current window and filters.">
       Export TXT (Google Ads)
     </a>
-    <a href="/admin/intelligence/export-detailed.csv?min_score=<%= minScore %>&status=<%= statusFilter %>&version=<%= versionFilter %>&cf=<%= typeof cfFilter !== 'undefined' ? cfFilter : 'all' %>" class="btn"
-       title="Full CSV with score, signals and evidence — for spreadsheet review">
+    <a href="/admin/intelligence/export-detailed.csv?<%= _exportQs %>" class="btn"
+       title="Full CSV with score, signals and evidence for the current window — for spreadsheet review.">
       Download CSV
     </a>
   </div>
