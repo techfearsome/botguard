@@ -36,9 +36,13 @@ function fmtRate(rate) {
     <form method="POST" action="/admin/intelligence/run-now" style="display:inline">
       <button type="submit" class="btn" title="Trigger analysis run immediately">↻ Run Now</button>
     </form>
-    <a href="/admin/intelligence/export.csv?min_score=<%= minScore %>" class="btn btn-primary"
-       title="Export flagged CIDRs in Google Ads format and mark as exported">
-      Export Google Ads
+    <a href="/admin/intelligence/export.txt?min_score=<%= minScore %>&status=<%= statusFilter %>&version=<%= versionFilter %>&cf=<%= typeof cfFilter !== 'undefined' ? cfFilter : 'all' %>" class="btn btn-primary"
+       title="Plain CIDR list — paste into Google Ads IP exclusion">
+      Export TXT (Google Ads)
+    </a>
+    <a href="/admin/intelligence/export-detailed.csv?min_score=<%= minScore %>&status=<%= statusFilter %>&version=<%= versionFilter %>&cf=<%= typeof cfFilter !== 'undefined' ? cfFilter : 'all' %>" class="btn"
+       title="Full CSV with score, signals and evidence — for spreadsheet review">
+      Download CSV
     </a>
   </div>
 </div>
@@ -84,6 +88,7 @@ function fmtRate(rate) {
     <select name="status" style="width:auto; min-width:180px; max-width:220px; padding:6px 10px; font-size:13px;">
       <option value="active"      <%= statusFilter === 'active'      ? 'selected' : '' %>>Active (new)</option>
       <option value="all_flagged" <%= statusFilter === 'all_flagged' ? 'selected' : '' %>>All flagged (inc. exported)</option>
+      <option value="watchlist"   <%= statusFilter === 'watchlist'   ? 'selected' : '' %>>Watchlist only</option>
       <option value="exported"    <%= statusFilter === 'exported'    ? 'selected' : '' %>>Exported only</option>
       <option value="blocked"     <%= statusFilter === 'blocked'     ? 'selected' : '' %>>Blocked only</option>
       <option value="dismissed"   <%= statusFilter === 'dismissed'   ? 'selected' : '' %>>Dismissed only</option>
@@ -128,6 +133,10 @@ function fmtRate(rate) {
     <div class="stat-label">Watching (40+)</div>
     <div class="stat-value" style="color:#eab308;"><%= stats.watching %></div>
   </div>
+  <div class="stat-card" style="border-left:3px solid #3b82f6;">
+    <div class="stat-label">Watchlist</div>
+    <div class="stat-value" style="color:#3b82f6;"><%= (stats.watchlist || 0) %></div>
+  </div>
   <div class="stat-card">
     <div class="stat-label">Shown</div>
     <div class="stat-value"><%= stats.shown %></div>
@@ -160,6 +169,7 @@ function fmtRate(rate) {
   </label>
   <form method="POST" action="/admin/intelligence/bulk" id="bulk-form" style="display:flex; gap:6px;">
     <input type="hidden" name="ids" id="bulk-ids">
+    <button type="button" class="btn btn-small" onclick="bulkAction('watchlist')" style="border-color:#3b82f6; color:#3b82f6;" title="Move to watchlist — keep monitoring, don't export">★ Watchlist</button>
     <button type="button" class="btn btn-small" onclick="bulkAction('exported')">Export selected</button>
     <button type="button" class="btn btn-small" onclick="bulkAction('blocked')">Block selected</button>
     <button type="button" class="btn btn-small" onclick="bulkAction('dismissed')">Dismiss selected</button>
@@ -388,9 +398,10 @@ function fmtRate(rate) {
 
         <%# Status badge %>
         <td>
-          <% const statusColors = { new:'#ef4444', reviewing:'#f97316', blocked:'#6b7280', exported:'#22c55e', dismissed:'#6b7280' }; %>
-          <span class="badge" style="background:<%= (statusColors[e.status]||'#6b7280') %>22; color:<%= statusColors[e.status]||'#6b7280' %>; font-size:11px;">
-            <%= e.status %>
+          <% const statusColors = { new:'#ef4444', reviewing:'#f97316', watchlist:'#3b82f6', blocked:'#6b7280', exported:'#22c55e', dismissed:'#6b7280' }; %>
+          <% const statusShort  = { new:'NEW', reviewing:'REV', watchlist:'WL', blocked:'BL', exported:'EX', dismissed:'DIS' }; %>
+          <span class="badge" style="background:<%= (statusColors[e.status]||'#6b7280') %>22; color:<%= statusColors[e.status]||'#6b7280' %>; font-size:11px;" title="<%= e.status %>">
+            <%= statusShort[e.status] || e.status %>
           </span>
           <% if (e.cf_exported) { %>
             <span class="badge" style="background:#f9731622; color:#f97316; font-size:10px; margin-left:2px;" title="Added to Cloudflare edge firewall">CF</span>
@@ -406,6 +417,12 @@ function fmtRate(rate) {
           <button class="btn btn-small action-toggle" onclick="toggleMenu(this)" style="font-size:16px; padding:2px 8px; line-height:1;">⋯</button>
           <div class="action-menu" style="display:none; position:absolute; right:0; top:100%; z-index:50; background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); box-shadow:0 4px 12px rgba(0,0,0,0.3); min-width:190px; padding:4px 0;">
             <a href="/admin/clicks?cidr=<%= encodeURIComponent(e.cidr) %>&range=today" class="action-item">View clicks</a>
+            <% if (e.status !== 'watchlist') { %>
+            <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="margin:0;">
+              <input type="hidden" name="status" value="watchlist">
+              <button type="submit" class="action-item" style="color:#3b82f6;">★ Add to watchlist</button>
+            </form>
+            <% } %>
             <% if (e.status !== 'exported') { %>
             <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="margin:0;">
               <input type="hidden" name="status" value="exported">

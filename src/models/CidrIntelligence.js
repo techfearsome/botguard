@@ -6,7 +6,7 @@
 
 const mongoose = require('mongoose');
 
-const STATUSES = ['new', 'reviewing', 'blocked', 'exported', 'dismissed'];
+const STATUSES = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
 
 const SignalSchema = new mongoose.Schema({
   volume:      { type: Number, default: 0 },  // 0-15
@@ -98,11 +98,12 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   analysis_window_hours: { type: Number, default: 24 },
 
   // ── Status ─────────────────────────────────────────────────────────
-  status:      { type: String, enum: STATUSES, default: 'new', index: true },
-  blocked_at:  { type: Date },
-  exported_at: { type: Date },
-  dismissed_at:{ type: Date },
-  notes:       { type: String, default: '', maxlength: 500 },
+  status:       { type: String, enum: STATUSES, default: 'new', index: true },
+  blocked_at:   { type: Date },
+  exported_at:  { type: Date },
+  dismissed_at: { type: Date },
+  watchlisted_at: { type: Date },
+  notes:        { type: String, default: '', maxlength: 500 },
 
   // ── Cloudflare edge firewall status ────────────────────────────────
   cf_exported:    { type: Boolean, default: false, index: true },

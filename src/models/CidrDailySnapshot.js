@@ -78,6 +78,25 @@ const CidrDailySnapshotSchema = new mongoose.Schema({
   // paid traffic.
   hits_with_no_click_id: { type: Number, default: 0 },
 
+  // ── v2 temporal / behavioral evidence (persisted historically) ──────
+  // Previously these only lived on the live CidrIntelligence doc, which the
+  // 60s worker overwrites. Snapshotting them preserves history so re-analysis
+  // and past-range views reflect the actual evidence collected on that day.
+  sub_second_burst_count:  { type: Number, default: 0 },
+  sub_5s_burst_count:      { type: Number, default: 0 },
+  min_gap_ms:              { type: Number, default: -1 },
+  webview_bot_count:       { type: Number, default: 0 },
+  same_ip_ua_repeat_count: { type: Number, default: 0 },
+  ua_diversity_ratio:      { type: Number, default: 1 },
+  slow_drip_ip_count:      { type: Number, default: 0 },
+  hits_per_ip:             { type: Number, default: 0 },
+
+  // ── v2.1: dwell / bounce evidence ──────────────────────────────────
+  // Persisted per-day so past-range bounce scoring stays computable.
+  avg_dwell_ms:       { type: Number, default: null },
+  bounce_rate_5s:     { type: Number, default: null },
+  dwell_sample_count: { type: Number, default: 0 },
+
   // Context for display
   asn_org: { type: String, default: '' },
   country: { type: String, default: '' },

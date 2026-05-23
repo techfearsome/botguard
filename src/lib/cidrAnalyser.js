@@ -283,6 +283,17 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     new Date(windowEnd.getTime() - windowHours * 60 * 60 * 1000);
   const writeSnapshots = opts.writeSnapshots !== false;
   const writeLiveState = opts.writeLiveState !== false;
+  // referenceDate is the "as-of" date used for the `today` bucket and for the
+  // `last_seen`/`last_analysed_at` timestamps written to live state.
+  //
+  // Defaults to wall-clock now. Pass it explicitly when re-analysing a past
+  // window so we don't pollute live state with today's wall clock — e.g. if
+  // the user re-runs last Tuesday, snapshots get date=Tuesday but the live
+  // record would otherwise still bump last_seen=now and treat Tuesday as a
+  // returning-today day. The analyse-range endpoint already disables
+  // writeLiveState for past ranges so this is belt-and-braces, but it also
+  // matters for `today`'s bucket-key when re-analysing a partial day.
+  const referenceDate = opts.referenceDate || windowEnd || new Date();
 
   const clicks = await Click.find({
     workspace_id: workspaceId,
@@ -341,7 +352,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
 
   // ── Per-day trigger detection + snapshots ──────────────────────────
   let snapshotsWritten = 0;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = referenceDate.toISOString().slice(0, 10);
   const dayTriggerMetrics = new Map();
 
   if (writeSnapshots) {
@@ -384,6 +395,14 @@ async function analyseWorkspace(workspaceId, opts = {}) {
               ua_diversity_ratio:      trig.metrics.ua_diversity_ratio != null ? trig.metrics.ua_diversity_ratio : 1,
               slow_drip_ip_count:      trig.metrics.slow_drip_ip_count || 0,
               hits_per_ip:             trig.metrics.hits_per_ip || 0,
+              // v2.1: dwell persistence so past-range bounce scoring works
+              avg_dwell_ms:            day.dwellValues.length > 0
+                ? Math.round(day.dwellValues.reduce((a, b) => a + b, 0) / day.dwellValues.length)
+                : null,
+              bounce_rate_5s:          day.dwellValues.length > 0
+                ? Math.round(day.dwellValues.filter(d => d < 5000).length / day.dwellValues.length * 1000) / 1000
+                : null,
+              dwell_sample_count:      day.dwellValues.length,
               asn_org:                 day.asn,
               country:                 day.country,
             },
@@ -493,7 +512,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
 
   // ── Upsert CidrIntelligence (live state) ───────────────────────────
   let upserted = 0;
-  const now = new Date();
+  const now = referenceDate;
 
   if (writeLiveState) {
     for (const [cidr, agg] of cidrAggregate) {

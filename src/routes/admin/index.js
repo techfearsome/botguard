@@ -1344,17 +1344,23 @@ router.get('/firewall/full.csv', async (req, res) => {
 
 const CidrIntelligence = require('../../models/CidrIntelligence');
 
-// Summary endpoint — polled every 30s by the live view for new detections
+// Summary endpoint — polled every 30s by the live view for new detections.
+//
+// 'newCount' counts CIDRs that were touched by the worker in the recent window
+// AND meet the score threshold. We use last_seen (set explicitly by the worker
+// to the analysis-end time) rather than mongoose's updatedAt, because every
+// 60s worker pass updates every doc — so updatedAt-based queries always return
+// the entire watching set, which is uninformative.
 router.get('/intelligence/summary', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const since = req.query.since ? new Date(req.query.since) : new Date(Date.now() - 5 * 60 * 1000);
 
-  const [newCount, criticalCount, totalActive] = await Promise.all([
+  const [newCount, criticalCount, totalActive, watchlistCount] = await Promise.all([
     CidrIntelligence.countDocuments({
       workspace_id: ws._id,
       status: 'new',
       score: { $gte: 40 },
-      updatedAt: { $gte: since },
+      last_seen: { $gte: since },
     }),
     CidrIntelligence.countDocuments({
       workspace_id: ws._id,
@@ -1363,12 +1369,16 @@ router.get('/intelligence/summary', async (req, res) => {
     }),
     CidrIntelligence.countDocuments({
       workspace_id: ws._id,
-      status: { $in: ['new', 'reviewing'] },
+      status: { $in: ['new', 'reviewing', 'watchlist'] },
       score: { $gte: 40 },
+    }),
+    CidrIntelligence.countDocuments({
+      workspace_id: ws._id,
+      status: 'watchlist',
     }),
   ]);
 
-  res.json({ newCount, criticalCount, totalActive, asOf: new Date() });
+  res.json({ newCount, criticalCount, totalActive, watchlistCount, asOf: new Date() });
 });
 
 // Main intelligence list view
@@ -1417,13 +1427,14 @@ router.get('/intelligence', async (req, res) => {
     rangeIsLive = false;
   }
 
-  // Status filter — default 'active' now EXCLUDES exported entries since those
-  // have already been dealt with. Users can choose 'all flagged' to see them.
+  // Status filter — default 'active' includes new/reviewing/watchlist (all
+  // statuses that still need a decision). Exported/blocked/dismissed are
+  // hidden by default because they've been dealt with.
   const statusFilter = req.query.status || 'active';
   let statusQuery;
-  if (statusFilter === 'active')           statusQuery = { $in: ['new', 'reviewing'] };
-  else if (statusFilter === 'all_flagged') statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported'] };
-  else if (statusFilter === 'all')         statusQuery = { $in: ['new', 'reviewing', 'blocked', 'exported', 'dismissed'] };
+  if (statusFilter === 'active')           statusQuery = { $in: ['new', 'reviewing', 'watchlist'] };
+  else if (statusFilter === 'all_flagged') statusQuery = { $in: ['new', 'reviewing', 'watchlist', 'blocked', 'exported'] };
+  else if (statusFilter === 'all')         statusQuery = { $in: ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'] };
   else                                     statusQuery = statusFilter;
 
   // Score filter
@@ -1444,6 +1455,12 @@ router.get('/intelligence', async (req, res) => {
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const skip = (page - 1) * perPage;
 
+  // Sort parameter — declared once, used by both live and snapshot branches.
+  // Previously this was scoped inside the live branch, which would throw a
+  // ReferenceError if a snapshot-branch render ever reached the EJS
+  // `typeof sortParam !== 'undefined'` check.
+  const sortParam = req.query.sort || 'score_desc';
+
   let entries = [];
   let lastAnalysedAt = null;
   let totalEntries = 0;
@@ -1459,8 +1476,6 @@ router.get('/intelligence', async (req, res) => {
     if (cfFilter === 'cf_yes') filter.cf_exported = true;
     else if (cfFilter === 'cf_no') filter.cf_exported = { $ne: true };
 
-    // Sorting
-    const sortParam = req.query.sort || 'score_desc';
     const SORT_MAP = {
       score_desc:  { score: -1, last_seen: -1 },
       score_asc:   { score: 1, last_seen: -1 },
@@ -1499,9 +1514,26 @@ router.get('/intelligence', async (req, res) => {
     };
     if (versionFilter !== 'all') snapMatch.ip_version = versionFilter;
 
-    // Aggregate per-CIDR within the window: sum hits, find max metrics,
-    // count distinct days.
-    const aggregated = await CidrDailySnapshot.aggregate([
+    // Sort mapping for snapshot fields (subset — score isn't reliably
+    // available from snapshots, so score sorts fall back to hits).
+    const SNAP_SORT_MAP = {
+      score_desc: { hits: -1 },
+      score_asc:  { hits:  1 },
+      hits_desc:  { hits: -1 },
+      hits_asc:   { hits:  1 },
+      days_desc:  { window_days_seen: -1, hits: -1 },
+      days_asc:   { window_days_seen:  1, hits: -1 },
+      conv_desc:  { conv_proxy: -1, hits: -1 },
+      conv_asc:   { conv_proxy:  1, hits: -1 },
+      last_seen_desc: { last_date_in_window: -1 },
+      last_seen_asc:  { last_date_in_window:  1 },
+    };
+    const snapSortStage = SNAP_SORT_MAP[sortParam] || SNAP_SORT_MAP.score_desc;
+
+    // Single aggregation pipeline — groups per-CIDR, sorts, counts total,
+    // then paginates inside Mongo so we don't lose rows past 200 like the
+    // previous in-memory slicer did.
+    const facet = await CidrDailySnapshot.aggregate([
       { $match: snapMatch },
       { $group: {
           _id: '$cidr',
@@ -1514,17 +1546,33 @@ router.get('/intelligence', async (req, res) => {
           rapid_duplicate_count:  { $sum: '$rapid_duplicate_count' },
           single_ip_hammer_count: { $sum: '$single_ip_hammer_count' },
           fake_ua_count:          { $sum: '$fake_ua_count' },
-          window_days_seen:       { $sum: 1 },                  // days within window
+          window_days_seen:       { $sum: 1 },
           all_triggers:           { $push: '$triggers' },
           all_sources:            { $addToSet: '$source' },
           first_date_in_window:   { $min: '$date' },
           last_date_in_window:    { $max: '$date' },
       }},
-      { $sort: { hits: -1 } },
-      { $limit: 200 },
+      // conv_proxy used purely for sort ordering on conversion rate within
+      // the window (real rate calc happens in the JS pass below).
+      { $addFields: {
+          conv_proxy: { $cond: [{ $gt: ['$hits', 0] },
+                                { $divide: ['$conversions', '$hits'] }, 0] },
+      }},
+      { $facet: {
+          rows: [
+            { $sort: snapSortStage },
+            { $skip: skip },
+            { $limit: perPage },
+          ],
+          totalCount: [{ $count: 'n' }],
+      }},
     ]);
 
-    // Enrich with live intelligence records for score/status/historical_match
+    const aggregated = facet[0]?.rows || [];
+    const totalSnapshot = facet[0]?.totalCount?.[0]?.n || 0;
+
+    // Enrich with live intelligence records for score/status/historical_match.
+    // Also pull in cf_exported so the cf filter works in past-range mode.
     const cidrs = aggregated.map(a => a._id);
     const liveDocs = cidrs.length === 0 ? [] : await CidrIntelligence.find({
       workspace_id: ws._id,
@@ -1544,9 +1592,6 @@ router.get('/intelligence', async (req, res) => {
         ip_version:        a.ip_version,
         asn_org:           a.asn_org || live.asn_org || '',
         country:           a.country || live.country || '',
-        // For past ranges, the displayed score is the live score if available,
-        // else 0 (the snapshot itself doesn't store a score). UI shows snapshot
-        // metrics regardless.
         score:             live.score || 0,
         signals:           live.signals || {},
         hit_count:         a.hits,
@@ -1565,6 +1610,7 @@ router.get('/intelligence', async (req, res) => {
         top_uas:           live.top_uas || [],
         sample_ips:        live.sample_ips || [],
         status:            live.status || 'new',
+        cf_exported:       !!live.cf_exported,
         historical_match:  live.historical_match || {
           has_history:     true,
           total_days_seen: a.window_days_seen,
@@ -1574,43 +1620,46 @@ router.get('/intelligence', async (req, res) => {
           is_returning:    a.window_days_seen >= 2,
           is_seeded:       sources.includes('seed'),
         },
-        // Flag this row as a snapshot-derived entry so UI can render it
-        // slightly differently (e.g. score may be from live state, hits are
-        // from the window).
         _from_snapshot:    true,
       };
     });
 
-    // Apply minScore filter post-aggregation (snapshots have no score field;
-    // we filter by aggregated hits as a proxy when score=0)
+    // Apply post-enrichment filters (minScore, cf) that depend on the
+    // joined live record. Snapshot pagination already counted rows BEFORE
+    // these filters, so totalEntries may overstate slightly — but it's
+    // closer to the truth than the old hard-cap-at-200 behaviour and we
+    // surface that with the `total*` numbers being snapshot-row-counts.
     entries = entries.filter(e => {
       if (e.score >= minScore) return true;
-      // No live score — fall back to hits-based threshold so the user still
-      // sees the active offenders in the past range
-      return e.hit_count >= 5;
+      return e.hit_count >= 5;  // fallback when no live score exists
     });
+    if (cfFilter === 'cf_yes') entries = entries.filter(e => e.cf_exported);
+    else if (cfFilter === 'cf_no') entries = entries.filter(e => !e.cf_exported);
 
-    // Pagination for snapshot view (in-memory since it's already aggregated)
-    totalEntries = entries.length;
-    entries = entries.slice(skip, skip + perPage);
-
+    totalEntries = totalSnapshot;
     lastAnalysedAt = null;
   }
 
-  // Stats for summary bar — ALWAYS show total active (new + reviewing) counts
-  // regardless of which status filter is selected. These are the "how much
-  // undealt work exists" numbers and shouldn't jump when you change filters.
-  let statCritical, statHigh, statWatching, statShown;
+  // Stats for summary bar — ALWAYS show total active (new + reviewing + watchlist)
+  // counts regardless of which status filter is selected. These are the "how
+  // much undealt work exists" numbers and shouldn't jump when you change filters.
+  let statCritical, statHigh, statWatching, statShown, statWatchlist;
   if (rangeIsLive) {
-    [statCritical, statHigh, statWatching] = await Promise.all([
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 80 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 60 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing'] }, score: { $gte: 40 } }),
+    [statCritical, statHigh, statWatching, statWatchlist] = await Promise.all([
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 80 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 60 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 40 } }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'watchlist' }),
     ]);
   } else {
+    // Snapshot mode: these are window-scoped counts based on what we paginated.
+    // They reflect the visible page, not the whole window. The cleaner fix
+    // would be a separate count query; deferring that — the page-scope
+    // behaviour matches the previous version.
     statCritical = entries.filter(e => e.score >= 80).length;
     statHigh     = entries.filter(e => e.score >= 60).length;
     statWatching = totalEntries;
+    statWatchlist = entries.filter(e => e.status === 'watchlist').length;
   }
   statShown = entries.length;
 
@@ -1631,7 +1680,7 @@ router.get('/intelligence', async (req, res) => {
     rangeIsLive,
     dateFrom: dateFrom,
     dateTo: dateTo,
-    stats: { critical: statCritical, high: statHigh, watching: statWatching, shown: statShown },
+    stats: { critical: statCritical, high: statHigh, watching: statWatching, shown: statShown, watchlist: statWatchlist },
     lastAnalysedAt,
     // Pagination
     currentPage: page,
@@ -1645,39 +1694,50 @@ router.get('/intelligence', async (req, res) => {
 router.post('/intelligence/:id/status', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { status, notes } = req.body;
-  const validStatuses = CidrIntelligence.STATUSES || ['new', 'reviewing', 'blocked', 'exported', 'dismissed'];
+  const validStatuses = CidrIntelligence.STATUSES || ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
   if (!validStatuses.includes(status)) return res.redirect('/admin/intelligence');
 
   const update = { status, notes: (notes || '').slice(0, 500) };
-  if (status === 'blocked')  update.blocked_at  = new Date();
-  if (status === 'exported') update.exported_at  = new Date();
-  if (status === 'dismissed') update.dismissed_at = new Date();
+  if (status === 'blocked')   update.blocked_at      = new Date();
+  if (status === 'exported')  update.exported_at     = new Date();
+  if (status === 'dismissed') update.dismissed_at    = new Date();
+  if (status === 'watchlist') update.watchlisted_at  = new Date();
 
   await CidrIntelligence.updateOne(
     { _id: req.params.id, workspace_id: ws._id },
     { $set: update }
   );
-  res.redirect('back');
+  // Express deprecated `res.redirect('back')`; use the Referer header
+  // with a sensible fallback so this stays working on Express 5+.
+  res.redirect(req.get('Referer') || '/admin/intelligence');
 });
 
-// Bulk status update — select multiple CIDRs and act on them
+// Bulk status update — select multiple CIDRs and act on them.
+// Accepts ids as either an array (`ids[]=…&ids[]=…`) or a comma-separated
+// string for compatibility with both common form patterns.
 router.post('/intelligence/bulk', async (req, res) => {
   const ws = await resolveWorkspace(req);
-  const ids = String(req.body.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+  let raw = req.body.ids;
+  let ids = [];
+  if (Array.isArray(raw)) ids = raw.flatMap(v => String(v).split(','));
+  else                    ids = String(raw || '').split(',');
+  ids = ids.map(s => s.trim()).filter(Boolean);
+
   const status = req.body.status;
-  const validStatuses = ['blocked', 'exported', 'dismissed', 'reviewing'];
+  const validStatuses = ['blocked', 'exported', 'dismissed', 'reviewing', 'watchlist'];
   if (!ids.length || !validStatuses.includes(status)) return res.redirect('/admin/intelligence');
 
   const update = { status };
-  if (status === 'blocked')   update.blocked_at  = new Date();
-  if (status === 'exported')  update.exported_at  = new Date();
-  if (status === 'dismissed') update.dismissed_at = new Date();
+  if (status === 'blocked')   update.blocked_at      = new Date();
+  if (status === 'exported')  update.exported_at     = new Date();
+  if (status === 'dismissed') update.dismissed_at    = new Date();
+  if (status === 'watchlist') update.watchlisted_at  = new Date();
 
   await CidrIntelligence.updateMany(
     { _id: { $in: ids }, workspace_id: ws._id },
     { $set: update }
   );
-  res.redirect('/admin/intelligence');
+  res.redirect(req.get('Referer') || '/admin/intelligence');
 });
 
 // Delete a single entry
@@ -1739,6 +1799,12 @@ router.post('/intelligence/analyse-range', async (req, res) => {
   const isToday = effectiveRange === 'today';
   opts.writeLiveState = isToday;
   opts.writeSnapshots = true;
+  // referenceDate ensures snapshot/today bucket math and live-state
+  // timestamps anchor to the analysed window's END rather than wall-clock
+  // now. Without this, re-analysing last Tuesday would treat Tuesday's
+  // appearance as "today's return", inflating consecutive_days and
+  // is_returning on the live record.
+  opts.referenceDate = opts.windowEnd || new Date();
 
   try {
     const { analyseWorkspace } = require('../../lib/cidrAnalyser');
@@ -1868,23 +1934,81 @@ router.post('/intelligence/seed', async (req, res) => {
 // Export — plain CIDR list, one per line, no comments. Google Ads ready.
 // GET does NOT change status (no side effects on download).
 // Only exports entries not yet exported, unless ?include_exported=1.
-router.get('/intelligence/export.csv', async (req, res) => {
-  const ws = await resolveWorkspace(req);
+// ─── Export endpoints ────────────────────────────────────────────────
+//
+// Two export shapes serve different workflows:
+//
+//   /intelligence/export.txt  — plain CIDR list, one per line. This is the
+//                               format Google Ads accepts when pasting into
+//                               an IP exclusion list. IPv4 emitted as /24
+//                               CIDR; IPv6 as the stored /32 CIDR. Kept at
+//                               this path because consumers (Google Ads
+//                               paste, simple grep/diff tooling) only want
+//                               the addresses.
+//
+//   /intelligence/export.csv  — full grid CSV for spreadsheet/audit use.
+//                               Includes score breakdown, evidence, status,
+//                               ASN, and timing. Use this for review
+//                               outside the admin UI.
+//
+// Both honour the same filters: min_score, status, version, cf. include_exported
+// kept for backwards compat with existing dashboards/bookmarks.
 
-  const includeExported = req.query.include_exported === '1';
-  const statusIn = includeExported
-    ? ['new', 'reviewing', 'blocked', 'exported']
+function buildExportFilter(ws, query) {
+  const includeExported = query.include_exported === '1';
+  const statusParam = (query.status || '').trim();
+  const minScore = parseInt(query.min_score, 10) || 60;
+  const version = query.version || 'all';
+  const cf = query.cf || 'all';
+
+  // Default status set: actionable + already-blocked. Watchlist is included
+  // when the caller explicitly asks for it via status=watchlist or status=all_flagged.
+  let statusIn = includeExported
+    ? ['new', 'reviewing', 'watchlist', 'blocked', 'exported']
     : ['new', 'reviewing', 'blocked'];
 
-  const minScore = parseInt(req.query.min_score, 10) || 60;
+  if (statusParam === 'watchlist')        statusIn = ['watchlist'];
+  else if (statusParam === 'all_flagged') statusIn = ['new', 'reviewing', 'watchlist', 'blocked', 'exported'];
+  else if (statusParam === 'all')         statusIn = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
+  else if (statusParam && statusIn.indexOf(statusParam) >= 0) statusIn = [statusParam];
 
-  const entries = await CidrIntelligence.find({
+  const filter = {
     workspace_id: ws._id,
     status: { $in: statusIn },
     score: { $gte: minScore },
-  }).sort({ score: -1 }).limit(500).lean();
+  };
+  if (version !== 'all') filter.ip_version = version;
+  if (cf === 'cf_yes') filter.cf_exported = true;
+  else if (cf === 'cf_no') filter.cf_exported = { $ne: true };
+  return filter;
+}
 
-  // Plain list — one IP block per line, nothing else
+// CSV escaping — wraps the value in quotes only when needed and escapes
+// embedded quotes by doubling them, per RFC 4180.
+function csvCell(v) {
+  if (v == null) return '';
+  const s = String(v);
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+// Plain CIDR list — one entry per line. Format Google Ads expects.
+async function handleExportTxt(req, res) {
+  const ws = await resolveWorkspace(req);
+  const filter = buildExportFilter(ws, req.query);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 500, 5000);
+
+  const entries = await CidrIntelligence.find(filter)
+    .sort({ score: -1 })
+    .limit(limit)
+    .lean();
+
+  // Plain list — one IP block per line, nothing else.
+  // For v4 we emit wildcard form (1.2.3.*) because that's what the existing
+  // exclusion lists use and what Google Ads users have historically pasted;
+  // for v6 we keep CIDR form since wildcard for IPv6 has no clean shorthand.
   const lines = entries.map(e => {
     if (e.ip_version === 'v4') {
       const parts = e.cidr.split('/')[0].split('.');
@@ -1897,11 +2021,113 @@ router.get('/intelligence/export.csv', async (req, res) => {
   res.set('Content-Type', 'text/plain; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="botguard-cidr-${today}.txt"`);
   res.send(lines.join('\n'));
+}
+
+router.get('/intelligence/export.txt', handleExportTxt);
+// Backwards-compat: the old route was `export.csv` but returned plain text.
+// Keep that path serving the same plain-text content so existing bookmarks/
+// scripts don't break. A NEW richer CSV is served at `export-detailed.csv`
+// (see below) and surfaced as the "Download CSV" button in the UI.
+router.get('/intelligence/export.csv', async (req, res) => {
+  // If the caller passes `format=csv` or `detailed=1` explicitly, route to
+  // the rich CSV. Otherwise preserve legacy behaviour (plain text list).
+  if (req.query.format === 'csv' || req.query.detailed === '1') {
+    return handleExportCsv(req, res);
+  }
+  return handleExportTxt(req, res);
 });
+
+// Full CSV with all evidence columns — for spreadsheet review and audit.
+async function handleExportCsv(req, res) {
+  const ws = await resolveWorkspace(req);
+  const filter = buildExportFilter(ws, req.query);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
+
+  const entries = await CidrIntelligence.find(filter)
+    .sort({ score: -1 })
+    .limit(limit)
+    .lean();
+
+  const headers = [
+    'cidr', 'ip_version', 'asn_org', 'country', 'score',
+    'status', 'cf_exported',
+    'hit_count', 'blocked_hits', 'unique_ip_count',
+    'conversion_count', 'conv_rate',
+    // signal breakdown
+    'sig_volume', 'sig_conversion', 'sig_rotation', 'sig_ua_uniform',
+    'sig_persistence', 'sig_fake_ua', 'sig_click_id', 'sig_temporal',
+    'sig_webview_ua', 'sig_behavioral', 'sig_slow_drip', 'sig_bounce',
+    'sig_known_list',
+    // click-ID counts
+    'unique_gclids', 'unique_wbraids', 'unique_gbraids',
+    'unique_fbclids', 'unique_msclkids', 'hits_with_no_click_id',
+    // temporal / behavioral evidence
+    'sub_second_burst_count', 'sub_5s_burst_count', 'min_gap_ms',
+    'webview_bot_count', 'same_ip_ua_repeat_count', 'ua_diversity_ratio',
+    'slow_drip_ip_count', 'hits_per_ip',
+    // dwell
+    'avg_dwell_ms', 'bounce_rate_5s', 'dwell_sample_count',
+    // persistence
+    'days_seen_count', 'consecutive_days',
+    'first_seen', 'last_seen', 'last_analysed_at',
+    // status timestamps
+    'blocked_at', 'exported_at', 'dismissed_at', 'watchlisted_at',
+    'notes',
+  ];
+
+  const rows = [headers.map(csvCell).join(',')];
+  for (const e of entries) {
+    const s = e.signals || {};
+    const row = [
+      e.cidr, e.ip_version, e.asn_org, e.country, e.score,
+      e.status, e.cf_exported ? '1' : '0',
+      e.hit_count, e.blocked_hits, e.unique_ip_count,
+      e.conversion_count, (e.conv_rate || 0).toFixed(4),
+      s.volume || 0, s.conversion || 0, s.rotation || 0, s.ua_uniform || 0,
+      s.persistence || 0, s.fake_ua || 0, s.click_id || 0, s.temporal || 0,
+      s.webview_ua || 0, s.behavioral || 0, s.slow_drip || 0, s.bounce || 0,
+      s.known_list || 0,
+      e.unique_gclids, e.unique_wbraids, e.unique_gbraids,
+      e.unique_fbclids, e.unique_msclkids, e.hits_with_no_click_id,
+      e.sub_second_burst_count, e.sub_5s_burst_count, e.min_gap_ms,
+      e.webview_bot_count, e.same_ip_ua_repeat_count, e.ua_diversity_ratio,
+      e.slow_drip_ip_count, e.hits_per_ip,
+      e.avg_dwell_ms == null ? '' : e.avg_dwell_ms,
+      e.bounce_rate_5s == null ? '' : e.bounce_rate_5s,
+      e.dwell_sample_count,
+      e.days_seen_count, e.consecutive_days,
+      e.first_seen ? e.first_seen.toISOString() : '',
+      e.last_seen ? e.last_seen.toISOString() : '',
+      e.last_analysed_at ? e.last_analysed_at.toISOString() : '',
+      e.blocked_at    ? e.blocked_at.toISOString()    : '',
+      e.exported_at   ? e.exported_at.toISOString()   : '',
+      e.dismissed_at  ? e.dismissed_at.toISOString()  : '',
+      e.watchlisted_at? e.watchlisted_at.toISOString(): '',
+      e.notes || '',
+    ];
+    rows.push(row.map(csvCell).join(','));
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="botguard-cidr-${today}.csv"`);
+  // BOM helps Excel detect UTF-8 correctly on Windows.
+  res.send('\uFEFF' + rows.join('\n'));
+}
+
+// Dedicated path so the UI can link to the rich CSV without relying on
+// query-param routing. Both paths produce the same output.
+router.get('/intelligence/export-detailed.csv', handleExportCsv);
 
 // Mark exported — call AFTER pasting into Google Ads. Moves all
 // qualifying entries to 'exported' status so they disappear from
 // the active view.
+//
+// NOTE: watchlist entries are deliberately excluded from this bulk action.
+// The user put them on watchlist precisely to monitor without exporting,
+// so flipping them to exported here would silently override that intent.
+// If a user wants a watchlisted CIDR exported, they should change its
+// status individually first.
 router.post('/intelligence/mark-exported', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const minScore = parseInt(req.body.min_score, 10) || 60;
