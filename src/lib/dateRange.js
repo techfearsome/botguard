@@ -73,6 +73,15 @@ function parseRange(query) {
   let range = String(query?.range || '').toLowerCase();
   if (!VALID_RANGES.has(range)) range = DEFAULT_RANGE;
 
+  // If BOTH explicit dates are supplied, auto-promote to custom regardless of
+  // the dropdown value. This handles the common case where the UI's dropdown
+  // is still set to "today" or "7d" but the user typed dates into the date
+  // inputs — without this, the dates get silently ignored. The dropdown is a
+  // shortcut; explicit dates are explicit and win.
+  const dFrom = parseDate(query?.date_from);
+  const dTo   = parseDate(query?.date_to);
+  if (dFrom && dTo) range = 'custom';
+
   let gte = null, lte = null, label = '';
 
   if (range === 'today') {
@@ -91,11 +100,10 @@ function parseRange(query) {
   } else if (range === 'all') {
     label = 'All time';
   } else if (range === 'custom') {
-    gte = parseDate(query?.date_from);
-    const toDate = parseDate(query?.date_to);
-    if (toDate) {
+    gte = dFrom;
+    if (dTo) {
       // Treat date_to as inclusive end-of-day
-      lte = new Date(toDate);
+      lte = new Date(dTo);
       lte.setHours(23, 59, 59, 999);
     }
     label = 'Custom range';
