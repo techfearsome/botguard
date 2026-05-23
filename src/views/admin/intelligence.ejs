@@ -161,33 +161,56 @@ function fmtRate(rate) {
   </div>
 <% } else { %>
 
-<%# ── Bulk actions bar ───────────────────────────────────────────── %>
-<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+<%# ── Bulk actions bar ─────────────────────────────────────────────
+    Three groups separated visually:
+      Left:   Select-all toggle
+      Middle: Selection-based status changes (Export/Block/Dismiss/Watchlist)
+      Right:  Selection-based external sync (Cloudflare) and bulk-all action
+    All buttons except "Mark all exported" act on the row checkboxes. %>
+<div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:8px; flex-wrap:wrap;">
   <label style="font-size:13px; color:var(--text-secondary); display:flex; align-items:center; gap:6px;">
     <input type="checkbox" id="select-all" onchange="toggleAll(this)">
     Select all
   </label>
+
   <form method="POST" action="/admin/intelligence/bulk" id="bulk-form" style="display:flex; gap:6px;">
     <input type="hidden" name="ids" id="bulk-ids">
-    <button type="button" class="btn btn-small" onclick="bulkAction('watchlist')" style="border-color:#3b82f6; color:#3b82f6;" title="Move to watchlist — keep monitoring, don't export">★ Watchlist</button>
-    <button type="button" class="btn btn-small" onclick="bulkAction('exported')">Export selected</button>
-    <button type="button" class="btn btn-small" onclick="bulkAction('blocked')">Block selected</button>
-    <button type="button" class="btn btn-small" onclick="bulkAction('dismissed')">Dismiss selected</button>
+    <button type="button" class="btn btn-small" onclick="bulkAction('exported')" title="Mark selected as exported to Google Ads">Export selected</button>
+    <button type="button" class="btn btn-small" onclick="bulkAction('blocked')" title="Mark selected as blocked internally">Block selected</button>
+    <button type="button" class="btn btn-small" onclick="bulkAction('dismissed')" title="Dismiss selected (false positives)">Dismiss selected</button>
   </form>
-  <form method="POST" action="/admin/cloudflare/import-intelligence" id="cf-import-form" style="display:inline;">
-    <input type="hidden" name="ids" id="cf-import-ids">
-    <button type="button" class="btn btn-small" style="background:#f97316; color:#fff;"
-      onclick="cfImport()">
-      ☁ Add to Cloudflare
-    </button>
-  </form>
-  <form method="POST" action="/admin/intelligence/mark-exported" style="display:inline;">
-    <input type="hidden" name="min_score" value="<%= minScore %>">
-    <button type="submit" class="btn btn-small" style="background:#22c55e; color:#fff;"
-      onclick="return confirm('Mark all currently shown entries as exported?')">
-      ✓ Mark all exported
-    </button>
-  </form>
+
+  <div style="display:flex; gap:6px;">
+    <%# WL grouped with the external/cross-cutting actions on the right.
+        Uses the same bulk form mechanism but is visually a "tag" action,
+        not a finality (Export/Block/Dismiss) one. %>
+    <form method="POST" action="/admin/intelligence/bulk" id="wl-form" style="display:inline;">
+      <input type="hidden" name="ids" id="wl-ids">
+      <input type="hidden" name="status" value="watchlist">
+      <button type="button" class="btn btn-small"
+        style="background:#3b82f6; color:#fff;"
+        onclick="watchlistSelected()"
+        title="Add selected to watchlist — keep monitoring without exporting">
+        ★ Watchlist selected
+      </button>
+    </form>
+    <form method="POST" action="/admin/cloudflare/import-intelligence" id="cf-import-form" style="display:inline;">
+      <input type="hidden" name="ids" id="cf-import-ids">
+      <button type="button" class="btn btn-small" style="background:#f97316; color:#fff;"
+        onclick="cfImport()"
+        title="Push selected CIDRs to Cloudflare edge firewall">
+        ☁ Add to Cloudflare
+      </button>
+    </form>
+    <form method="POST" action="/admin/intelligence/mark-exported" style="display:inline;">
+      <input type="hidden" name="min_score" value="<%= minScore %>">
+      <button type="submit" class="btn btn-small" style="background:#22c55e; color:#fff;"
+        onclick="return confirm('Mark all currently shown entries (score >= <%= minScore %>) as exported? This affects everything in the active filter, not just selected rows.')"
+        title="Mark every visible row at this min_score as exported (does not affect watchlist)">
+        ✓ Mark all exported
+      </button>
+    </form>
+  </div>
 </div>
 
 <%# ── Pagination helper ─────────────────────────────────────────── %>
@@ -261,7 +284,8 @@ function fmtRate(rate) {
         <th><a href="<%= sortUrl('days') %>" style="color:inherit; text-decoration:none;" title="Sort by days seen">Days<%- sortArrow('days') %></a></th>
         <th title="Click-ID diversity: unique gclids/wbraids/fbclids and hits with NO click ID at all">Click IDs</th>
         <th>ASN</th>
-        <th><a href="<%= sortUrl('last_seen') %>" style="color:inherit; text-decoration:none;" title="Sort by last seen">Status<%- sortArrow('last_seen') %></a></th>
+        <th>Status</th>
+        <th><a href="<%= sortUrl('last_seen') %>" style="color:inherit; text-decoration:none;" title="Sort by last seen">Last seen<%- sortArrow('last_seen') %></a></th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -396,7 +420,7 @@ function fmtRate(rate) {
 
         <td style="max-width:180px; font-size:12px;" class="cell-truncate-sm"><%= e.asn_org || '—' %></td>
 
-        <%# Status badge %>
+        <%# Status badge — just the badge, dates moved to dedicated column %>
         <td>
           <% const statusColors = { new:'#ef4444', reviewing:'#f97316', watchlist:'#3b82f6', blocked:'#6b7280', exported:'#22c55e', dismissed:'#6b7280' }; %>
           <% const statusShort  = { new:'NEW', reviewing:'REV', watchlist:'WL', blocked:'BL', exported:'EX', dismissed:'DIS' }; %>
@@ -404,10 +428,27 @@ function fmtRate(rate) {
             <%= statusShort[e.status] || e.status %>
           </span>
           <% if (e.cf_exported) { %>
-            <span class="badge" style="background:#f9731622; color:#f97316; font-size:10px; margin-left:2px;" title="Added to Cloudflare edge firewall">CF</span>
+            <br><span class="badge" style="background:#f9731622; color:#f97316; font-size:10px;" title="Added to Cloudflare edge firewall">CF</span>
           <% } %>
+        </td>
+
+        <%# Last seen — separate column from status. Shows both first and last
+            seen so the user can scan recency and persistence at a glance.
+            In live-mode these are wall-clock Date objects. In snapshot-mode
+            they're 'YYYY-MM-DD' strings. Render accordingly. %>
+        <td style="font-size:11px; white-space:nowrap;">
+          <% const fsDate = e.first_seen_date || (e.first_seen ? null : null); %>
           <% if (e.last_seen) { %>
-            <br><small class="muted" style="font-size:10px;"><%- localTime(e.last_seen) %></small>
+            <span title="Last seen"><%- localTime(e.last_seen) %></span>
+          <% } else if (e.last_seen_date) { %>
+            <span title="Last seen"><%= e.last_seen_date %></span>
+          <% } else { %>
+            <span class="muted">—</span>
+          <% } %>
+          <% if (e.first_seen && e.last_seen && new Date(e.first_seen).getTime() !== new Date(e.last_seen).getTime()) { %>
+            <br><small class="muted" style="font-size:10px;" title="First seen"><%- 'first: ' + localTime(e.first_seen) %></small>
+          <% } else if (e.first_seen_date && e.last_seen_date && e.first_seen_date !== e.last_seen_date) { %>
+            <br><small class="muted" style="font-size:10px;" title="First seen">first: <%= e.first_seen_date %></small>
           <% } %>
         </td>
 
@@ -558,6 +599,18 @@ function cfImport() {
   if (!confirm(`Add ${checked.length} CIDR(s) to Cloudflare edge firewall?`)) return;
   document.getElementById('cf-import-ids').value = checked.join(',');
   document.getElementById('cf-import-form').submit();
+}
+
+// Watchlist uses the same selection mechanism as the other bulk actions
+// but submits its own form so it can sit visually with Cloudflare/Mark-all
+// on the right side of the bulk bar rather than mixed with the
+// Export/Block/Dismiss buttons.
+function watchlistSelected() {
+  const checked = [...document.querySelectorAll('.row-select:checked')].map(c => c.value);
+  if (!checked.length) { alert('Select at least one row.'); return; }
+  if (!confirm(`Add ${checked.length} CIDR(s) to watchlist? Watchlist entries are kept under active monitoring but not exported.`)) return;
+  document.getElementById('wl-ids').value = checked.join(',');
+  document.getElementById('wl-form').submit();
 }
 
 // ── Live polling — checks for new detections every 30s ─────────────────

@@ -1503,21 +1503,72 @@ router.get('/intelligence', async (req, res) => {
     lastAnalysedAt = lastEntry?.last_analysed_at || null;
   } else {
     // ── PAST range: aggregate from CidrDailySnapshot ────────────────
-    // Build date string range: snapshots store date as 'YYYY-MM-DD' strings
-    // so we compare lexicographically via $gte/$lte on string values.
+    //
+    // Filtering in past-range mode is tricky because snapshots don't store
+    // score/status/cf_exported (those live on CidrIntelligence). Previously
+    // we applied those filters AFTER aggregation and pagination, which
+    // (a) broke total counts and (b) silently ignored the status filter
+    // entirely.
+    //
+    // New approach: resolve which CIDRs match the live-state filters FIRST,
+    // then restrict the snapshot aggregation to those CIDRs. Result: all
+    // filters work identically in both branches and pagination is accurate.
     const startStr = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
     const endStr   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
+
+    // Build the live-state pre-filter. We always apply status (always live-
+    // state-only) and the optional min_score / cf filters here so the
+    // snapshot aggregation only considers CIDRs that pass.
+    const liveFilter = {
+      workspace_id: ws._id,
+      status: statusQuery,
+    };
+    if (minScore > 0) liveFilter.score = { $gte: minScore };
+    if (cfFilter === 'cf_yes') liveFilter.cf_exported = true;
+    else if (cfFilter === 'cf_no') liveFilter.cf_exported = { $ne: true };
+    if (versionFilter !== 'all') liveFilter.ip_version = versionFilter;
+
+    const allowedCidrDocs = await CidrIntelligence.find(liveFilter)
+      .select('cidr').lean();
+    const allowedCidrs = allowedCidrDocs.map(d => d.cidr);
+
+    // Edge case: when min_score=0 and status=all the user effectively says
+    // "show me everything." In that situation we DON'T restrict to CIDRs
+    // with a live record — there might be historical-only CIDRs with no
+    // live state yet that should still appear. We detect this by checking
+    // whether the live filter is degenerate (no constraints beyond status
+    // covering all valid values and min_score=0).
+    const isUnrestricted = (
+      minScore === 0 &&
+      cfFilter === 'all' &&
+      statusFilter === 'all' &&
+      versionFilter === 'all'
+    );
 
     const snapMatch = {
       workspace_id: ws._id,
       date: { $gte: startStr, $lte: endStr },
     };
     if (versionFilter !== 'all') snapMatch.ip_version = versionFilter;
+    if (!isUnrestricted) {
+      // Restrict snapshot aggregation to CIDRs that passed the live-state
+      // filter. If no live records matched, return empty immediately —
+      // saves a wasted aggregation pass.
+      if (allowedCidrs.length === 0) {
+        entries = [];
+        totalEntries = 0;
+        lastAnalysedAt = null;
+        // Continue to render with empty entries
+      } else {
+        snapMatch.cidr = { $in: allowedCidrs };
+      }
+    }
 
-    // Sort mapping for snapshot fields (subset — score isn't reliably
-    // available from snapshots, so score sorts fall back to hits).
+    // Sort mapping for snapshot fields. score and conv sort are slightly
+    // approximate in past-range (score comes from live, conv from window
+    // sums) but ordering is stable.
     const SNAP_SORT_MAP = {
-      score_desc: { hits: -1 },
+      score_desc: { hits: -1 },   // score isn't in snapshot; hits is closest proxy
       score_asc:  { hits:  1 },
       hits_desc:  { hits: -1 },
       hits_asc:   { hits:  1 },
@@ -1530,53 +1581,55 @@ router.get('/intelligence', async (req, res) => {
     };
     const snapSortStage = SNAP_SORT_MAP[sortParam] || SNAP_SORT_MAP.score_desc;
 
-    // Single aggregation pipeline — groups per-CIDR, sorts, counts total,
-    // then paginates inside Mongo so we don't lose rows past 200 like the
-    // previous in-memory slicer did.
-    const facet = await CidrDailySnapshot.aggregate([
-      { $match: snapMatch },
-      { $group: {
-          _id: '$cidr',
-          ip_version:             { $first: '$ip_version' },
-          asn_org:                { $last: '$asn_org' },
-          country:                { $last: '$country' },
-          hits:                   { $sum: '$hits' },
-          conversions:            { $sum: '$conversions' },
-          max_burst_5min:         { $max: '$max_burst_5min' },
-          rapid_duplicate_count:  { $sum: '$rapid_duplicate_count' },
-          single_ip_hammer_count: { $sum: '$single_ip_hammer_count' },
-          fake_ua_count:          { $sum: '$fake_ua_count' },
-          window_days_seen:       { $sum: 1 },
-          all_triggers:           { $push: '$triggers' },
-          all_sources:            { $addToSet: '$source' },
-          first_date_in_window:   { $min: '$date' },
-          last_date_in_window:    { $max: '$date' },
-      }},
-      // conv_proxy used purely for sort ordering on conversion rate within
-      // the window (real rate calc happens in the JS pass below).
-      { $addFields: {
-          conv_proxy: { $cond: [{ $gt: ['$hits', 0] },
-                                { $divide: ['$conversions', '$hits'] }, 0] },
-      }},
-      { $facet: {
-          rows: [
-            { $sort: snapSortStage },
-            { $skip: skip },
-            { $limit: perPage },
-          ],
-          totalCount: [{ $count: 'n' }],
-      }},
-    ]);
+    // Only run aggregation if we have something to query (skip when
+    // allowedCidrs was empty above).
+    let aggregated = [];
+    let totalSnapshot = 0;
+    if (snapMatch.cidr !== undefined || isUnrestricted) {
+      const facet = await CidrDailySnapshot.aggregate([
+        { $match: snapMatch },
+        { $group: {
+            _id: '$cidr',
+            ip_version:             { $first: '$ip_version' },
+            asn_org:                { $last: '$asn_org' },
+            country:                { $last: '$country' },
+            hits:                   { $sum: '$hits' },
+            conversions:            { $sum: '$conversions' },
+            max_burst_5min:         { $max: '$max_burst_5min' },
+            rapid_duplicate_count:  { $sum: '$rapid_duplicate_count' },
+            single_ip_hammer_count: { $sum: '$single_ip_hammer_count' },
+            fake_ua_count:          { $sum: '$fake_ua_count' },
+            window_days_seen:       { $sum: 1 },
+            all_triggers:           { $push: '$triggers' },
+            all_sources:            { $addToSet: '$source' },
+            first_date_in_window:   { $min: '$date' },
+            last_date_in_window:    { $max: '$date' },
+        }},
+        { $addFields: {
+            conv_proxy: { $cond: [{ $gt: ['$hits', 0] },
+                                  { $divide: ['$conversions', '$hits'] }, 0] },
+        }},
+        { $facet: {
+            rows: [
+              { $sort: snapSortStage },
+              { $skip: skip },
+              { $limit: perPage },
+            ],
+            totalCount: [{ $count: 'n' }],
+        }},
+      ]);
 
-    const aggregated = facet[0]?.rows || [];
-    const totalSnapshot = facet[0]?.totalCount?.[0]?.n || 0;
+      aggregated = facet[0]?.rows || [];
+      totalSnapshot = facet[0]?.totalCount?.[0]?.n || 0;
+    }
 
-    // Enrich with live intelligence records for score/status/historical_match.
-    // Also pull in cf_exported so the cf filter works in past-range mode.
-    const cidrs = aggregated.map(a => a._id);
-    const liveDocs = cidrs.length === 0 ? [] : await CidrIntelligence.find({
+    // Enrich rows with their live record (we already loaded all of them
+    // above into allowedCidrDocs, but we need the full doc not just cidr —
+    // re-query for the visible page only to keep payload small).
+    const visibleCidrs = aggregated.map(a => a._id);
+    const liveDocs = visibleCidrs.length === 0 ? [] : await CidrIntelligence.find({
       workspace_id: ws._id,
-      cidr: { $in: cidrs },
+      cidr: { $in: visibleCidrs },
     }).lean();
     const liveMap = new Map(liveDocs.map(d => [d.cidr, d]));
 
@@ -1605,8 +1658,12 @@ router.get('/intelligence', async (req, res) => {
         triggers_in_window: [...triggerSet],
         days_seen_count:   a.window_days_seen,
         consecutive_days:  live.consecutive_days || 0,
-        first_seen:        a.first_date_in_window,
-        last_seen:         a.last_date_in_window,
+        // Snapshot dates are 'YYYY-MM-DD' strings. Surface both as separate
+        // fields so the view can show them in dedicated columns.
+        first_seen_date:   a.first_date_in_window,
+        last_seen_date:    a.last_date_in_window,
+        first_seen:        live.first_seen || null,   // wall-clock Date from live
+        last_seen:         live.last_seen  || null,   // wall-clock Date from live
         top_uas:           live.top_uas || [],
         sample_ips:        live.sample_ips || [],
         status:            live.status || 'new',
@@ -1623,18 +1680,6 @@ router.get('/intelligence', async (req, res) => {
         _from_snapshot:    true,
       };
     });
-
-    // Apply post-enrichment filters (minScore, cf) that depend on the
-    // joined live record. Snapshot pagination already counted rows BEFORE
-    // these filters, so totalEntries may overstate slightly — but it's
-    // closer to the truth than the old hard-cap-at-200 behaviour and we
-    // surface that with the `total*` numbers being snapshot-row-counts.
-    entries = entries.filter(e => {
-      if (e.score >= minScore) return true;
-      return e.hit_count >= 5;  // fallback when no live score exists
-    });
-    if (cfFilter === 'cf_yes') entries = entries.filter(e => e.cf_exported);
-    else if (cfFilter === 'cf_no') entries = entries.filter(e => !e.cf_exported);
 
     totalEntries = totalSnapshot;
     lastAnalysedAt = null;
