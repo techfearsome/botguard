@@ -192,6 +192,22 @@ async function start() {
 
   await ensureDefaultWorkspace();
 
+  // One-time backfill of frequency labels onto existing data. This is
+  // idempotent — if every record is already labelled, it's a no-op. The
+  // first server boot after deploying the frequency-grading feature
+  // populates labels for any CIDRs that existed before the feature shipped;
+  // subsequent boots return early after a count check. Cost is one cheap
+  // `countDocuments` call when labels already exist.
+  try {
+    const { seedFrequencyLabels } = require('../scripts/seedFrequencyLabels');
+    const result = await seedFrequencyLabels();
+    if (!result.skipped) {
+      logger.info('freq_label_backfill_complete', result);
+    }
+  } catch (e) {
+    logger.warn('freq_label_backfill_failed', { err: e.message });
+  }
+
   // Start background CIDR intelligence worker — analyses click traffic
   // every 60s and flags suspicious subnets for admin review.
   // Fire-and-forget; errors are logged internally, never crash the server.

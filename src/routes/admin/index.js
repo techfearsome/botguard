@@ -1450,6 +1450,11 @@ router.get('/intelligence', async (req, res) => {
   // Cloudflare export filter
   const cfFilter = req.query.cf || 'all';
 
+  // Frequency filter (HIGH/MEDIUM/LOW abuser grading, separate from score).
+  // Values: 'all' (default), 'high', 'medium', 'low', 'labelled' (any of the
+  // three), 'unlabelled' (CIDRs that haven't qualified for a label).
+  const freqFilter = req.query.frequency || 'all';
+
   // Pagination
   const perPage = Math.min(Math.max(parseInt(req.query.per_page, 10) || 50, 10), 500);
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -1460,6 +1465,20 @@ router.get('/intelligence', async (req, res) => {
   // ReferenceError if a snapshot-branch render ever reached the EJS
   // `typeof sortParam !== 'undefined'` check.
   const sortParam = req.query.sort || 'score_desc';
+
+  // Helper to apply frequency filter to a Mongo filter object. Centralised
+  // so both live and snapshot branches and the export endpoints stay in sync.
+  function applyFrequencyFilter(filter, value) {
+    if (value === 'high' || value === 'medium' || value === 'low') {
+      filter.frequency_label = value;
+    } else if (value === 'labelled') {
+      filter.frequency_label = { $in: ['high', 'medium', 'low'] };
+    } else if (value === 'unlabelled') {
+      filter.frequency_label = null;
+    }
+    // 'all' → no constraint
+    return filter;
+  }
 
   let entries = [];
   let lastAnalysedAt = null;
@@ -1475,6 +1494,16 @@ router.get('/intelligence', async (req, res) => {
     if (versionFilter !== 'all') filter.ip_version = versionFilter;
     if (cfFilter === 'cf_yes') filter.cf_exported = true;
     else if (cfFilter === 'cf_no') filter.cf_exported = { $ne: true };
+    applyFrequencyFilter(filter, freqFilter);
+
+    // Frequency labels sort by a synthetic rank — high > medium > low > null.
+    // We use $cond/$switch in aggregations but for find().sort() Mongo can
+    // sort strings, which would give alphabetical (high/low/medium — wrong).
+    // For freq sort we fall back to using addFields via aggregate. To keep
+    // the live branch simple we sort by frequency_label as a string AND
+    // tiebreak by score, then re-order in JS for the three labels. Faster
+    // and simpler than an aggregation pipeline at this scale.
+    const FREQ_RANK = { high: 3, medium: 2, low: 1, null: 0, undefined: 0, '': 0 };
 
     const SORT_MAP = {
       score_desc:  { score: -1, last_seen: -1 },
@@ -1487,16 +1516,40 @@ router.get('/intelligence', async (req, res) => {
       conv_asc:    { conv_rate: 1, score: -1 },
       last_seen_desc: { last_seen: -1 },
       last_seen_asc:  { last_seen: 1 },
+      // Frequency sorts use a JS post-pass below to get the correct
+      // high>medium>low ordering. The Mongo sort here just narrows the
+      // result set to the most-relevant rows for the page.
+      freq_desc:   { score: -1 },
+      freq_asc:    { score: -1 },
     };
     const sortOrder = SORT_MAP[sortParam] || SORT_MAP.score_desc;
 
     totalEntries = await CidrIntelligence.countDocuments(filter);
 
-    entries = await CidrIntelligence.find(filter)
-      .sort(sortOrder)
-      .skip(skip)
-      .limit(perPage)
-      .lean();
+    if (sortParam === 'freq_desc' || sortParam === 'freq_asc') {
+      // For freq sort we need to pull a larger candidate set (since the
+      // initial Mongo sort isn't by label) and re-sort in JS. Cap at 1000
+      // candidates which covers the realistic case where the user wants
+      // to see HIGH-frequency CIDRs first.
+      const candidates = await CidrIntelligence.find(filter)
+        .sort({ score: -1, last_seen: -1 })
+        .limit(1000)
+        .lean();
+      const dir = sortParam === 'freq_desc' ? 1 : -1;
+      candidates.sort((a, b) => {
+        const ra = FREQ_RANK[a.frequency_label] || 0;
+        const rb = FREQ_RANK[b.frequency_label] || 0;
+        if (ra !== rb) return (rb - ra) * dir;
+        return (b.score || 0) - (a.score || 0);  // tie-break by score desc always
+      });
+      entries = candidates.slice(skip, skip + perPage);
+    } else {
+      entries = await CidrIntelligence.find(filter)
+        .sort(sortOrder)
+        .skip(skip)
+        .limit(perPage)
+        .lean();
+    }
 
     const lastEntry = await CidrIntelligence.findOne({ workspace_id: ws._id })
       .sort({ last_analysed_at: -1 }).select('last_analysed_at').lean();
@@ -1527,6 +1580,7 @@ router.get('/intelligence', async (req, res) => {
     if (cfFilter === 'cf_yes') liveFilter.cf_exported = true;
     else if (cfFilter === 'cf_no') liveFilter.cf_exported = { $ne: true };
     if (versionFilter !== 'all') liveFilter.ip_version = versionFilter;
+    applyFrequencyFilter(liveFilter, freqFilter);
 
     const allowedCidrDocs = await CidrIntelligence.find(liveFilter)
       .select('cidr').lean();
@@ -1542,7 +1596,8 @@ router.get('/intelligence', async (req, res) => {
       minScore === 0 &&
       cfFilter === 'all' &&
       statusFilter === 'all' &&
-      versionFilter === 'all'
+      versionFilter === 'all' &&
+      freqFilter === 'all'
     );
 
     const snapMatch = {
@@ -1604,6 +1659,16 @@ router.get('/intelligence', async (req, res) => {
             all_sources:            { $addToSet: '$source' },
             first_date_in_window:   { $min: '$date' },
             last_date_in_window:    { $max: '$date' },
+            // Sum of per-day unique ad IDs across the window. Note this is
+            // an APPROXIMATE total — if the same gclid spans two days the
+            // sum would double-count it. In practice ad IDs are unique per
+            // ad-click event so this is a non-issue, but the approximation
+            // is fine for label calculation anyway.
+            sum_gclids:             { $sum: '$unique_gclids' },
+            sum_wbraids:            { $sum: '$unique_wbraids' },
+            sum_gbraids:            { $sum: '$unique_gbraids' },
+            sum_fbclids:            { $sum: '$unique_fbclids' },
+            sum_msclkids:           { $sum: '$unique_msclkids' },
         }},
         { $addFields: {
             conv_proxy: { $cond: [{ $gt: ['$hits', 0] },
@@ -1633,11 +1698,36 @@ router.get('/intelligence', async (req, res) => {
     }).lean();
     const liveMap = new Map(liveDocs.map(d => [d.cidr, d]));
 
+    // Import label computation from the analyser so single-source-of-truth
+    // is preserved (thresholds defined in one place).
+    const { computeFrequencyLabel } = require('../../lib/cidrAnalyser');
+
     entries = aggregated.map(a => {
       const live = liveMap.get(a._id) || {};
       const triggerSet = new Set();
       for (const t of a.all_triggers) for (const x of (t || [])) triggerSet.add(x);
       const sources = a.all_sources || [];
+
+      // Window frequency label — computed across the user's chosen date
+      // range, not the live 24h. This overrides whatever live.frequency_label
+      // says because the live label answers a different question (last 24h)
+      // than what the user is viewing here.
+      const windowAdIds = (a.sum_gclids || 0) + (a.sum_wbraids || 0) +
+                          (a.sum_gbraids || 0) + (a.sum_fbclids || 0) +
+                          (a.sum_msclkids || 0);
+      const windowFreqEv = {
+        days_in_window:          a.window_days_seen,
+        clicks_in_window:        a.hits,
+        unique_ad_ids_in_window: windowAdIds,
+        conversions_in_window:   a.conversions,
+        window_hours:            null,  // window comes from date range, not hours
+      };
+      const windowFreqLabel = computeFrequencyLabel({
+        clicks:        a.hits,
+        unique_ad_ids: windowAdIds,
+        conversions:   a.conversions,
+        days:          a.window_days_seen,
+      }, 'window');
 
       return {
         _id:               live._id,
@@ -1647,6 +1737,9 @@ router.get('/intelligence', async (req, res) => {
         country:           a.country || live.country || '',
         score:             live.score || 0,
         signals:           live.signals || {},
+        // Window-scoped frequency overrides live for past-range views.
+        frequency_label:    windowFreqLabel,
+        frequency_evidence: windowFreqEv,
         hit_count:         a.hits,
         unique_ip_count:   live.unique_ip_count || 0,
         conversion_count:  a.conversions,
@@ -1658,16 +1751,20 @@ router.get('/intelligence', async (req, res) => {
         triggers_in_window: [...triggerSet],
         days_seen_count:   a.window_days_seen,
         consecutive_days:  live.consecutive_days || 0,
-        // Snapshot dates are 'YYYY-MM-DD' strings. Surface both as separate
-        // fields so the view can show them in dedicated columns.
         first_seen_date:   a.first_date_in_window,
         last_seen_date:    a.last_date_in_window,
-        first_seen:        live.first_seen || null,   // wall-clock Date from live
-        last_seen:         live.last_seen  || null,   // wall-clock Date from live
+        first_seen:        live.first_seen || null,
+        last_seen:         live.last_seen  || null,
         top_uas:           live.top_uas || [],
         sample_ips:        live.sample_ips || [],
         status:            live.status || 'new',
         cf_exported:       !!live.cf_exported,
+        // Also expose window ad-id totals for CSV export
+        unique_gclids:     live.unique_gclids  || a.sum_gclids   || 0,
+        unique_wbraids:    live.unique_wbraids || a.sum_wbraids  || 0,
+        unique_gbraids:    live.unique_gbraids || a.sum_gbraids  || 0,
+        unique_fbclids:    live.unique_fbclids || a.sum_fbclids  || 0,
+        unique_msclkids:   live.unique_msclkids|| a.sum_msclkids || 0,
         historical_match:  live.historical_match || {
           has_history:     true,
           total_days_seen: a.window_days_seen,
@@ -1689,22 +1786,27 @@ router.get('/intelligence', async (req, res) => {
   // counts regardless of which status filter is selected. These are the "how
   // much undealt work exists" numbers and shouldn't jump when you change filters.
   let statCritical, statHigh, statWatching, statShown, statWatchlist;
+  let statFreqHigh, statFreqMedium, statFreqLow;
   if (rangeIsLive) {
-    [statCritical, statHigh, statWatching, statWatchlist] = await Promise.all([
+    [statCritical, statHigh, statWatching, statWatchlist,
+     statFreqHigh, statFreqMedium, statFreqLow] = await Promise.all([
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 80 } }),
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 60 } }),
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 40 } }),
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'watchlist' }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'high' }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'medium' }),
+      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'low' }),
     ]);
   } else {
     // Snapshot mode: these are window-scoped counts based on what we paginated.
-    // They reflect the visible page, not the whole window. The cleaner fix
-    // would be a separate count query; deferring that — the page-scope
-    // behaviour matches the previous version.
     statCritical = entries.filter(e => e.score >= 80).length;
     statHigh     = entries.filter(e => e.score >= 60).length;
     statWatching = totalEntries;
-    statWatchlist = entries.filter(e => e.status === 'watchlist').length;
+    statWatchlist  = entries.filter(e => e.status === 'watchlist').length;
+    statFreqHigh   = entries.filter(e => e.frequency_label === 'high').length;
+    statFreqMedium = entries.filter(e => e.frequency_label === 'medium').length;
+    statFreqLow    = entries.filter(e => e.frequency_label === 'low').length;
   }
   statShown = entries.length;
 
@@ -1725,7 +1827,12 @@ router.get('/intelligence', async (req, res) => {
     rangeIsLive,
     dateFrom: dateFrom,
     dateTo: dateTo,
-    stats: { critical: statCritical, high: statHigh, watching: statWatching, shown: statShown, watchlist: statWatchlist },
+    stats: {
+      critical: statCritical, high: statHigh, watching: statWatching,
+      shown: statShown, watchlist: statWatchlist,
+      freq_high: statFreqHigh, freq_medium: statFreqMedium, freq_low: statFreqLow,
+    },
+    freqFilter,
     lastAnalysedAt,
     // Pagination
     currentPage: page,
@@ -2013,6 +2120,7 @@ function buildExportFilter(ws, query) {
   const minScore = parseInt(query.min_score, 10) || 60;
   const version = query.version || 'all';
   const cf = query.cf || 'all';
+  const freq = (query.frequency || 'all').trim();
 
   // Default status set: actionable + already-blocked. Watchlist is included
   // when the caller explicitly asks for it via status=watchlist or status=all_flagged.
@@ -2034,6 +2142,12 @@ function buildExportFilter(ws, query) {
   if (version !== 'all') filter.ip_version = version;
   if (cf === 'cf_yes') filter.cf_exported = true;
   else if (cf === 'cf_no') filter.cf_exported = { $ne: true };
+  // Frequency filter — accept 'high'/'medium'/'low'/'labelled'/'unlabelled'.
+  // Exports default to NOT filtering by frequency (so a min-score-based
+  // export still emits all qualifying CIDRs regardless of label).
+  if (freq === 'high' || freq === 'medium' || freq === 'low') filter.frequency_label = freq;
+  else if (freq === 'labelled')   filter.frequency_label = { $in: ['high', 'medium', 'low'] };
+  else if (freq === 'unlabelled') filter.frequency_label = null;
   return filter;
 }
 
@@ -2212,6 +2326,10 @@ async function handleExportCsv(req, res) {
 
   const headers = [
     'cidr', 'ip_version', 'asn_org', 'country', 'score',
+    // Frequency grading — independent axis from score
+    'frequency_label',
+    'freq_days_in_window', 'freq_clicks_in_window',
+    'freq_unique_ad_ids_in_window', 'freq_window_hours',
     'status', 'cf_exported',
     'hit_count', 'blocked_hits', 'unique_ip_count',
     'conversion_count', 'conv_rate',
@@ -2240,8 +2358,14 @@ async function handleExportCsv(req, res) {
   const rows = [headers.map(csvCell).join(',')];
   for (const e of entries) {
     const s = e.signals || {};
+    const fe = e.frequency_evidence || {};
     const row = [
       e.cidr, e.ip_version, e.asn_org, e.country, e.score,
+      e.frequency_label || '',
+      fe.days_in_window || 0,
+      fe.clicks_in_window || 0,
+      fe.unique_ad_ids_in_window || 0,
+      fe.window_hours || '',
       e.status, e.cf_exported ? '1' : '0',
       e.hit_count, e.blocked_hits, e.unique_ip_count,
       e.conversion_count, (e.conv_rate || 0).toFixed(4),
@@ -2258,13 +2382,13 @@ async function handleExportCsv(req, res) {
       e.bounce_rate_5s == null ? '' : e.bounce_rate_5s,
       e.dwell_sample_count,
       e.days_seen_count, e.consecutive_days,
-      e.first_seen ? e.first_seen.toISOString() : '',
-      e.last_seen ? e.last_seen.toISOString() : '',
-      e.last_analysed_at ? e.last_analysed_at.toISOString() : '',
-      e.blocked_at    ? e.blocked_at.toISOString()    : '',
-      e.exported_at   ? e.exported_at.toISOString()   : '',
-      e.dismissed_at  ? e.dismissed_at.toISOString()  : '',
-      e.watchlisted_at? e.watchlisted_at.toISOString(): '',
+      e.first_seen ? new Date(e.first_seen).toISOString() : '',
+      e.last_seen ? new Date(e.last_seen).toISOString() : '',
+      e.last_analysed_at ? new Date(e.last_analysed_at).toISOString() : '',
+      e.blocked_at    ? new Date(e.blocked_at).toISOString()    : '',
+      e.exported_at   ? new Date(e.exported_at).toISOString()   : '',
+      e.dismissed_at  ? new Date(e.dismissed_at).toISOString()  : '',
+      e.watchlisted_at? new Date(e.watchlisted_at).toISOString(): '',
       e.notes || '',
     ];
     rows.push(row.map(csvCell).join(','));

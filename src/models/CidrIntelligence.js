@@ -8,6 +8,22 @@ const mongoose = require('mongoose');
 
 const STATUSES = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
 
+// Frequency labels are a separate axis from `score`. Score asks "how confident
+// are we this is a bot?" — based on signal strength. Frequency asks "how often
+// does this CIDR cause us pain?" — based on observed activity. A CIDR can be
+// HIGH-confidence (score 90) but LOW-frequency (one-day spike), or vice versa.
+//
+// Stored as a label string + evidence object so the UI can render the badge
+// and explain why without recomputing.
+//
+// The label here is the WINDOW label computed across the analysis window
+// (typically 24h for the live worker, but the analyser can be called with
+// any window). The matching SINGLE-DAY label lives on each CidrDailySnapshot
+// row for that day. The route handler computes window labels on-the-fly
+// when the user views a custom date range, since the operative window
+// depends on the date picker.
+const FREQUENCY_LABELS = ['high', 'medium', 'low'];
+
 const SignalSchema = new mongoose.Schema({
   volume:      { type: Number, default: 0 },  // 0-15
   conversion:  { type: Number, default: 0 },  // 0-20
@@ -42,6 +58,23 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   // ── Scoring ────────────────────────────────────────────────────────
   score:   { type: Number, default: 0, index: true },
   signals: { type: SignalSchema, default: () => ({}) },
+
+  // ── Frequency grading ──────────────────────────────────────────────
+  // Computed by cidrAnalyser alongside score. 'high'/'medium'/'low'/null.
+  // See FREQUENCY_LABELS at top of file for the meaning. Indexed so the
+  // /admin/intelligence filter dropdown can query quickly.
+  frequency_label:    { type: String, enum: [...FREQUENCY_LABELS, null], default: null, index: true },
+  frequency_evidence: {
+    // The numbers that drove the label assignment, kept so the UI can
+    // explain it ("HIGH: 3 days, 17 clicks, 17 unique ad IDs").
+    days_in_window:        { type: Number, default: 0 },
+    clicks_in_window:      { type: Number, default: 0 },
+    unique_ad_ids_in_window: { type: Number, default: 0 },
+    conversions_in_window: { type: Number, default: 0 },
+    // The window the label was computed over, in hours. The live worker
+    // uses 24h; past-range route renders use whatever the user picked.
+    window_hours:          { type: Number, default: 24 },
+  },
 
   // ── Evidence ───────────────────────────────────────────────────────
   hit_count:        { type: Number, default: 0 },
@@ -126,6 +159,9 @@ const CidrIntelligenceSchema = new mongoose.Schema({
 CidrIntelligenceSchema.index({ workspace_id: 1, cidr: 1 }, { unique: true });
 CidrIntelligenceSchema.index({ workspace_id: 1, score: -1, status: 1 });
 CidrIntelligenceSchema.index({ workspace_id: 1, last_seen: -1 });
+// Index for the new frequency filter — most common query is "active CIDRs
+// with frequency label X", so a compound index helps.
+CidrIntelligenceSchema.index({ workspace_id: 1, frequency_label: 1, status: 1 });
 
 CidrIntelligenceSchema.virtual('score_label').get(function () {
   if (this.score >= 80) return 'critical';
@@ -137,5 +173,6 @@ CidrIntelligenceSchema.virtual('score_label').get(function () {
 CidrIntelligenceSchema.set('toObject', { virtuals: true });
 CidrIntelligenceSchema.set('toJSON', { virtuals: true });
 CidrIntelligenceSchema.statics.STATUSES = STATUSES;
+CidrIntelligenceSchema.statics.FREQUENCY_LABELS = FREQUENCY_LABELS;
 
 module.exports = mongoose.model('CidrIntelligence', CidrIntelligenceSchema);

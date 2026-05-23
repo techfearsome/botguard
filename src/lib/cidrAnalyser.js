@@ -38,6 +38,77 @@ function getModels() {
 const FAKE_UA_RE = /iPhone OS (1[9]|[2-9]\d)_|Android (1[5-9]|[2-9]\d)\.|HeadlessChrome|PhantomJS|Selenium|puppeteer|python-requests/i;
 function isFakeUA(ua) { return ua && FAKE_UA_RE.test(ua); }
 
+// ── Frequency grading ─────────────────────────────────────────────────
+//
+// Independent of score. Score says "how confident are we"; frequency says
+// "how often does this CIDR cause us pain." A CIDR can score 90 with one
+// day of activity (label LOW), or score 40 with sustained multi-day pulses
+// (label MEDIUM). Operators want both signals: confidence + pain.
+//
+// Two evaluation modes:
+//
+//   single_day — Used when scoring one calendar day in isolation. Lower
+//                thresholds because a single day is a smaller observation
+//                window. This is what gets stored on each CidrDailySnapshot.
+//
+//   window     — Used when aggregating across multiple days. Adds a
+//                days_active requirement that single_day can't have (the
+//                whole point of multi-day analysis is persistence). This
+//                is what gets stored on CidrIntelligence using the live
+//                worker's window (typically 24h, so days_in_window=1 and
+//                the days check effectively reduces to "today"). For
+//                past-range views, the route handler computes this on
+//                the fly against snapshot aggregates.
+//
+// Calibration: thresholds came from empirical analysis of the TechFirio
+// click data (May 17-23). At these levels the HIGH bucket stays small
+// (~5/day single-day, ~6 over 7 days window) and clean enough to act on
+// without case-by-case review. MEDIUM is a "review then decide" tier of
+// ~27/day single-day, ~80/week window. LOW is the watchlist tier.
+//
+// All three conditions must hold (AND, not OR). A CIDR with 6 days
+// but only 1 click each day stays in LOW because the click bar isn't met.
+const LABEL_THRESHOLDS = {
+  single_day: {
+    high:   { clicks: 5, unique_ad_ids: 4 },
+    medium: { clicks: 3, unique_ad_ids: 2 },
+    low:    { clicks: 2, unique_ad_ids: 0 },
+  },
+  window: {
+    high:   { days: 3, clicks: 6, unique_ad_ids: 4 },
+    medium: { days: 2, clicks: 3, unique_ad_ids: 2 },
+    low:    { days: 1, clicks: 2, unique_ad_ids: 0 },
+  },
+};
+
+/**
+ * Assign a frequency label given evidence numbers.
+ *
+ * @param {object} ev   - {clicks, unique_ad_ids, conversions, days?}
+ * @param {string} mode - 'single_day' | 'window'
+ * @returns {'high'|'medium'|'low'|null}
+ *
+ * Conversions > 0 always returns null — converting traffic isn't an abuser
+ * regardless of frequency.
+ */
+function computeFrequencyLabel(ev, mode) {
+  if (ev.conversions > 0) return null;
+  const T = LABEL_THRESHOLDS[mode];
+  if (!T) return null;
+  const meets = (lbl) => {
+    const t = T[lbl];
+    if (ev.clicks < t.clicks) return false;
+    if (ev.unique_ad_ids < t.unique_ad_ids) return false;
+    if (mode === 'window' && (ev.days || 0) < t.days) return false;
+    return true;
+  };
+  if (meets('high'))   return 'high';
+  if (meets('medium')) return 'medium';
+  if (meets('low'))    return 'low';
+  return null;
+}
+
+
 // ── Subnet normalisation ────────────────────────────────────────────
 function getSubnet(ip) {
   if (!ip) return null;
@@ -368,6 +439,22 @@ async function analyseWorkspace(workspaceId, opts = {}) {
 
         if (!trig.qualifies && !forceSnapshot) continue;
 
+        // Single-day frequency label for this snapshot. Uses the day's
+        // own metrics. Stored alongside the snapshot so historical "how
+        // many high-frequency days did this CIDR have" queries are
+        // possible without recomputing.
+        const daySingleAdIds = trig.metrics.unique_gclids +
+                               trig.metrics.unique_wbraids +
+                               trig.metrics.unique_gbraids +
+                               trig.metrics.unique_fbclids +
+                               trig.metrics.unique_msclkids;
+        const dayFreqEvidence = {
+          clicks:        trig.metrics.hits,
+          unique_ad_ids: daySingleAdIds,
+          conversions:   day.conv,
+        };
+        const dayFreqLabel = computeFrequencyLabel(dayFreqEvidence, 'single_day');
+
         await CidrDailySnapshot.updateOne(
           { workspace_id: workspaceId, cidr, date },
           {
@@ -403,6 +490,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
                 ? Math.round(day.dwellValues.filter(d => d < 5000).length / day.dwellValues.length * 1000) / 1000
                 : null,
               dwell_sample_count:      day.dwellValues.length,
+              frequency_label:         dayFreqLabel,
+              frequency_evidence:      dayFreqEvidence,
               asn_org:                 day.asn,
               country:                 day.country,
             },
@@ -565,12 +654,43 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         .slice(0, 5)
         .map(([ua, count]) => ({ ua: ua.slice(0, 120), count }));
 
+      // ── Window frequency label ─────────────────────────────────────
+      // Computed across the analysis window (whatever the caller passed
+      // in windowHours). For the live 60s worker that's typically 24h,
+      // so days_in_window = 1 and the label collapses to "single day
+      // evaluated as a window" — which is the right semantic since
+      // there's no multi-day data IN the window itself, multi-day
+      // persistence is captured by `score`'s persistence signal pulling
+      // from historical snapshots.
+      //
+      // When analyse-range is invoked with windowHours=168 (a week),
+      // days_in_window can be up to 7 and the window label properly
+      // graduates to HIGH for sustained offenders.
+      const daysInWindow = subnetDayMap.get(cidr)?.size || 1;
+      const totalAdIds   = agg.gclids.size + agg.wbraids.size + agg.gbraids.size +
+                           agg.fbclids.size + agg.msclkids.size;
+      const freqEvidence = {
+        days_in_window:          daysInWindow,
+        clicks_in_window:        agg.hits,
+        unique_ad_ids_in_window: totalAdIds,
+        conversions_in_window:   agg.conv,
+        window_hours:            windowHours,
+      };
+      const freqLabel = computeFrequencyLabel({
+        clicks:        agg.hits,
+        unique_ad_ids: totalAdIds,
+        conversions:   agg.conv,
+        days:          daysInWindow,
+      }, 'window');
+
       await CidrIntelligence.updateOne(
         { workspace_id: workspaceId, cidr },
         {
           $set: {
             asn_org: agg.asn, country: agg.country,
             ip_version: agg.version, score, signals,
+            frequency_label: freqLabel,
+            frequency_evidence: freqEvidence,
             hit_count: agg.hits, blocked_hits: agg.blockedHits,
             unique_ip_count: uniqueIps,
             conversion_count: agg.conv,
@@ -674,4 +794,5 @@ function startCidrAnalyser() {
 module.exports = {
   startCidrAnalyser, runAnalysis, analyseWorkspace,
   getSubnet, isFakeUA, isWebViewBot, computeConsecutiveDays,
+  computeFrequencyLabel, LABEL_THRESHOLDS,
 };

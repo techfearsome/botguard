@@ -45,7 +45,8 @@ function fmtRate(rate) {
       const _exportFrom  = (typeof dateFrom  !== 'undefined') ? dateFrom  : '';
       const _exportTo    = (typeof dateTo    !== 'undefined') ? dateTo    : '';
       const _exportCf    = (typeof cfFilter  !== 'undefined') ? cfFilter  : 'all';
-      const _exportQs    = `min_score=${minScore}&status=${statusFilter}&version=${versionFilter}&cf=${_exportCf}&range=${_exportRange}&date_from=${_exportFrom}&date_to=${_exportTo}`;
+      const _exportFreq  = (typeof freqFilter !== 'undefined') ? freqFilter : 'all';
+      const _exportQs    = `min_score=${minScore}&status=${statusFilter}&version=${versionFilter}&cf=${_exportCf}&frequency=${_exportFreq}&range=${_exportRange}&date_from=${_exportFrom}&date_to=${_exportTo}`;
     %>
     <a href="/admin/intelligence/export.txt?<%= _exportQs %>" class="btn btn-primary"
        title="Plain CIDR list — paste into Google Ads IP exclusion. Reflects the current window and filters.">
@@ -121,6 +122,19 @@ function fmtRate(rate) {
       <option value="cf_yes" <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'cf_yes' ? 'selected' : '' %>>In Cloudflare</option>
       <option value="cf_no"  <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'cf_no'  ? 'selected' : '' %>>Not in Cloudflare</option>
     </select>
+    <%# Frequency-grading filter. Independent of score. HIGH/MEDIUM/LOW
+        labels are assigned by cidrAnalyser based on clicks + unique ad IDs
+        + days active in the analysis window. See LABEL_THRESHOLDS in
+        cidrAnalyser.js for the rules. %>
+    <select name="frequency" style="width:auto; min-width:140px; max-width:180px; padding:6px 10px; font-size:13px;" title="Filter by frequency grade (HIGH = sustained multi-day, MEDIUM = returning, LOW = one-day spike)">
+      <% const _fq = (typeof freqFilter !== 'undefined') ? freqFilter : 'all'; %>
+      <option value="all"        <%= _fq === 'all'        ? 'selected' : '' %>>All grades</option>
+      <option value="labelled"   <%= _fq === 'labelled'   ? 'selected' : '' %>>Any grade (H/M/L)</option>
+      <option value="high"       <%= _fq === 'high'       ? 'selected' : '' %>>★ HIGH only</option>
+      <option value="medium"     <%= _fq === 'medium'     ? 'selected' : '' %>>● MEDIUM only</option>
+      <option value="low"        <%= _fq === 'low'        ? 'selected' : '' %>>○ LOW only</option>
+      <option value="unlabelled" <%= _fq === 'unlabelled' ? 'selected' : '' %>>Unlabelled</option>
+    </select>
     <button type="submit" class="btn btn-small">Filter</button>
   </form>
 </div>
@@ -152,6 +166,27 @@ function fmtRate(rate) {
     <div class="stat-label">Shown</div>
     <div class="stat-value"><%= stats.shown %></div>
   </div>
+</div>
+
+<%# Frequency grading — independent axis from score. Click a card to filter
+    the list to just that grade. Sustained abuse = HIGH, returning = MEDIUM,
+    one-day spike = LOW. %>
+<div class="stat-grid" style="margin-bottom:16px;">
+  <a href="<%= `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=high&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}` %>"
+     class="stat-card" style="border-left:3px solid #dc2626; text-decoration:none;" title="HIGH frequency: sustained multi-day offenders. Click to filter.">
+    <div class="stat-label">★ HIGH frequency</div>
+    <div class="stat-value" style="color:#dc2626;"><%= (stats.freq_high || 0) %></div>
+  </a>
+  <a href="<%= `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=medium&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}` %>"
+     class="stat-card" style="border-left:3px solid #d97706; text-decoration:none;" title="MEDIUM frequency: returning offenders across 2+ days. Click to filter.">
+    <div class="stat-label">● MEDIUM frequency</div>
+    <div class="stat-value" style="color:#d97706;"><%= (stats.freq_medium || 0) %></div>
+  </a>
+  <a href="<%= `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=low&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}` %>"
+     class="stat-card" style="border-left:3px solid #ca8a04; text-decoration:none;" title="LOW frequency: one-day spikes. Click to filter.">
+    <div class="stat-label">○ LOW frequency</div>
+    <div class="stat-value" style="color:#ca8a04;"><%= (stats.freq_low || 0) %></div>
+  </a>
 </div>
 
 <%# ── Live indicator ────────────────────────────────────────────── %>
@@ -228,13 +263,14 @@ function fmtRate(rate) {
 <%
   // Build base URL preserving current filters
   const sp = typeof sortParam !== 'undefined' ? sortParam : 'score_desc';
-  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${sp}`;
+  const _fq2 = (typeof freqFilter !== 'undefined') ? freqFilter : 'all';
+  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=${_fq2}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${sp}`;
   function pgUrl(p, pp) { return `${paginationBase}&page=${p}&per_page=${pp}`; }
   // Sort URL builder: clicking a header toggles between asc/desc
   function sortUrl(field) {
     const cur = sp;
     const next = cur === field + '_desc' ? field + '_asc' : field + '_desc';
-    return `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${next}&per_page=${pp}`;
+    return `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=${_fq2}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${next}&per_page=${pp}`;
   }
   function sortArrow(field) {
     if (sp === field + '_desc') return ' ▼';
@@ -287,7 +323,11 @@ function fmtRate(rate) {
       <tr>
         <th style="width:24px;"></th>
         <th>CIDR</th>
-        <th><a href="<%= sortUrl('score') %>" style="color:inherit; text-decoration:none;" title="Sort by score">Score<%- sortArrow('score') %></a></th>
+        <th>
+          <a href="<%= sortUrl('score') %>" style="color:inherit; text-decoration:none;" title="Sort by score (signal confidence)">Score<%- sortArrow('score') %></a>
+          <br>
+          <a href="<%= sortUrl('freq') %>" style="color:inherit; text-decoration:none; font-size:10px; opacity:0.75;" title="Sort by frequency grade (HIGH > MEDIUM > LOW)">Freq<%- sortArrow('freq') %></a>
+        </th>
         <th>Signals</th>
         <th><a href="<%= sortUrl('hits') %>" style="color:inherit; text-decoration:none;" title="Sort by hits">Hits<%- sortArrow('hits') %></a></th>
         <th>IPs</th>
@@ -332,7 +372,9 @@ function fmtRate(rate) {
           <% } %>
         </td>
 
-        <%# Score pill %>
+        <%# Score pill — and Frequency grade pill just below.
+            These are independent axes: score = signal confidence,
+            frequency = pain-frequency from observed activity. %>
         <td>
           <span style="
             display:inline-block; padding:3px 8px; border-radius:4px;
@@ -341,6 +383,26 @@ function fmtRate(rate) {
             font-weight:700; font-size:13px; font-family:monospace;
           "><%= e.score %></span>
           <div style="font-size:10px; color:<%= scoreColor(e.score) %>; margin-top:2px;"><%= scoreLabel(e.score) %></div>
+          <%
+            const fl = e.frequency_label;
+            const fev = e.frequency_evidence || {};
+            const freqColors = { high:'#dc2626', medium:'#d97706', low:'#ca8a04' };
+            const freqGlyphs = { high:'★', medium:'●', low:'○' };
+            const freqLetter = { high:'HIGH', medium:'MED', low:'LOW' };
+          %>
+          <% if (fl) { %>
+            <div title="<%= freqLetter[fl] || fl %> frequency
+Days: <%= fev.days_in_window || 0 %>
+Clicks: <%= fev.clicks_in_window || 0 %>
+Unique ad IDs: <%= fev.unique_ad_ids_in_window || 0 %>"
+              style="
+                display:inline-block; margin-top:4px; padding:2px 6px; border-radius:3px;
+                background:<%= freqColors[fl] %>22; color:<%= freqColors[fl] %>;
+                font-size:10px; font-weight:600; letter-spacing:0.3px;
+              ">
+              <%= freqGlyphs[fl] %> <%= freqLetter[fl] || fl.toUpperCase() %>
+            </div>
+          <% } %>
         </td>
 
         <%# Signal breakdown mini-bar %>

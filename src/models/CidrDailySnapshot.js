@@ -97,6 +97,19 @@ const CidrDailySnapshotSchema = new mongoose.Schema({
   bounce_rate_5s:     { type: Number, default: null },
   dwell_sample_count: { type: Number, default: 0 },
 
+  // ── Frequency grading (single-day) ────────────────────────────────
+  // This is the label computed from THIS DAY's metrics alone. The route
+  // handler also computes a WINDOW label across multiple snapshot days
+  // when the user views a custom date range — but that's derived on the
+  // fly, not stored here. The single-day label is useful for "which days
+  // did this CIDR have high-frequency activity" analyses.
+  frequency_label: { type: String, enum: ['high', 'medium', 'low', null], default: null, index: true },
+  frequency_evidence: {
+    clicks:        { type: Number, default: 0 },
+    unique_ad_ids: { type: Number, default: 0 },
+    conversions:   { type: Number, default: 0 },
+  },
+
   // Context for display
   asn_org: { type: String, default: '' },
   country: { type: String, default: '' },
