@@ -212,8 +212,13 @@ async function start() {
   // every 60s and flags suspicious subnets for admin review.
   // Fire-and-forget; errors are logged internally, never crash the server.
   try {
-    const { startCidrAnalyser } = require('./lib/cidrAnalyser');
+    const { startCidrAnalyser, startWeeklyRefresh } = require('./lib/cidrAnalyser');
     startCidrAnalyser();
+    // Weekly 7-day refresh — runs Sunday 23:59 server local time by
+    // default. Refreshes snapshot evidence and frequency labels with
+    // full week visibility, without touching live state owned by the
+    // 60s worker. Configurable via CIDR_WEEKLY_REFRESH_* env vars.
+    startWeeklyRefresh();
   } catch (e) {
     logger.warn('cidr_analyser_start_failed', { err: e.message });
   }

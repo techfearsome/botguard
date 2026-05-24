@@ -197,20 +197,93 @@ function scoreFakeUA(fakeUACount) {
 }
 
 function scoreClickIdSignal(hits, totalUniqueIds, hitsWithNoClickId) {
-  if (hits < 10) return 0;
+  // Lowered threshold from 10 to 3 hits. Most CIDRs in TechFirio's traffic
+  // log 3-9 hits per analysis window, so the 10-hit gate kept this signal
+  // silent across the entire dossier (0/168 in the May-24 export). Lower
+  // tier scores half-strength so the gate-jump from 0→full doesn't create
+  // a sudden score spike at the 10-hit boundary.
+  if (hits < 3) return 0;
   const noIdRatio = hitsWithNoClickId / hits;
   const hitsWithId = hits - hitsWithNoClickId;
   let score = 0;
-  if (noIdRatio >= 0.90) score += 12;
-  else if (noIdRatio >= 0.70) score += 8;
-  else if (noIdRatio >= 0.50) score += 4;
+
+  // Missing-click-id ratio — bots often strip or never fetch the gclid,
+  // landing on the page with no attribution. Real ad clicks always carry one.
+  if (hits >= 10) {
+    if (noIdRatio >= 0.90)      score += 12;
+    else if (noIdRatio >= 0.70) score += 8;
+    else if (noIdRatio >= 0.50) score += 4;
+  } else {
+    // 3-9 hit tier: gated half-strength so a 3-hit CIDR with all-missing IDs
+    // doesn't score the same as a 30-hit CIDR with all-missing IDs.
+    if (noIdRatio >= 0.90)      score += 6;
+    else if (noIdRatio >= 0.70) score += 4;
+    else if (noIdRatio >= 0.50) score += 2;
+  }
+
+  // Click-id diversity — many gclids from one block with no conversion is the
+  // classic bot-farm pattern (different ad clicks all routing through the
+  // same network).
   if (hitsWithId >= 10) {
     const diversity = totalUniqueIds / hitsWithId;
     if (diversity < 0.30)      score += 8;
     else if (diversity < 0.50) score += 4;
     else if (diversity < 0.70) score += 2;
+  } else if (hitsWithId >= 3) {
+    // 3-9 hit tier: HIGH diversity (lots of distinct ad IDs from few hits)
+    // is the stronger pattern, not low diversity. A small block producing
+    // many gclids = bot farm. Inverts the >=10 logic deliberately.
+    const distinct = totalUniqueIds;
+    if (distinct >= hitsWithId)     score += 6;  // every hit a new ad ID
+    else if (distinct >= hitsWithId * 0.7) score += 4;
+    else if (distinct >= 2)         score += 2;
   }
+
   return Math.min(score, 15);
+}
+
+// ── Historical click-id signal (0–12) ────────────────────────────────
+//
+// Uses prior CidrDailySnapshot rows to spot CIDRs that have produced many
+// distinct ad-click IDs across multiple days WITHOUT converting. This is
+// the signal "this network has clicked dozens of different ads in the past
+// week, never bought anything" — the closest direct read of bot-farm
+// behaviour available from already-collected data.
+//
+// Why a separate signal from the live click_id one: the live signal only
+// sees the current 24h window. A CIDR with 3 hits today and 20 hits across
+// the last 7 days are very different threats — this signal makes the
+// difference visible in the score.
+function scoreHistoricalClickIds(history) {
+  // history = { total_ad_ids_prior, total_clicks_prior, total_conv_prior, days_with_activity }
+  if (!history) return 0;
+  const ids   = history.total_ad_ids_prior || 0;
+  const conv  = history.total_conv_prior || 0;
+  const days  = history.days_with_activity || 0;
+  // Any prior conversion neutralises this signal — converting CIDRs aren't
+  // abusers, full stop.
+  if (conv > 0) return 0;
+
+  if (ids >= 12 && days >= 5) return 12;
+  if (ids >= 8  && days >= 3) return 10;
+  if (ids >= 5  && days >= 2) return 6;
+  if (ids >= 3  && days >= 2) return 3;
+  return 0;
+}
+
+// ── Frequency-label feedback (0–10) ──────────────────────────────────
+//
+// Feeds the frequency_label back into the score. Keeps the weights small
+// so this can tilt ranking without dominating — score is still driven
+// primarily by the signal evidence. The point of including it is to
+// surface MEDIUM/HIGH frequency CIDRs near the top of the Critical bucket
+// even when their per-window evidence is split across signals that each
+// stay below their full-strength tier.
+function scoreFrequencyLabel(label) {
+  if (label === 'high')   return 10;
+  if (label === 'medium') return 5;
+  if (label === 'low')    return 2;
+  return 0;
 }
 
 // ── Temporal burst scoring (0–20) ────────────────────────────────────
@@ -572,20 +645,44 @@ async function analyseWorkspace(workspaceId, opts = {}) {
   }
 
   // ── Look up snapshot history ───────────────────────────────────────
+  // We pull the per-day ad-id and conversion sums in addition to dates +
+  // sources because scoreHistoricalClickIds() needs the cumulative figures.
+  // The aggregation could be done in Mongo via $group but the per-CIDR data
+  // volume is small enough that a JS reduction is simpler and fast enough.
   const cidrs = [...cidrAggregate.keys()];
   let priorSnapshotMap = new Map();
   if (cidrs.length > 0) {
     const priorSnapshots = await CidrDailySnapshot.find({
       workspace_id: workspaceId,
       cidr: { $in: cidrs },
-    }).select('cidr date source').sort({ cidr: 1, date: 1 }).lean();
+    }).select('cidr date source unique_gclids unique_wbraids unique_gbraids unique_fbclids unique_msclkids hits conversions')
+      .sort({ cidr: 1, date: 1 }).lean();
     for (const ps of priorSnapshots) {
       if (!priorSnapshotMap.has(ps.cidr)) {
-        priorSnapshotMap.set(ps.cidr, { dates: [], sources: new Set() });
+        priorSnapshotMap.set(ps.cidr, {
+          dates: [],
+          sources: new Set(),
+          // Cumulative figures across all priorSnapshots for this CIDR.
+          // "Prior" here means "everything we've ever recorded" — the
+          // historical signal in scoreHistoricalClickIds compares against
+          // this total, not against today's window.
+          total_ad_ids_prior:  0,
+          total_clicks_prior:  0,
+          total_conv_prior:    0,
+          days_with_activity:  0,
+        });
       }
       const entry = priorSnapshotMap.get(ps.cidr);
       entry.dates.push(ps.date);
       entry.sources.add(ps.source);
+      entry.total_ad_ids_prior += (ps.unique_gclids   || 0)
+                                + (ps.unique_wbraids  || 0)
+                                + (ps.unique_gbraids  || 0)
+                                + (ps.unique_fbclids  || 0)
+                                + (ps.unique_msclkids || 0);
+      entry.total_clicks_prior += ps.hits || 0;
+      entry.total_conv_prior   += ps.conversions || 0;
+      if ((ps.hits || 0) >= 1) entry.days_with_activity++;
     }
   }
 
@@ -622,6 +719,27 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       const totalUniqueIds = agg.gclids.size + agg.wbraids.size + agg.gbraids.size
                            + agg.fbclids.size + agg.msclkids.size;
 
+      // ── Frequency label (window mode) ─────────────────────────────
+      // Computed BEFORE the signals object so its value can feed into
+      // sig.frequency. The label uses the current analysis window's
+      // metrics (days, clicks, ad IDs, conversions). For the 60s live
+      // worker that window is 24h; for analyse-range it's whatever the
+      // caller specified. See LABEL_THRESHOLDS for the rule.
+      const daysInWindow = subnetDayMap.get(cidr)?.size || 1;
+      const freqEvidence = {
+        days_in_window:          daysInWindow,
+        clicks_in_window:        agg.hits,
+        unique_ad_ids_in_window: totalUniqueIds,
+        conversions_in_window:   agg.conv,
+        window_hours:            windowHours,
+      };
+      const freqLabel = computeFrequencyLabel({
+        clicks:        agg.hits,
+        unique_ad_ids: totalUniqueIds,
+        conversions:   agg.conv,
+        days:          daysInWindow,
+      }, 'window');
+
       const signals = {
         volume:      scoreVolume(agg.hits),
         conversion:  scoreConversion(agg.hits, agg.conv),
@@ -636,6 +754,9 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         slow_drip:   scoreIpReturn(agg.returnTier1, agg.returnTier2, agg.returnTier3, agg.returnTotalIps, agg.hitsPerIp),
         bounce:      scoreBounce(agg.dwellValues),
         known_list:  scoreKnownList(isSeeded, wasExported, wasBlocked, priorDaysSeen),
+        // v2.2 — historical & label-feedback signals
+        historical_ids: scoreHistoricalClickIds(history),
+        frequency:      scoreFrequencyLabel(freqLabel),
       };
       const score = Math.min(100, Object.values(signals).reduce((a, b) => a + b, 0));
 
@@ -680,35 +801,6 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
         .map(([ua, count]) => ({ ua: ua.slice(0, 120), count }));
-
-      // ── Window frequency label ─────────────────────────────────────
-      // Computed across the analysis window (whatever the caller passed
-      // in windowHours). For the live 60s worker that's typically 24h,
-      // so days_in_window = 1 and the label collapses to "single day
-      // evaluated as a window" — which is the right semantic since
-      // there's no multi-day data IN the window itself, multi-day
-      // persistence is captured by `score`'s persistence signal pulling
-      // from historical snapshots.
-      //
-      // When analyse-range is invoked with windowHours=168 (a week),
-      // days_in_window can be up to 7 and the window label properly
-      // graduates to HIGH for sustained offenders.
-      const daysInWindow = subnetDayMap.get(cidr)?.size || 1;
-      const totalAdIds   = agg.gclids.size + agg.wbraids.size + agg.gbraids.size +
-                           agg.fbclids.size + agg.msclkids.size;
-      const freqEvidence = {
-        days_in_window:          daysInWindow,
-        clicks_in_window:        agg.hits,
-        unique_ad_ids_in_window: totalAdIds,
-        conversions_in_window:   agg.conv,
-        window_hours:            windowHours,
-      };
-      const freqLabel = computeFrequencyLabel({
-        clicks:        agg.hits,
-        unique_ad_ids: totalAdIds,
-        conversions:   agg.conv,
-        days:          daysInWindow,
-      }, 'window');
 
       await CidrIntelligence.updateOne(
         { workspace_id: workspaceId, cidr },
@@ -818,8 +910,114 @@ function startCidrAnalyser() {
   return timer;
 }
 
+// ── Weekly refresh worker ────────────────────────────────────────────
+//
+// The live 60s worker analyses a rolling 24h window. That's the right
+// thing for "what's happening RIGHT NOW" but it means a CIDR that hit
+// you on Monday with zero conversions, then went quiet, has its score
+// frozen at Monday's 24h view of itself for the rest of the week.
+//
+// This worker fills that gap. Once a week (Sunday 23:59 server local
+// time by default — configurable via env vars) it runs a fresh
+// 168-hour-window analysis. This:
+//   1. Re-aggregates clicks across the past 7 days per CIDR
+//   2. Rewrites each snapshot with current evidence + labels
+//   3. Recomputes window-mode frequency labels with full week visibility
+//
+// The pass DOES NOT write live state (`writeLiveState: false`) — that's
+// owned by the 60s worker and we don't want to race against it. It only
+// refreshes snapshots and their labels. The next 60s pass will then pick
+// up the refreshed snapshot history naturally.
+//
+// Configurable via env vars:
+//   CIDR_WEEKLY_REFRESH_DAY     = 0 (Sun) ... 6 (Sat).   Default: 0
+//   CIDR_WEEKLY_REFRESH_HOUR    = 0..23 server local.    Default: 23
+//   CIDR_WEEKLY_REFRESH_MINUTE  = 0..59 server local.    Default: 59
+//   CIDR_WEEKLY_REFRESH_WINDOW_HOURS = window size.       Default: 168
+//
+// Idempotency: a single in-process flag prevents re-entrance within the
+// same minute. If you deploy at 23:55 on Sunday and the server starts
+// running, the worker will fire at 23:59 normally. If the deploy lands
+// AT 23:59 and the boot path takes a few seconds, the worker will pick
+// up the next minute boundary and skip the missed window (intentional —
+// better to skip than double-run).
+
+let weeklyRefreshRunning = false;
+let weeklyRefreshLastFiredKey = '';
+
+async function runWeeklyRefresh() {
+  if (weeklyRefreshRunning) return;
+  weeklyRefreshRunning = true;
+  const windowHours = parseInt(process.env.CIDR_WEEKLY_REFRESH_WINDOW_HOURS || '168', 10);
+  try {
+    const { Workspace } = getModels();
+    const workspaces = await Workspace.find({}).select('_id slug').lean();
+    let totalSnapshots = 0;
+    let totalProcessed = 0;
+    for (const ws of workspaces) {
+      try {
+        // `writeLiveState: false` — let the 60s worker keep ownership of
+        // CidrIntelligence. We only refresh snapshots and their labels.
+        const result = await analyseWorkspace(ws._id, {
+          windowHours,
+          writeSnapshots: true,
+          writeLiveState: false,
+        });
+        totalProcessed += result.processed || 0;
+        totalSnapshots += result.snapshots || 0;
+      } catch (err) {
+        logger.warn('weekly_refresh_workspace_error', {
+          workspace: ws.slug, err: err.message,
+        });
+      }
+    }
+    logger.info('weekly_refresh_complete', {
+      window_hours: windowHours,
+      workspaces: workspaces.length,
+      clicks_processed: totalProcessed,
+      snapshots_written: totalSnapshots,
+    });
+  } catch (err) {
+    logger.warn('weekly_refresh_error', { err: err.message });
+  } finally {
+    weeklyRefreshRunning = false;
+  }
+}
+
+function startWeeklyRefresh() {
+  const day    = parseInt(process.env.CIDR_WEEKLY_REFRESH_DAY    || '0',  10); // Sun
+  const hour   = parseInt(process.env.CIDR_WEEKLY_REFRESH_HOUR   || '23', 10);
+  const minute = parseInt(process.env.CIDR_WEEKLY_REFRESH_MINUTE || '59', 10);
+  logger.info('cidr_weekly_refresh_scheduled', { day, hour, minute,
+    window_hours: process.env.CIDR_WEEKLY_REFRESH_WINDOW_HOURS || 168 });
+
+  // Check every 60s. Cheap (just a Date comparison) and lets the worker
+  // recover if the server starts up between the scheduled time and
+  // the next interval check.
+  function tick() {
+    const now = new Date();
+    if (now.getDay() === day && now.getHours() === hour && now.getMinutes() === minute) {
+      // The "key" is YYYY-MM-DD — using the date prevents double-fires
+      // within the same minute across multiple tick() calls (the
+      // interval is 60s, but Date.now() drift means we might tick
+      // twice in the same minute on rare occasions).
+      const key = now.toISOString().slice(0, 10);
+      if (key !== weeklyRefreshLastFiredKey) {
+        weeklyRefreshLastFiredKey = key;
+        runWeeklyRefresh();
+      }
+    }
+  }
+  // First tick immediately so a deploy at 23:59 Sunday triggers the
+  // refresh (instead of waiting a full week for the next one).
+  tick();
+  const timer = setInterval(tick, 60 * 1000);
+  if (timer.unref) timer.unref();
+  return timer;
+}
+
 module.exports = {
-  startCidrAnalyser, runAnalysis, analyseWorkspace,
+  startCidrAnalyser, startWeeklyRefresh, runWeeklyRefresh, runAnalysis, analyseWorkspace,
   getSubnet, isFakeUA, isWebViewBot, computeConsecutiveDays,
   computeFrequencyLabel, LABEL_THRESHOLDS,
 };

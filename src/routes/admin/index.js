@@ -2412,6 +2412,7 @@ async function handleExportCsv(req, res) {
     'sig_persistence', 'sig_fake_ua', 'sig_click_id', 'sig_temporal',
     'sig_webview_ua', 'sig_behavioral', 'sig_slow_drip', 'sig_bounce',
     'sig_known_list',
+    'sig_historical_ids', 'sig_frequency',
     // click-ID counts
     'unique_gclids', 'unique_wbraids', 'unique_gbraids',
     'unique_fbclids', 'unique_msclkids', 'hits_with_no_click_id',
@@ -2451,6 +2452,7 @@ async function handleExportCsv(req, res) {
       s.persistence || 0, s.fake_ua || 0, s.click_id || 0, s.temporal || 0,
       s.webview_ua || 0, s.behavioral || 0, s.slow_drip || 0, s.bounce || 0,
       s.known_list || 0,
+      s.historical_ids || 0, s.frequency || 0,
       e.unique_gclids, e.unique_wbraids, e.unique_gbraids,
       e.unique_fbclids, e.unique_msclkids, e.hits_with_no_click_id,
       e.sub_second_burst_count, e.sub_5s_burst_count, e.min_gap_ms,

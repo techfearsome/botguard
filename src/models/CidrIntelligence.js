@@ -39,6 +39,11 @@ const SignalSchema = new mongoose.Schema({
   slow_drip:   { type: Number, default: 0 },  // 0-10 (same IP returning across sessions)
   bounce:      { type: Number, default: 0 },  // 0-10 (high bounce rate / low dwell time)
   known_list:  { type: Number, default: 0 },  // 0-15 (seeded/exported/blocked cross-ref)
+  // v2.2 signals — historical CIDR-with-ad-id and frequency-label feedback.
+  // Computed from CidrDailySnapshot history rather than the current window,
+  // so they can score CIDRs that hit you days ago and haven't returned.
+  historical_ids: { type: Number, default: 0 },  // 0-12 (multi-day ad-id diversity, zero conv)
+  frequency:      { type: Number, default: 0 },  // 0-10 (HIGH/MEDIUM/LOW label feedback)
 }, { _id: false });
 
 const CidrIntelligenceSchema = new mongoose.Schema({
