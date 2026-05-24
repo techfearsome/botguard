@@ -81,6 +81,15 @@ const LABEL_THRESHOLDS = {
   },
 };
 
+// Window mode requires days >= 3 for HIGH and days >= 2 for MED. When the
+// caller's window observation is shorter than that (the 24h live worker
+// almost always has days=1, sometimes days=2 across midnight; the yesterday
+// snapshot view aggregates exactly 1 day), the days gate makes HIGH/MED
+// structurally unreachable and every abusive CIDR silently demotes to LOW.
+// In that situation fall through to single_day thresholds, which evaluate
+// the same click/ad-id evidence without the multi-day persistence gate.
+const WINDOW_PERSISTENCE_DAYS = 3;
+
 /**
  * Assign a frequency label given evidence numbers.
  *
@@ -93,13 +102,17 @@ const LABEL_THRESHOLDS = {
  */
 function computeFrequencyLabel(ev, mode) {
   if (ev.conversions > 0) return null;
-  const T = LABEL_THRESHOLDS[mode];
+  let activeMode = mode;
+  if (mode === 'window' && (ev.days || 0) < WINDOW_PERSISTENCE_DAYS) {
+    activeMode = 'single_day';
+  }
+  const T = LABEL_THRESHOLDS[activeMode];
   if (!T) return null;
   const meets = (lbl) => {
     const t = T[lbl];
     if (ev.clicks < t.clicks) return false;
     if (ev.unique_ad_ids < t.unique_ad_ids) return false;
-    if (mode === 'window' && (ev.days || 0) < t.days) return false;
+    if (activeMode === 'window' && (ev.days || 0) < t.days) return false;
     return true;
   };
   if (meets('high'))   return 'high';
