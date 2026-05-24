@@ -1551,6 +1551,37 @@ router.get('/intelligence', async (req, res) => {
         .lean();
     }
 
+    // Enrich each entry with its MOST-RECENT snapshot's single-day label.
+    // The window label (already on the doc as e.frequency_label) tells you
+    // "how this CIDR scores across the analysis window." The single-day
+    // label tells you "what it looked like in its most recent day." These
+    // answer different operator questions — a CIDR can be HIGH-window but
+    // LOW-today (was bad, calmed down) or LOW-window but HIGH-today (new
+    // burst). UI shows both stacked in the Freq column.
+    if (entries.length > 0) {
+      const cidrList = entries.map(e => e.cidr);
+      // Pull only the latest snapshot per CIDR via aggregation. For 50-row
+      // pages this is cheap; the $sort + $group respects the {cidr,date}
+      // compound index that already exists for snapshot lookups.
+      const latestSnaps = await CidrDailySnapshot.aggregate([
+        { $match: { workspace_id: ws._id, cidr: { $in: cidrList } } },
+        { $sort: { cidr: 1, date: -1 } },
+        { $group: {
+            _id: '$cidr',
+            single_day_label:    { $first: '$frequency_label' },
+            single_day_evidence: { $first: '$frequency_evidence' },
+            single_day_date:     { $first: '$date' },
+        }},
+      ]);
+      const snapMap = new Map(latestSnaps.map(s => [s._id, s]));
+      for (const e of entries) {
+        const s = snapMap.get(e.cidr);
+        e.single_day_frequency_label    = s?.single_day_label    || null;
+        e.single_day_frequency_evidence = s?.single_day_evidence || null;
+        e.single_day_frequency_date     = s?.single_day_date     || null;
+      }
+    }
+
     const lastEntry = await CidrIntelligence.findOne({ workspace_id: ws._id })
       .sort({ last_analysed_at: -1 }).select('last_analysed_at').lean();
     lastAnalysedAt = lastEntry?.last_analysed_at || null;
@@ -1643,6 +1674,9 @@ router.get('/intelligence', async (req, res) => {
     if (snapMatch.cidr !== undefined || isUnrestricted) {
       const facet = await CidrDailySnapshot.aggregate([
         { $match: snapMatch },
+        // Sort by date asc so $last in $group grabs the latest day's
+        // single-day frequency label.
+        { $sort: { date: 1 } },
         { $group: {
             _id: '$cidr',
             ip_version:             { $first: '$ip_version' },
@@ -1659,6 +1693,9 @@ router.get('/intelligence', async (req, res) => {
             all_sources:            { $addToSet: '$source' },
             first_date_in_window:   { $min: '$date' },
             last_date_in_window:    { $max: '$date' },
+            // Latest day's single-day label and evidence
+            single_day_label:       { $last: '$frequency_label' },
+            single_day_evidence:    { $last: '$frequency_evidence' },
             // Sum of per-day unique ad IDs across the window. Note this is
             // an APPROXIMATE total — if the same gclid spans two days the
             // sum would double-count it. In practice ad IDs are unique per
@@ -1740,6 +1777,12 @@ router.get('/intelligence', async (req, res) => {
         // Window-scoped frequency overrides live for past-range views.
         frequency_label:    windowFreqLabel,
         frequency_evidence: windowFreqEv,
+        // Latest day's single-day label within the window — for showing
+        // "what does this CIDR look like in its most recent day" alongside
+        // the multi-day verdict.
+        single_day_frequency_label:    a.single_day_label || null,
+        single_day_frequency_evidence: a.single_day_evidence || null,
+        single_day_frequency_date:     a.last_date_in_window,
         hit_count:         a.hits,
         unique_ip_count:   live.unique_ip_count || 0,
         conversion_count:  a.conversions,
@@ -2169,6 +2212,7 @@ function resolveExportRange(query) {
 async function resolveEntriesForExport(ws, query, hardLimit) {
   const liveFilter = buildExportFilter(ws, query);
   const { isLive, rawRange, dateFrom, dateTo } = resolveExportRange(query);
+  const { CidrDailySnapshot } = require('../../models');
 
   if (isLive) {
     // Live mode: straight read from CidrIntelligence
@@ -2176,12 +2220,33 @@ async function resolveEntriesForExport(ws, query, hardLimit) {
       .sort({ score: -1 })
       .limit(hardLimit)
       .lean();
+    // Enrich with latest-snapshot single-day label (same logic as the
+    // /admin/intelligence GET route) so CSV exports carry both axes.
+    if (entries.length > 0) {
+      const cidrList = entries.map(e => e.cidr);
+      const latestSnaps = await CidrDailySnapshot.aggregate([
+        { $match: { workspace_id: ws._id, cidr: { $in: cidrList } } },
+        { $sort: { cidr: 1, date: -1 } },
+        { $group: {
+            _id: '$cidr',
+            single_day_label:    { $first: '$frequency_label' },
+            single_day_evidence: { $first: '$frequency_evidence' },
+            single_day_date:     { $first: '$date' },
+        }},
+      ]);
+      const snapMap = new Map(latestSnaps.map(s => [s._id, s]));
+      for (const e of entries) {
+        const s = snapMap.get(e.cidr);
+        e.single_day_frequency_label    = s?.single_day_label    || null;
+        e.single_day_frequency_evidence = s?.single_day_evidence || null;
+        e.single_day_frequency_date     = s?.single_day_date     || null;
+      }
+    }
     return entries;
   }
 
   // Past-range: aggregate snapshots in the window, intersect with the
   // live-state filter, return enriched entries.
-  const { CidrDailySnapshot } = require('../../models');
   const parsed = parseRange({
     range: dateFrom && dateTo ? 'custom' : rawRange,
     date_from: dateFrom,
@@ -2207,6 +2272,7 @@ async function resolveEntriesForExport(ws, query, hardLimit) {
 
   const aggregated = await CidrDailySnapshot.aggregate([
     { $match: snapMatch },
+    { $sort: { date: 1 } },
     { $group: {
         _id: '$cidr',
         ip_version:             { $first: '$ip_version' },
@@ -2221,6 +2287,8 @@ async function resolveEntriesForExport(ws, query, hardLimit) {
         window_days_seen:       { $sum: 1 },
         first_date_in_window:   { $min: '$date' },
         last_date_in_window:    { $max: '$date' },
+        single_day_label:       { $last: '$frequency_label' },
+        single_day_evidence:    { $last: '$frequency_evidence' },
     }},
     { $sort: { hits: -1 } },
     { $limit: hardLimit },
@@ -2265,6 +2333,9 @@ async function resolveEntriesForExport(ws, query, hardLimit) {
       signals: live.signals || {},
       status: live.status || 'new',
       cf_exported: !!live.cf_exported,
+      single_day_frequency_label:    a.single_day_label || null,
+      single_day_frequency_evidence: a.single_day_evidence || null,
+      single_day_frequency_date:     a.last_date_in_window,
     };
   });
 }
@@ -2326,10 +2397,13 @@ async function handleExportCsv(req, res) {
 
   const headers = [
     'cidr', 'ip_version', 'asn_org', 'country', 'score',
-    // Frequency grading — independent axis from score
-    'frequency_label',
+    // Frequency grading — two axes
+    'frequency_label',                  // window verdict (range-scoped)
     'freq_days_in_window', 'freq_clicks_in_window',
     'freq_unique_ad_ids_in_window', 'freq_window_hours',
+    'single_day_frequency_label',       // most recent day's verdict
+    'single_day_freq_date',
+    'single_day_freq_clicks', 'single_day_freq_unique_ad_ids',
     'status', 'cf_exported',
     'hit_count', 'blocked_hits', 'unique_ip_count',
     'conversion_count', 'conv_rate',
@@ -2366,6 +2440,10 @@ async function handleExportCsv(req, res) {
       fe.clicks_in_window || 0,
       fe.unique_ad_ids_in_window || 0,
       fe.window_hours || '',
+      e.single_day_frequency_label || '',
+      e.single_day_frequency_date  || '',
+      e.single_day_frequency_evidence?.clicks || 0,
+      e.single_day_frequency_evidence?.unique_ad_ids || 0,
       e.status, e.cf_exported ? '1' : '0',
       e.hit_count, e.blocked_hits, e.unique_ip_count,
       e.conversion_count, (e.conv_rate || 0).toFixed(4),

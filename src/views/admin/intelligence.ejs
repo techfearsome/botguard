@@ -323,10 +323,10 @@ function fmtRate(rate) {
       <tr>
         <th style="width:24px;"></th>
         <th>CIDR</th>
+        <th><a href="<%= sortUrl('score') %>" style="color:inherit; text-decoration:none;" title="Sort by score (signal confidence)">Score<%- sortArrow('score') %></a></th>
         <th>
-          <a href="<%= sortUrl('score') %>" style="color:inherit; text-decoration:none;" title="Sort by score (signal confidence)">Score<%- sortArrow('score') %></a>
-          <br>
-          <a href="<%= sortUrl('freq') %>" style="color:inherit; text-decoration:none; font-size:10px; opacity:0.75;" title="Sort by frequency grade (HIGH > MEDIUM > LOW)">Freq<%- sortArrow('freq') %></a>
+          <a href="<%= sortUrl('freq') %>" style="color:inherit; text-decoration:none;" title="Sort by frequency grade (HIGH > MEDIUM > LOW)">Freq<%- sortArrow('freq') %></a>
+          <div style="font-size:9px; opacity:0.55; font-weight:normal; margin-top:1px; line-height:1;">window / today</div>
         </th>
         <th>Signals</th>
         <th><a href="<%= sortUrl('hits') %>" style="color:inherit; text-decoration:none;" title="Sort by hits">Hits<%- sortArrow('hits') %></a></th>
@@ -372,9 +372,7 @@ function fmtRate(rate) {
           <% } %>
         </td>
 
-        <%# Score pill — and Frequency grade pill just below.
-            These are independent axes: score = signal confidence,
-            frequency = pain-frequency from observed activity. %>
+        <%# Score column — signal confidence (0-100), independent axis. %>
         <td>
           <span style="
             display:inline-block; padding:3px 8px; border-radius:4px;
@@ -383,24 +381,57 @@ function fmtRate(rate) {
             font-weight:700; font-size:13px; font-family:monospace;
           "><%= e.score %></span>
           <div style="font-size:10px; color:<%= scoreColor(e.score) %>; margin-top:2px;"><%= scoreLabel(e.score) %></div>
+        </td>
+
+        <%# Frequency column — two stacked badges:
+            • TOP    = window verdict (across the chosen date range or 24h)
+            • BOTTOM = single-day verdict (most recent day in isolation)
+            They answer different questions. A CIDR can be HIGH-window but
+            LOW-today (was bad, calmed down) or LOW-window but HIGH-today
+            (new burst). Both are useful signals. %>
+        <td style="min-width:96px;">
           <%
-            const fl = e.frequency_label;
-            const fev = e.frequency_evidence || {};
             const freqColors = { high:'#dc2626', medium:'#d97706', low:'#ca8a04' };
             const freqGlyphs = { high:'★', medium:'●', low:'○' };
-            const freqLetter = { high:'HIGH', medium:'MED', low:'LOW' };
+            const freqShort  = { high:'HIGH', medium:'MED', low:'LOW' };
+            const winLabel = e.frequency_label;
+            const winEv    = e.frequency_evidence || {};
+            const dayLabel = e.single_day_frequency_label;
+            const dayEv    = e.single_day_frequency_evidence || {};
           %>
-          <% if (fl) { %>
-            <div title="<%= freqLetter[fl] || fl %> frequency
-Days: <%= fev.days_in_window || 0 %>
-Clicks: <%= fev.clicks_in_window || 0 %>
-Unique ad IDs: <%= fev.unique_ad_ids_in_window || 0 %>"
+          <% if (winLabel) { %>
+            <div title="Window verdict (across this analysis range)
+Days: <%= winEv.days_in_window || 0 %>
+Clicks: <%= winEv.clicks_in_window || 0 %>
+Unique ad IDs: <%= winEv.unique_ad_ids_in_window || 0 %>"
               style="
-                display:inline-block; margin-top:4px; padding:2px 6px; border-radius:3px;
-                background:<%= freqColors[fl] %>22; color:<%= freqColors[fl] %>;
-                font-size:10px; font-weight:600; letter-spacing:0.3px;
+                display:inline-block; padding:2px 7px; border-radius:3px;
+                background:<%= freqColors[winLabel] %>22; color:<%= freqColors[winLabel] %>;
+                font-size:11px; font-weight:700; letter-spacing:0.3px;
               ">
-              <%= freqGlyphs[fl] %> <%= freqLetter[fl] || fl.toUpperCase() %>
+              <%= freqGlyphs[winLabel] %> <%= freqShort[winLabel] %>
+            </div>
+            <div style="font-size:9px; color:var(--text-secondary); margin-top:1px; line-height:1;">
+              <%= (winEv.days_in_window || 0) > 1 ? 'multi-day' : 'single-day' %>
+            </div>
+          <% } else { %>
+            <div style="font-size:10px; color:var(--text-secondary); opacity:0.5;">—</div>
+          <% } %>
+          <%# Single-day badge below — only show if it differs from window
+              OR if window is null but today has activity. Suppressing the
+              identical case keeps the column visually quieter for the
+              common "same in both" case. %>
+          <% if (dayLabel && dayLabel !== winLabel) { %>
+            <div title="Most recent day's verdict (<%= e.single_day_frequency_date || '' %>)
+Clicks: <%= dayEv.clicks || 0 %>
+Unique ad IDs: <%= dayEv.unique_ad_ids || 0 %>"
+              style="
+                display:inline-block; margin-top:4px; padding:1px 6px; border-radius:3px;
+                background:<%= freqColors[dayLabel] %>15; color:<%= freqColors[dayLabel] %>;
+                font-size:10px; font-weight:600; letter-spacing:0.3px;
+                border:1px dashed <%= freqColors[dayLabel] %>66;
+              ">
+              today: <%= freqShort[dayLabel] %>
             </div>
           <% } %>
         </td>
