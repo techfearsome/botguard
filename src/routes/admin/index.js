@@ -1483,6 +1483,12 @@ router.get('/intelligence', async (req, res) => {
   let entries = [];
   let lastAnalysedAt = null;
   let totalEntries = 0;
+  // The CIDR set the stat counts should be computed over. Populated by
+  // the snapshot branch when in past-range mode. Null in live mode (stats
+  // use direct workspace counts). Without this, stat counts could exceed
+  // totalEntries because they'd be computed against an unfiltered window
+  // CIDR set while the listing shows a filtered subset.
+  let statsCidrSet = null;
 
   if (rangeIsLive) {
     // ── TODAY view: read live CidrIntelligence ─────────────────────
@@ -1616,6 +1622,11 @@ router.get('/intelligence', async (req, res) => {
     const allowedCidrDocs = await CidrIntelligence.find(liveFilter)
       .select('cidr').lean();
     const allowedCidrs = allowedCidrDocs.map(d => d.cidr);
+    // Stat counts in past-range mode should use the same filtered CIDR
+    // set as the listing — otherwise the bucket totals can exceed the
+    // listing's "of N total" count, which is confusing. Stash it now so
+    // the stats block downstream can reuse it.
+    statsCidrSet = allowedCidrs;
 
     // Edge case: when min_score=0 and status=all the user effectively says
     // "show me everything." In that situation we DON'T restrict to CIDRs
@@ -1842,25 +1853,31 @@ router.get('/intelligence', async (req, res) => {
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'low' }),
     ]);
   } else {
-    // Snapshot mode: compute stats over the FULL window, not just the
-    // visible page. We need the complete CIDR set in the window, which
-    // isn't available from `entries` (paginated to 50). Run a cheap
-    // distinct aggregation to get it.
-    const startStr = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
-    const endStr   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
-    const distinctMatch = { workspace_id: ws._id, date: { $gte: startStr, $lte: endStr } };
-    if (versionFilter !== 'all') distinctMatch.ip_version = versionFilter;
-    const windowCidrsDocs = await CidrDailySnapshot.aggregate([
-      { $match: distinctMatch },
-      { $group: { _id: '$cidr' } },
-    ]);
-    const windowCidrs = windowCidrsDocs.map(d => d._id);
+    // Snapshot mode: compute stats over the same FILTERED CIDR set the
+    // listing shows. Using statsCidrSet (populated upstream from the
+    // live-filter pre-pass) instead of a fresh unfiltered distinct
+    // aggregation, which would have given counts that exceeded the
+    // listing total — a confusing UX.
+    //
+    // Edge case: when isUnrestricted was true earlier, statsCidrSet may
+    // be empty even though entries are non-empty (because we let snapshot
+    // rows through without intersecting against live state). In that
+    // case we fall back to enumerating the window CIDRs from snapshots
+    // so the stat cards still show something meaningful.
+    let windowCidrs = statsCidrSet;
+    if (!windowCidrs || windowCidrs.length === 0) {
+      const startStr2 = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
+      const endStr2   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
+      const m = { workspace_id: ws._id, date: { $gte: startStr2, $lte: endStr2 } };
+      if (versionFilter !== 'all') m.ip_version = versionFilter;
+      const docs = await CidrDailySnapshot.aggregate([
+        { $match: m },
+        { $group: { _id: '$cidr' } },
+      ]);
+      windowCidrs = docs.map(d => d._id);
+    }
 
     if (windowCidrs.length > 0) {
-      // Score/status/freq_label live on the live record. The base filter
-      // intersects "active" statuses with the window CIDR set so the
-      // numbers reflect "how many actionable rows in this window meet
-      // the bucket threshold."
       const baseFilter = { workspace_id: ws._id, cidr: { $in: windowCidrs },
                            status: { $in: ['new', 'reviewing', 'watchlist'] } };
       [statCritical, statHigh, statWatching, statWatchlist,
