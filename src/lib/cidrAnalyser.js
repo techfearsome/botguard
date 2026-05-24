@@ -639,15 +639,42 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       };
       const score = Math.min(100, Object.values(signals).reduce((a, b) => a + b, 0));
 
-      // v2: Build dossier on ANY block showing weak signals — don't wait
-      // for high scores to start tracking.
-      const hasWeakSignal = (agg.hits >= 2 && agg.conv === 0);
-      const hasTemporal   = agg.totalSubSecond > 0;
-      const hasWebView    = agg.webviewBotCount > 0;
-      const hasSlowDrip   = agg.slowDripIpCount > 0 || agg.returnTier1 > 0 || agg.returnTier2 > 0;
+      // Evidence flags for the dossier-creation gate below.
+      const hasZeroConvActivity = agg.hits >= 2 && agg.conv === 0;
+      const hasTemporal         = agg.totalSubSecond > 0;
+      const hasWebView          = agg.webviewBotCount > 0;
+      const hasSlowDrip         = agg.slowDripIpCount > 0 || agg.returnTier1 > 0 || agg.returnTier2 > 0;
 
-      if (score < 5 && !history.dates.length && agg.blockedHits < 5
-          && !hasWeakSignal && !hasTemporal && !hasWebView && !hasSlowDrip) continue;
+      // ── Dossier creation gate ──────────────────────────────────────
+      //
+      // Previously: skip if score<5 AND no history AND <5 blocks AND no
+      // weak/temporal/webview/slow-drip signal. This was too tight —
+      // CIDRs with 3-4 clicks and zero conversions (the MEDIUM-frequency
+      // tier) often scored 3-4 and got dropped before the frequency
+      // labeller could flag them.
+      //
+      // New rule: persist a dossier for ANY CIDR that has both
+      //   (a) at least 2 allowed hits, AND
+      //   (b) zero conversions
+      // regardless of score. The frequency labeller decides the grade.
+      // This roughly 3-5x's the dossier size but makes the MEDIUM tier
+      // visible. Score still drives priority sorting and Critical/High
+      // bucket counts; this change only affects which CIDRs are KNOWN
+      // to the system at all.
+      //
+      // Other inclusion paths preserved:
+      //   - Any prior history of this CIDR (returning offender)
+      //   - 5+ blocked hits (high-signal even without allowed traffic)
+      //   - Temporal/webview/slow-drip evidence
+      //   - score >= 5 from any other signal
+      const qualifies = score >= 5
+                     || history.dates.length > 0
+                     || agg.blockedHits >= 5
+                     || hasZeroConvActivity
+                     || hasTemporal
+                     || hasWebView
+                     || hasSlowDrip;
+      if (!qualifies) continue;
 
       const topUAs = Object.entries(agg.uaCounts)
         .sort((a, b) => b[1] - a[1])
