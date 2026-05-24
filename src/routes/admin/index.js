@@ -1844,83 +1844,108 @@ router.get('/intelligence', async (req, res) => {
     lastAnalysedAt = null;
   }
 
-  // Stats for summary bar — ALWAYS show total active (new + reviewing + watchlist)
-  // counts regardless of which status filter is selected. These are the "how
-  // much undealt work exists" numbers and shouldn't jump when you change filters.
+  // ── Summary stat cards ─────────────────────────────────────────────
+  //
+  // The stat cards count rows in the SAME CIDR population the listing
+  // shows below. That invariant matters: if "Watching (40+)" reported a
+  // number bigger than "of N total" in the pagination row, the user would
+  // (correctly) lose trust in every other number on the page.
+  //
+  // Population definitions:
+  //   - Live mode:     CidrIntelligence matching the listing's filter chain
+  //                    (status/score>=min/version/cf/freq).
+  //   - Snapshot mode: same filter chain, intersected with CIDRs that have
+  //                    at least one snapshot in the date window. That
+  //                    intersection is the bug the previous code missed —
+  //                    statsCidrSet was the live-filter result alone, so
+  //                    Yesterday view and 7d view got identical stat
+  //                    counts even though the listings differ.
+  //
+  // Score buckets (Critical/High/Watching) reuse the base filter but
+  // substitute their own score floor for the listing's minScore.
+  // Frequency buckets inherit the full filter chain (including minScore).
+  // Watchlist is workspace-wide — it answers "X on watchlist overall"
+  // regardless of which view the user is in.
   let statCritical, statHigh, statWatching, statShown, statWatchlist;
   let statFreqHigh, statFreqMedium, statFreqLow;
+
+  // Build the stats base filter. In live mode this is the listing's
+  // `filter`. In snapshot mode it's the equivalent live-state filter
+  // intersected with the date-window CIDR set.
+  let statsBase = null;
+
   if (rangeIsLive) {
-    // Live-mode stats must mirror the listing's filter chain — otherwise
-    // the bucket counts can exceed `totalEntries`, which is the bug the
-    // user reported: today view showed 203 total but LOW frequency 297.
-    //
-    // The listing uses `filter` which carries status, score>=minScore,
-    // version, cf. We reuse that for the bucket counts so the numbers
-    // describe the same population the listing shows.
-    //
-    // Subtleties:
-    //  - Score buckets (Critical/High/Watching) replace the listing's
-    //    score>=minScore with their own score>=80/60/40 cutoff.
-    //  - Frequency buckets add frequency_label to the filter.
-    //  - Watchlist stat is workspace-wide (we surface it regardless of
-    //    the user's status filter, since "X CIDRs are on watchlist
-    //    overall" is the answer the card promises).
-    const baseStatFilter = { ...filter };
-    // Strip the listing's score floor so each bucket can apply its own.
-    delete baseStatFilter.score;
+    statsBase = { ...filter };
+  } else {
+    // Snapshot mode: get the set of CIDRs that have any snapshot in this
+    // date window. Then intersect with the listing's filter chain
+    // (which lives in statsCidrSet from the live pre-pass).
+    const startStr2 = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
+    const endStr2   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
+    const winMatch = { workspace_id: ws._id, date: { $gte: startStr2, $lte: endStr2 } };
+    if (versionFilter !== 'all') winMatch.ip_version = versionFilter;
+    const winCidrDocs = await CidrDailySnapshot.aggregate([
+      { $match: winMatch },
+      { $group: { _id: '$cidr' } },
+    ]);
+    const windowCidrSet = winCidrDocs.map(d => d._id);
+
+    // Intersect window CIDRs with the listing's filtered live-state set
+    // (statsCidrSet). If statsCidrSet is empty (because isUnrestricted
+    // was true and we didn't pre-filter), fall back to the window set
+    // alone — the listing in that case is also showing window-only data.
+    let effectiveCidrs;
+    if (statsCidrSet && statsCidrSet.length > 0) {
+      const winSet = new Set(windowCidrSet);
+      effectiveCidrs = statsCidrSet.filter(c => winSet.has(c));
+    } else {
+      effectiveCidrs = windowCidrSet;
+    }
+
+    if (effectiveCidrs.length === 0) {
+      statCritical = statHigh = statWatching = 0;
+      statFreqHigh = statFreqMedium = statFreqLow = 0;
+      statWatchlist = await CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'watchlist' });
+      statsBase = null;  // marker — skip the count block below
+    } else {
+      // Mirror the listing's status filter (active by default) but bound
+      // to the intersected CIDR set.
+      statsBase = {
+        workspace_id: ws._id,
+        cidr: { $in: effectiveCidrs },
+        status: statusQuery,
+      };
+      if (versionFilter !== 'all') statsBase.ip_version = versionFilter;
+      if (cfFilter === 'cf_yes')   statsBase.cf_exported = true;
+      else if (cfFilter === 'cf_no') statsBase.cf_exported = { $ne: true };
+      // Frequency filter applies to the bucket queries via applyFrequencyFilter
+      // only when the user explicitly chose one. The freq stat cards always
+      // count per-label regardless.
+    }
+  }
+
+  if (statsBase !== null) {
+    // For score buckets, strip the listing's min_score floor and apply
+    // each bucket's own threshold. For frequency buckets, inherit the
+    // listing's full filter (including any explicit frequency choice).
+    const scoreBase = { ...statsBase };
+    delete scoreBase.score;
+    const freqBase = { ...statsBase };
+    // The frequency filter chosen by the user shouldn't gate the per-label
+    // cards — otherwise picking "HIGH only" makes MED/LOW cards show 0.
+    // Always count per-label across the base population.
+    delete freqBase.frequency_label;
 
     [statCritical, statHigh, statWatching, statWatchlist,
      statFreqHigh, statFreqMedium, statFreqLow] = await Promise.all([
-      CidrIntelligence.countDocuments({ ...baseStatFilter, score: { $gte: 80 } }),
-      CidrIntelligence.countDocuments({ ...baseStatFilter, score: { $gte: 60 } }),
-      CidrIntelligence.countDocuments({ ...baseStatFilter, score: { $gte: 40 } }),
+      CidrIntelligence.countDocuments({ ...scoreBase, score: { $gte: 80 } }),
+      CidrIntelligence.countDocuments({ ...scoreBase, score: { $gte: 60 } }),
+      CidrIntelligence.countDocuments({ ...scoreBase, score: { $gte: 40 } }),
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'watchlist' }),
-      CidrIntelligence.countDocuments({ ...filter, frequency_label: 'high' }),
-      CidrIntelligence.countDocuments({ ...filter, frequency_label: 'medium' }),
-      CidrIntelligence.countDocuments({ ...filter, frequency_label: 'low' }),
+      CidrIntelligence.countDocuments({ ...freqBase, frequency_label: 'high' }),
+      CidrIntelligence.countDocuments({ ...freqBase, frequency_label: 'medium' }),
+      CidrIntelligence.countDocuments({ ...freqBase, frequency_label: 'low' }),
     ]);
-  } else {
-    // Snapshot mode: compute stats over the same FILTERED CIDR set the
-    // listing shows. Using statsCidrSet (populated upstream from the
-    // live-filter pre-pass) instead of a fresh unfiltered distinct
-    // aggregation, which would have given counts that exceeded the
-    // listing total — a confusing UX.
-    //
-    // Edge case: when isUnrestricted was true earlier, statsCidrSet may
-    // be empty even though entries are non-empty (because we let snapshot
-    // rows through without intersecting against live state). In that
-    // case we fall back to enumerating the window CIDRs from snapshots
-    // so the stat cards still show something meaningful.
-    let windowCidrs = statsCidrSet;
-    if (!windowCidrs || windowCidrs.length === 0) {
-      const startStr2 = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
-      const endStr2   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
-      const m = { workspace_id: ws._id, date: { $gte: startStr2, $lte: endStr2 } };
-      if (versionFilter !== 'all') m.ip_version = versionFilter;
-      const docs = await CidrDailySnapshot.aggregate([
-        { $match: m },
-        { $group: { _id: '$cidr' } },
-      ]);
-      windowCidrs = docs.map(d => d._id);
-    }
-
-    if (windowCidrs.length > 0) {
-      const baseFilter = { workspace_id: ws._id, cidr: { $in: windowCidrs },
-                           status: { $in: ['new', 'reviewing', 'watchlist'] } };
-      [statCritical, statHigh, statWatching, statWatchlist,
-       statFreqHigh, statFreqMedium, statFreqLow] = await Promise.all([
-        CidrIntelligence.countDocuments({ ...baseFilter, score: { $gte: 80 } }),
-        CidrIntelligence.countDocuments({ ...baseFilter, score: { $gte: 60 } }),
-        CidrIntelligence.countDocuments({ ...baseFilter, score: { $gte: 40 } }),
-        CidrIntelligence.countDocuments({ workspace_id: ws._id, cidr: { $in: windowCidrs }, status: 'watchlist' }),
-        CidrIntelligence.countDocuments({ ...baseFilter, frequency_label: 'high' }),
-        CidrIntelligence.countDocuments({ ...baseFilter, frequency_label: 'medium' }),
-        CidrIntelligence.countDocuments({ ...baseFilter, frequency_label: 'low' }),
-      ]);
-    } else {
-      statCritical = statHigh = statWatching = statWatchlist = 0;
-      statFreqHigh = statFreqMedium = statFreqLow = 0;
-    }
   }
   statShown = entries.length;
 
