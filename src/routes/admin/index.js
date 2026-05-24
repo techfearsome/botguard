@@ -1842,14 +1842,41 @@ router.get('/intelligence', async (req, res) => {
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'low' }),
     ]);
   } else {
-    // Snapshot mode: these are window-scoped counts based on what we paginated.
-    statCritical = entries.filter(e => e.score >= 80).length;
-    statHigh     = entries.filter(e => e.score >= 60).length;
-    statWatching = totalEntries;
-    statWatchlist  = entries.filter(e => e.status === 'watchlist').length;
-    statFreqHigh   = entries.filter(e => e.frequency_label === 'high').length;
-    statFreqMedium = entries.filter(e => e.frequency_label === 'medium').length;
-    statFreqLow    = entries.filter(e => e.frequency_label === 'low').length;
+    // Snapshot mode: compute stats over the FULL window, not just the
+    // visible page. We need the complete CIDR set in the window, which
+    // isn't available from `entries` (paginated to 50). Run a cheap
+    // distinct aggregation to get it.
+    const startStr = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
+    const endStr   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
+    const distinctMatch = { workspace_id: ws._id, date: { $gte: startStr, $lte: endStr } };
+    if (versionFilter !== 'all') distinctMatch.ip_version = versionFilter;
+    const windowCidrsDocs = await CidrDailySnapshot.aggregate([
+      { $match: distinctMatch },
+      { $group: { _id: '$cidr' } },
+    ]);
+    const windowCidrs = windowCidrsDocs.map(d => d._id);
+
+    if (windowCidrs.length > 0) {
+      // Score/status/freq_label live on the live record. The base filter
+      // intersects "active" statuses with the window CIDR set so the
+      // numbers reflect "how many actionable rows in this window meet
+      // the bucket threshold."
+      const baseFilter = { workspace_id: ws._id, cidr: { $in: windowCidrs },
+                           status: { $in: ['new', 'reviewing', 'watchlist'] } };
+      [statCritical, statHigh, statWatching, statWatchlist,
+       statFreqHigh, statFreqMedium, statFreqLow] = await Promise.all([
+        CidrIntelligence.countDocuments({ ...baseFilter, score: { $gte: 80 } }),
+        CidrIntelligence.countDocuments({ ...baseFilter, score: { $gte: 60 } }),
+        CidrIntelligence.countDocuments({ ...baseFilter, score: { $gte: 40 } }),
+        CidrIntelligence.countDocuments({ workspace_id: ws._id, cidr: { $in: windowCidrs }, status: 'watchlist' }),
+        CidrIntelligence.countDocuments({ ...baseFilter, frequency_label: 'high' }),
+        CidrIntelligence.countDocuments({ ...baseFilter, frequency_label: 'medium' }),
+        CidrIntelligence.countDocuments({ ...baseFilter, frequency_label: 'low' }),
+      ]);
+    } else {
+      statCritical = statHigh = statWatching = statWatchlist = 0;
+      statFreqHigh = statFreqMedium = statFreqLow = 0;
+    }
   }
   statShown = entries.length;
 

@@ -494,6 +494,53 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     if (c.dwell_ms != null && c.dwell_ms >= 0) day.dwellValues.push(c.dwell_ms);
   }
 
+  // ── Look up snapshot history ───────────────────────────────────────
+  // Needed BEFORE the snapshot-write loop so the snapshot gate can use
+  // "has prior history?" as a force-write trigger (a CIDR with prior
+  // offences gets a snapshot for any new active day, even if today's
+  // hits don't on their own qualify). Also feeds scoreHistoricalClickIds
+  // later for the live-state upsert.
+  //
+  // Keyed off subnetDayMap because cidrAggregate isn't built yet — but
+  // they have the same key set (the union of CIDRs touched by this
+  // analysis window).
+  const priorCidrs = [...subnetDayMap.keys()];
+  let priorSnapshotMap = new Map();
+  if (priorCidrs.length > 0) {
+    const priorSnapshots = await CidrDailySnapshot.find({
+      workspace_id: workspaceId,
+      cidr: { $in: priorCidrs },
+    }).select('cidr date source unique_gclids unique_wbraids unique_gbraids unique_fbclids unique_msclkids hits conversions')
+      .sort({ cidr: 1, date: 1 }).lean();
+    for (const ps of priorSnapshots) {
+      if (!priorSnapshotMap.has(ps.cidr)) {
+        priorSnapshotMap.set(ps.cidr, {
+          dates: [],
+          sources: new Set(),
+          // Cumulative figures across all priorSnapshots for this CIDR.
+          // "Prior" here means "everything we've ever recorded" — the
+          // historical signal in scoreHistoricalClickIds compares against
+          // this total, not against today's window.
+          total_ad_ids_prior:  0,
+          total_clicks_prior:  0,
+          total_conv_prior:    0,
+          days_with_activity:  0,
+        });
+      }
+      const entry = priorSnapshotMap.get(ps.cidr);
+      entry.dates.push(ps.date);
+      entry.sources.add(ps.source);
+      entry.total_ad_ids_prior += (ps.unique_gclids   || 0)
+                                + (ps.unique_wbraids  || 0)
+                                + (ps.unique_gbraids  || 0)
+                                + (ps.unique_fbclids  || 0)
+                                + (ps.unique_msclkids || 0);
+      entry.total_clicks_prior += ps.hits || 0;
+      entry.total_conv_prior   += ps.conversions || 0;
+      if ((ps.hits || 0) >= 1) entry.days_with_activity++;
+    }
+  }
+
   // ── Per-day trigger detection + snapshots ──────────────────────────
   let snapshotsWritten = 0;
   const today = referenceDate.toISOString().slice(0, 10);
@@ -506,9 +553,28 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         const trig = detectTriggers(day.clicks);
         dayTriggerMetrics.get(cidr).set(date, trig.metrics);
 
-        // v2: ALWAYS write snapshot if block had 2+ allowed hits with 0 conv
-        // even if no trigger fired — this builds the dossier for weak signals
-        const forceSnapshot = day.clicks.length >= 2 && day.conv === 0;
+        // Snapshot write gate.
+        //
+        // Previously: write iff trigger qualifies OR (2+ clicks AND 0 conv).
+        // That was tighter than the dossier-creation gate, so a CIDR with
+        // (say) 1 hit today but a history of prior offences got a live
+        // dossier record (via history.dates.length > 0) but NO snapshot
+        // for today. Consequence: today's view counted it (live read),
+        // but past-range views joined to snapshots and silently dropped
+        // it. The 7-day total ended up SMALLER than today's total —
+        // counterintuitive and wrong.
+        //
+        // New: also force a snapshot when the CIDR has prior snapshot
+        // history (it's a known returner — record this day's activity
+        // even if minimal) OR has any clicks at all on a day where the
+        // analyser is running. The cost is more snapshot writes for
+        // low-activity returners, which is what we want.
+        const hasPriorHistory =
+          priorSnapshotMap.has(cidr) &&
+          priorSnapshotMap.get(cidr).dates.length > 0;
+        const forceSnapshot =
+          (day.clicks.length >= 2 && day.conv === 0) ||
+          (day.clicks.length >= 1 && hasPriorHistory);
 
         if (!trig.qualifies && !forceSnapshot) continue;
 
@@ -644,49 +710,9 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     cidrAggregate.set(cidr, agg);
   }
 
-  // ── Look up snapshot history ───────────────────────────────────────
-  // We pull the per-day ad-id and conversion sums in addition to dates +
-  // sources because scoreHistoricalClickIds() needs the cumulative figures.
-  // The aggregation could be done in Mongo via $group but the per-CIDR data
-  // volume is small enough that a JS reduction is simpler and fast enough.
-  const cidrs = [...cidrAggregate.keys()];
-  let priorSnapshotMap = new Map();
-  if (cidrs.length > 0) {
-    const priorSnapshots = await CidrDailySnapshot.find({
-      workspace_id: workspaceId,
-      cidr: { $in: cidrs },
-    }).select('cidr date source unique_gclids unique_wbraids unique_gbraids unique_fbclids unique_msclkids hits conversions')
-      .sort({ cidr: 1, date: 1 }).lean();
-    for (const ps of priorSnapshots) {
-      if (!priorSnapshotMap.has(ps.cidr)) {
-        priorSnapshotMap.set(ps.cidr, {
-          dates: [],
-          sources: new Set(),
-          // Cumulative figures across all priorSnapshots for this CIDR.
-          // "Prior" here means "everything we've ever recorded" — the
-          // historical signal in scoreHistoricalClickIds compares against
-          // this total, not against today's window.
-          total_ad_ids_prior:  0,
-          total_clicks_prior:  0,
-          total_conv_prior:    0,
-          days_with_activity:  0,
-        });
-      }
-      const entry = priorSnapshotMap.get(ps.cidr);
-      entry.dates.push(ps.date);
-      entry.sources.add(ps.source);
-      entry.total_ad_ids_prior += (ps.unique_gclids   || 0)
-                                + (ps.unique_wbraids  || 0)
-                                + (ps.unique_gbraids  || 0)
-                                + (ps.unique_fbclids  || 0)
-                                + (ps.unique_msclkids || 0);
-      entry.total_clicks_prior += ps.hits || 0;
-      entry.total_conv_prior   += ps.conversions || 0;
-      if ((ps.hits || 0) >= 1) entry.days_with_activity++;
-    }
-  }
-
   // ── Look up existing intelligence for known-list status ────────────
+  // (priorSnapshotMap already populated above — needed for the snapshot gate)
+  const cidrs = [...cidrAggregate.keys()];
   let existingIntelMap = new Map();
   if (cidrs.length > 0) {
     const existing = await CidrIntelligence.find({
