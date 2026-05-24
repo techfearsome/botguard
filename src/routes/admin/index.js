@@ -1489,10 +1489,18 @@ router.get('/intelligence', async (req, res) => {
   // totalEntries because they'd be computed against an unfiltered window
   // CIDR set while the listing shows a filtered subset.
   let statsCidrSet = null;
+  // The listing's filter object, hoisted out of the rangeIsLive branch
+  // so the stats compute block downstream can reuse it. Without this,
+  // referencing `filter` from the stats block throws ReferenceError —
+  // which crashed the route on the first live render after the v2.2.3
+  // patch. Declared as `let` because the live branch overwrites it
+  // with the live-mode filter; remains null in snapshot mode (the stats
+  // block uses statsCidrSet instead).
+  let filter = null;
 
   if (rangeIsLive) {
     // ── TODAY view: read live CidrIntelligence ─────────────────────
-    const filter = {
+    filter = {
       workspace_id: ws._id,
       status: statusQuery,
       score: { $gte: minScore },
