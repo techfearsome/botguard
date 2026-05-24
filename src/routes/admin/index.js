@@ -1842,15 +1842,34 @@ router.get('/intelligence', async (req, res) => {
   let statCritical, statHigh, statWatching, statShown, statWatchlist;
   let statFreqHigh, statFreqMedium, statFreqLow;
   if (rangeIsLive) {
+    // Live-mode stats must mirror the listing's filter chain — otherwise
+    // the bucket counts can exceed `totalEntries`, which is the bug the
+    // user reported: today view showed 203 total but LOW frequency 297.
+    //
+    // The listing uses `filter` which carries status, score>=minScore,
+    // version, cf. We reuse that for the bucket counts so the numbers
+    // describe the same population the listing shows.
+    //
+    // Subtleties:
+    //  - Score buckets (Critical/High/Watching) replace the listing's
+    //    score>=minScore with their own score>=80/60/40 cutoff.
+    //  - Frequency buckets add frequency_label to the filter.
+    //  - Watchlist stat is workspace-wide (we surface it regardless of
+    //    the user's status filter, since "X CIDRs are on watchlist
+    //    overall" is the answer the card promises).
+    const baseStatFilter = { ...filter };
+    // Strip the listing's score floor so each bucket can apply its own.
+    delete baseStatFilter.score;
+
     [statCritical, statHigh, statWatching, statWatchlist,
      statFreqHigh, statFreqMedium, statFreqLow] = await Promise.all([
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 80 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 60 } }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, score: { $gte: 40 } }),
+      CidrIntelligence.countDocuments({ ...baseStatFilter, score: { $gte: 80 } }),
+      CidrIntelligence.countDocuments({ ...baseStatFilter, score: { $gte: 60 } }),
+      CidrIntelligence.countDocuments({ ...baseStatFilter, score: { $gte: 40 } }),
       CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'watchlist' }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'high' }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'medium' }),
-      CidrIntelligence.countDocuments({ workspace_id: ws._id, status: { $in: ['new', 'reviewing', 'watchlist'] }, frequency_label: 'low' }),
+      CidrIntelligence.countDocuments({ ...filter, frequency_label: 'high' }),
+      CidrIntelligence.countDocuments({ ...filter, frequency_label: 'medium' }),
+      CidrIntelligence.countDocuments({ ...filter, frequency_label: 'low' }),
     ]);
   } else {
     // Snapshot mode: compute stats over the same FILTERED CIDR set the

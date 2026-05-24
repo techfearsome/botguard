@@ -555,26 +555,28 @@ async function analyseWorkspace(workspaceId, opts = {}) {
 
         // Snapshot write gate.
         //
-        // Previously: write iff trigger qualifies OR (2+ clicks AND 0 conv).
-        // That was tighter than the dossier-creation gate, so a CIDR with
-        // (say) 1 hit today but a history of prior offences got a live
-        // dossier record (via history.dates.length > 0) but NO snapshot
-        // for today. Consequence: today's view counted it (live read),
-        // but past-range views joined to snapshots and silently dropped
-        // it. The 7-day total ended up SMALLER than today's total —
-        // counterintuitive and wrong.
-        //
-        // New: also force a snapshot when the CIDR has prior snapshot
-        // history (it's a known returner — record this day's activity
-        // even if minimal) OR has any clicks at all on a day where the
-        // analyser is running. The cost is more snapshot writes for
-        // low-activity returners, which is what we want.
+        // A snapshot is written for (cidr, date) when ANY of:
+        //   1. The trigger detector qualified the day (existing behaviour).
+        //   2. 2+ clicks on this day with zero conversions.
+        //   3. 1+ click AND the CIDR has prior snapshot history (returning
+        //      offender — record this day's activity even if minimal).
+        //   4. 1+ click AND the CIDR has activity on 2+ days WITHIN the
+        //      current analysis window. This handles first-time backfills
+        //      of historical data where priorSnapshotMap is empty but the
+        //      CIDR has a multi-day pattern visible in this very call.
+        //      Without #4, a CIDR that hit on Monday=1, Tuesday=1, Wed=1
+        //      during a 7-day re-analyse pass would get ZERO snapshots
+        //      (each day fails the 2+ click bar and there's no prior
+        //      history to bootstrap from) — exactly the bug that left
+        //      the Re-analyse pass surfacing ~187 CIDRs instead of ~1000.
         const hasPriorHistory =
           priorSnapshotMap.has(cidr) &&
           priorSnapshotMap.get(cidr).dates.length > 0;
+        const multiDayInWindow = byDay.size >= 2;
         const forceSnapshot =
           (day.clicks.length >= 2 && day.conv === 0) ||
-          (day.clicks.length >= 1 && hasPriorHistory);
+          (day.clicks.length >= 1 && hasPriorHistory) ||
+          (day.clicks.length >= 1 && multiDayInWindow && day.conv === 0);
 
         if (!trig.qualifies && !forceSnapshot) continue;
 
