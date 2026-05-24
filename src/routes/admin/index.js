@@ -1498,6 +1498,15 @@ router.get('/intelligence', async (req, res) => {
   // block uses statsCidrSet instead).
   let filter = null;
 
+  // Stat-card values hoisted so the past-range branch can populate them
+  // directly from its in-memory filtered set (snapshot-first means the
+  // generic countDocuments approach below doesn't apply). When the past-
+  // range branch sets these, it also flips skipGenericStats=true so the
+  // downstream Mongo-based stats block is bypassed.
+  let statCritical, statHigh, statWatching, statShown, statWatchlist;
+  let statFreqHigh, statFreqMedium, statFreqLow;
+  let skipGenericStats = false;
+
   if (rangeIsLive) {
     // ── TODAY view: read live CidrIntelligence ─────────────────────
     filter = {
@@ -1602,155 +1611,65 @@ router.get('/intelligence', async (req, res) => {
   } else {
     // ── PAST range: aggregate from CidrDailySnapshot ────────────────
     //
-    // Filtering in past-range mode is tricky because snapshots don't store
-    // score/status/cf_exported (those live on CidrIntelligence). Previously
-    // we applied those filters AFTER aggregation and pagination, which
-    // (a) broke total counts and (b) silently ignored the status filter
-    // entirely.
-    //
-    // New approach: resolve which CIDRs match the live-state filters FIRST,
-    // then restrict the snapshot aggregation to those CIDRs. Result: all
-    // filters work identically in both branches and pagination is accurate.
+    // Snapshot-first: aggregate every CIDR with snapshots in the window,
+    // then left-join live state and post-filter in memory. The previous
+    // approach pre-filtered snapshots by live-state score >= min_score,
+    // which silently excluded CIDRs that were abusive in the window but
+    // quiet today — the 7d listing showed ~187 vs the ~1000+ CIDRs in
+    // the snapshot store. Score is a current-window concept and is
+    // deliberately ignored in past-range mode; status, cf, version and
+    // frequency filters still apply (frequency uses the window-computed
+    // label that's displayed in the table, not live state's 24h label).
     const startStr = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
     const endStr   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
-
-    // Build the live-state pre-filter. We always apply status (always live-
-    // state-only) and the optional min_score / cf filters here so the
-    // snapshot aggregation only considers CIDRs that pass.
-    const liveFilter = {
-      workspace_id: ws._id,
-      status: statusQuery,
-    };
-    if (minScore > 0) liveFilter.score = { $gte: minScore };
-    if (cfFilter === 'cf_yes') liveFilter.cf_exported = true;
-    else if (cfFilter === 'cf_no') liveFilter.cf_exported = { $ne: true };
-    if (versionFilter !== 'all') liveFilter.ip_version = versionFilter;
-    applyFrequencyFilter(liveFilter, freqFilter);
-
-    const allowedCidrDocs = await CidrIntelligence.find(liveFilter)
-      .select('cidr').lean();
-    const allowedCidrs = allowedCidrDocs.map(d => d.cidr);
-    // Stat counts in past-range mode should use the same filtered CIDR
-    // set as the listing — otherwise the bucket totals can exceed the
-    // listing's "of N total" count, which is confusing. Stash it now so
-    // the stats block downstream can reuse it.
-    statsCidrSet = allowedCidrs;
-
-    // Edge case: when min_score=0 and status=all the user effectively says
-    // "show me everything." In that situation we DON'T restrict to CIDRs
-    // with a live record — there might be historical-only CIDRs with no
-    // live state yet that should still appear. We detect this by checking
-    // whether the live filter is degenerate (no constraints beyond status
-    // covering all valid values and min_score=0).
-    const isUnrestricted = (
-      minScore === 0 &&
-      cfFilter === 'all' &&
-      statusFilter === 'all' &&
-      versionFilter === 'all' &&
-      freqFilter === 'all'
-    );
 
     const snapMatch = {
       workspace_id: ws._id,
       date: { $gte: startStr, $lte: endStr },
     };
     if (versionFilter !== 'all') snapMatch.ip_version = versionFilter;
-    if (!isUnrestricted) {
-      // Restrict snapshot aggregation to CIDRs that passed the live-state
-      // filter. If no live records matched, return empty immediately —
-      // saves a wasted aggregation pass.
-      if (allowedCidrs.length === 0) {
-        entries = [];
-        totalEntries = 0;
-        lastAnalysedAt = null;
-        // Continue to render with empty entries
-      } else {
-        snapMatch.cidr = { $in: allowedCidrs };
-      }
-    }
 
-    // Sort mapping for snapshot fields. score and conv sort are slightly
-    // approximate in past-range (score comes from live, conv from window
-    // sums) but ordering is stable.
-    const SNAP_SORT_MAP = {
-      score_desc: { hits: -1 },   // score isn't in snapshot; hits is closest proxy
-      score_asc:  { hits:  1 },
-      hits_desc:  { hits: -1 },
-      hits_asc:   { hits:  1 },
-      days_desc:  { window_days_seen: -1, hits: -1 },
-      days_asc:   { window_days_seen:  1, hits: -1 },
-      conv_desc:  { conv_proxy: -1, hits: -1 },
-      conv_asc:   { conv_proxy:  1, hits: -1 },
-      last_seen_desc: { last_date_in_window: -1 },
-      last_seen_asc:  { last_date_in_window:  1 },
-    };
-    const snapSortStage = SNAP_SORT_MAP[sortParam] || SNAP_SORT_MAP.score_desc;
+    const aggregated = await CidrDailySnapshot.aggregate([
+      { $match: snapMatch },
+      // Sort by date asc so $last in $group grabs the latest day's
+      // single-day frequency label.
+      { $sort: { date: 1 } },
+      { $group: {
+          _id: '$cidr',
+          ip_version:             { $first: '$ip_version' },
+          asn_org:                { $last: '$asn_org' },
+          country:                { $last: '$country' },
+          hits:                   { $sum: '$hits' },
+          conversions:            { $sum: '$conversions' },
+          max_burst_5min:         { $max: '$max_burst_5min' },
+          rapid_duplicate_count:  { $sum: '$rapid_duplicate_count' },
+          single_ip_hammer_count: { $sum: '$single_ip_hammer_count' },
+          fake_ua_count:          { $sum: '$fake_ua_count' },
+          window_days_seen:       { $sum: 1 },
+          all_triggers:           { $push: '$triggers' },
+          all_sources:            { $addToSet: '$source' },
+          first_date_in_window:   { $min: '$date' },
+          last_date_in_window:    { $max: '$date' },
+          single_day_label:       { $last: '$frequency_label' },
+          single_day_evidence:    { $last: '$frequency_evidence' },
+          // Sum of per-day unique ad IDs across the window. Approximate
+          // — if the same ad ID spans two days the sum double-counts it,
+          // but in practice click IDs are unique per ad-click event.
+          sum_gclids:             { $sum: '$unique_gclids' },
+          sum_wbraids:            { $sum: '$unique_wbraids' },
+          sum_gbraids:            { $sum: '$unique_gbraids' },
+          sum_fbclids:            { $sum: '$unique_fbclids' },
+          sum_msclkids:           { $sum: '$unique_msclkids' },
+      }},
+    ]);
 
-    // Only run aggregation if we have something to query (skip when
-    // allowedCidrs was empty above).
-    let aggregated = [];
-    let totalSnapshot = 0;
-    if (snapMatch.cidr !== undefined || isUnrestricted) {
-      const facet = await CidrDailySnapshot.aggregate([
-        { $match: snapMatch },
-        // Sort by date asc so $last in $group grabs the latest day's
-        // single-day frequency label.
-        { $sort: { date: 1 } },
-        { $group: {
-            _id: '$cidr',
-            ip_version:             { $first: '$ip_version' },
-            asn_org:                { $last: '$asn_org' },
-            country:                { $last: '$country' },
-            hits:                   { $sum: '$hits' },
-            conversions:            { $sum: '$conversions' },
-            max_burst_5min:         { $max: '$max_burst_5min' },
-            rapid_duplicate_count:  { $sum: '$rapid_duplicate_count' },
-            single_ip_hammer_count: { $sum: '$single_ip_hammer_count' },
-            fake_ua_count:          { $sum: '$fake_ua_count' },
-            window_days_seen:       { $sum: 1 },
-            all_triggers:           { $push: '$triggers' },
-            all_sources:            { $addToSet: '$source' },
-            first_date_in_window:   { $min: '$date' },
-            last_date_in_window:    { $max: '$date' },
-            // Latest day's single-day label and evidence
-            single_day_label:       { $last: '$frequency_label' },
-            single_day_evidence:    { $last: '$frequency_evidence' },
-            // Sum of per-day unique ad IDs across the window. Note this is
-            // an APPROXIMATE total — if the same gclid spans two days the
-            // sum would double-count it. In practice ad IDs are unique per
-            // ad-click event so this is a non-issue, but the approximation
-            // is fine for label calculation anyway.
-            sum_gclids:             { $sum: '$unique_gclids' },
-            sum_wbraids:            { $sum: '$unique_wbraids' },
-            sum_gbraids:            { $sum: '$unique_gbraids' },
-            sum_fbclids:            { $sum: '$unique_fbclids' },
-            sum_msclkids:           { $sum: '$unique_msclkids' },
-        }},
-        { $addFields: {
-            conv_proxy: { $cond: [{ $gt: ['$hits', 0] },
-                                  { $divide: ['$conversions', '$hits'] }, 0] },
-        }},
-        { $facet: {
-            rows: [
-              { $sort: snapSortStage },
-              { $skip: skip },
-              { $limit: perPage },
-            ],
-            totalCount: [{ $count: 'n' }],
-        }},
-      ]);
-
-      aggregated = facet[0]?.rows || [];
-      totalSnapshot = facet[0]?.totalCount?.[0]?.n || 0;
-    }
-
-    // Enrich rows with their live record (we already loaded all of them
-    // above into allowedCidrDocs, but we need the full doc not just cidr —
-    // re-query for the visible page only to keep payload small).
-    const visibleCidrs = aggregated.map(a => a._id);
-    const liveDocs = visibleCidrs.length === 0 ? [] : await CidrIntelligence.find({
+    // Left-join live state for the full aggregated set so post-filtering
+    // by status / cf (live-only fields) is possible. At workspace scale
+    // (~1k CIDRs in a 7d window) this is a single bounded find().
+    const allCidrs = aggregated.map(a => a._id);
+    const liveDocs = allCidrs.length === 0 ? [] : await CidrIntelligence.find({
       workspace_id: ws._id,
-      cidr: { $in: visibleCidrs },
+      cidr: { $in: allCidrs },
     }).lean();
     const liveMap = new Map(liveDocs.map(d => [d.cidr, d]));
 
@@ -1758,7 +1677,7 @@ router.get('/intelligence', async (req, res) => {
     // is preserved (thresholds defined in one place).
     const { computeFrequencyLabel } = require('../../lib/cidrAnalyser');
 
-    entries = aggregated.map(a => {
+    const allEntries = aggregated.map(a => {
       const live = liveMap.get(a._id) || {};
       const triggerSet = new Set();
       for (const t of a.all_triggers) for (const x of (t || [])) triggerSet.add(x);
@@ -1819,6 +1738,8 @@ router.get('/intelligence', async (req, res) => {
         last_seen:         live.last_seen  || null,
         top_uas:           live.top_uas || [],
         sample_ips:        live.sample_ips || [],
+        // Snapshot-only CIDRs have no live record yet — surface them as
+        // 'new' so the default 'active' status filter includes them.
         status:            live.status || 'new',
         cf_exported:       !!live.cf_exported,
         // Also expose window ad-id totals for CSV export
@@ -1840,8 +1761,69 @@ router.get('/intelligence', async (req, res) => {
       };
     });
 
-    totalEntries = totalSnapshot;
+    // Post-filter by status / cf / frequency. NB: score is intentionally
+    // not applied in past-range mode (see header comment).
+    const ACTIVE_STATUSES      = ['new', 'reviewing', 'watchlist'];
+    const ALL_FLAGGED_STATUSES = ['new', 'reviewing', 'watchlist', 'blocked', 'exported'];
+    const ALL_STATUSES         = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
+    const statusMatches = (s) => {
+      if (statusFilter === 'active')      return ACTIVE_STATUSES.includes(s);
+      if (statusFilter === 'all_flagged') return ALL_FLAGGED_STATUSES.includes(s);
+      if (statusFilter === 'all')         return ALL_STATUSES.includes(s);
+      return s === statusFilter;
+    };
+    const freqMatches = (label) => {
+      if (freqFilter === 'all') return true;
+      if (freqFilter === 'labelled')   return ['high', 'medium', 'low'].includes(label);
+      if (freqFilter === 'unlabelled') return label == null;
+      return label === freqFilter;
+    };
+    const cfMatches = (exported) => {
+      if (cfFilter === 'cf_yes') return exported === true;
+      if (cfFilter === 'cf_no')  return exported !== true;
+      return true;
+    };
+    const filtered = allEntries.filter(e =>
+      statusMatches(e.status) && freqMatches(e.frequency_label) && cfMatches(e.cf_exported)
+    );
+
+    // Sort in memory. Score sort tie-breaks on hits since many snapshot-only
+    // CIDRs share score=0 and we want larger window-hits surfaced first.
+    const FREQ_RANK = { high: 3, medium: 2, low: 1 };
+    const COMPARATORS = {
+      score_desc:     (a, b) => (b.score || 0) - (a.score || 0) || (b.hit_count || 0) - (a.hit_count || 0),
+      score_asc:      (a, b) => (a.score || 0) - (b.score || 0) || (b.hit_count || 0) - (a.hit_count || 0),
+      hits_desc:      (a, b) => (b.hit_count || 0) - (a.hit_count || 0) || (b.score || 0) - (a.score || 0),
+      hits_asc:       (a, b) => (a.hit_count || 0) - (b.hit_count || 0) || (b.score || 0) - (a.score || 0),
+      days_desc:      (a, b) => (b.days_seen_count || 0) - (a.days_seen_count || 0) || (b.hit_count || 0) - (a.hit_count || 0),
+      days_asc:       (a, b) => (a.days_seen_count || 0) - (b.days_seen_count || 0) || (b.hit_count || 0) - (a.hit_count || 0),
+      conv_desc:      (a, b) => (b.conv_rate || 0) - (a.conv_rate || 0) || (b.hit_count || 0) - (a.hit_count || 0),
+      conv_asc:       (a, b) => (a.conv_rate || 0) - (b.conv_rate || 0) || (b.hit_count || 0) - (a.hit_count || 0),
+      last_seen_desc: (a, b) => String(b.last_seen_date || '').localeCompare(String(a.last_seen_date || '')),
+      last_seen_asc:  (a, b) => String(a.last_seen_date || '').localeCompare(String(b.last_seen_date || '')),
+      freq_desc:      (a, b) => ((FREQ_RANK[b.frequency_label] || 0) - (FREQ_RANK[a.frequency_label] || 0)) || ((b.score || 0) - (a.score || 0)),
+      freq_asc:       (a, b) => ((FREQ_RANK[a.frequency_label] || 0) - (FREQ_RANK[b.frequency_label] || 0)) || ((b.score || 0) - (a.score || 0)),
+    };
+    const cmp = COMPARATORS[sortParam] || COMPARATORS.score_desc;
+    filtered.sort(cmp);
+
+    totalEntries = filtered.length;
+    entries = filtered.slice(skip, skip + perPage);
     lastAnalysedAt = null;
+
+    // Compute stat cards from the post-filtered set so they match the
+    // listing exactly. Score buckets use the live-state score (0 for
+    // snapshot-only CIDRs); freq buckets use the window-computed label
+    // that's also displayed in the row. statsBase=null disables the
+    // generic stats block below for past-range mode.
+    statCritical   = filtered.filter(e => (e.score || 0) >= 80).length;
+    statHigh       = filtered.filter(e => (e.score || 0) >= 60).length;
+    statWatching   = filtered.filter(e => (e.score || 0) >= 40).length;
+    statFreqHigh   = filtered.filter(e => e.frequency_label === 'high').length;
+    statFreqMedium = filtered.filter(e => e.frequency_label === 'medium').length;
+    statFreqLow    = filtered.filter(e => e.frequency_label === 'low').length;
+    statWatchlist  = await CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'watchlist' });
+    skipGenericStats = true;
   }
 
   // ── Summary stat cards ─────────────────────────────────────────────
@@ -1866,65 +1848,17 @@ router.get('/intelligence', async (req, res) => {
   // Frequency buckets inherit the full filter chain (including minScore).
   // Watchlist is workspace-wide — it answers "X on watchlist overall"
   // regardless of which view the user is in.
-  let statCritical, statHigh, statWatching, statShown, statWatchlist;
-  let statFreqHigh, statFreqMedium, statFreqLow;
-
-  // Build the stats base filter. In live mode this is the listing's
-  // `filter`. In snapshot mode it's the equivalent live-state filter
-  // intersected with the date-window CIDR set.
+  // Build the live-mode stats base filter. Past-range mode populates the
+  // stat variables directly inside the snapshot branch (skipGenericStats=true)
+  // because its stats need the window-computed frequency labels, which the
+  // generic countDocuments approach can't see.
   let statsBase = null;
 
   if (rangeIsLive) {
     statsBase = { ...filter };
-  } else {
-    // Snapshot mode: get the set of CIDRs that have any snapshot in this
-    // date window. Then intersect with the listing's filter chain
-    // (which lives in statsCidrSet from the live pre-pass).
-    const startStr2 = rangeStart ? rangeStart.toISOString().slice(0, 10) : '0000-01-01';
-    const endStr2   = rangeEnd   ? rangeEnd.toISOString().slice(0, 10)   : '9999-12-31';
-    const winMatch = { workspace_id: ws._id, date: { $gte: startStr2, $lte: endStr2 } };
-    if (versionFilter !== 'all') winMatch.ip_version = versionFilter;
-    const winCidrDocs = await CidrDailySnapshot.aggregate([
-      { $match: winMatch },
-      { $group: { _id: '$cidr' } },
-    ]);
-    const windowCidrSet = winCidrDocs.map(d => d._id);
-
-    // Intersect window CIDRs with the listing's filtered live-state set
-    // (statsCidrSet). If statsCidrSet is empty (because isUnrestricted
-    // was true and we didn't pre-filter), fall back to the window set
-    // alone — the listing in that case is also showing window-only data.
-    let effectiveCidrs;
-    if (statsCidrSet && statsCidrSet.length > 0) {
-      const winSet = new Set(windowCidrSet);
-      effectiveCidrs = statsCidrSet.filter(c => winSet.has(c));
-    } else {
-      effectiveCidrs = windowCidrSet;
-    }
-
-    if (effectiveCidrs.length === 0) {
-      statCritical = statHigh = statWatching = 0;
-      statFreqHigh = statFreqMedium = statFreqLow = 0;
-      statWatchlist = await CidrIntelligence.countDocuments({ workspace_id: ws._id, status: 'watchlist' });
-      statsBase = null;  // marker — skip the count block below
-    } else {
-      // Mirror the listing's status filter (active by default) but bound
-      // to the intersected CIDR set.
-      statsBase = {
-        workspace_id: ws._id,
-        cidr: { $in: effectiveCidrs },
-        status: statusQuery,
-      };
-      if (versionFilter !== 'all') statsBase.ip_version = versionFilter;
-      if (cfFilter === 'cf_yes')   statsBase.cf_exported = true;
-      else if (cfFilter === 'cf_no') statsBase.cf_exported = { $ne: true };
-      // Frequency filter applies to the bucket queries via applyFrequencyFilter
-      // only when the user explicitly chose one. The freq stat cards always
-      // count per-label regardless.
-    }
   }
 
-  if (statsBase !== null) {
+  if (statsBase !== null && !skipGenericStats) {
     // For score buckets, strip the listing's min_score floor and apply
     // each bucket's own threshold. For frequency buckets, inherit the
     // listing's full filter (including any explicit frequency choice).

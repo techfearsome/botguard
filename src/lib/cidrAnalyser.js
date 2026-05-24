@@ -568,28 +568,14 @@ async function analyseWorkspace(workspaceId, opts = {}) {
 
         // Snapshot write gate.
         //
-        // A snapshot is written for (cidr, date) when ANY of:
-        //   1. The trigger detector qualified the day (existing behaviour).
-        //   2. 2+ clicks on this day with zero conversions.
-        //   3. 1+ click AND the CIDR has prior snapshot history (returning
-        //      offender — record this day's activity even if minimal).
-        //   4. 1+ click AND the CIDR has activity on 2+ days WITHIN the
-        //      current analysis window. This handles first-time backfills
-        //      of historical data where priorSnapshotMap is empty but the
-        //      CIDR has a multi-day pattern visible in this very call.
-        //      Without #4, a CIDR that hit on Monday=1, Tuesday=1, Wed=1
-        //      during a 7-day re-analyse pass would get ZERO snapshots
-        //      (each day fails the 2+ click bar and there's no prior
-        //      history to bootstrap from) — exactly the bug that left
-        //      the Re-analyse pass surfacing ~187 CIDRs instead of ~1000.
-        const hasPriorHistory =
-          priorSnapshotMap.has(cidr) &&
-          priorSnapshotMap.get(cidr).dates.length > 0;
-        const multiDayInWindow = byDay.size >= 2;
-        const forceSnapshot =
-          (day.clicks.length >= 2 && day.conv === 0) ||
-          (day.clicks.length >= 1 && hasPriorHistory) ||
-          (day.clicks.length >= 1 && multiDayInWindow && day.conv === 0);
+        // Write a snapshot for any (cidr, date) where this block sent at
+        // least one allowed click with zero conversions on that day, OR
+        // the trigger detector qualified the day on stronger signals.
+        // Rationale: a 1-click-per-day slow-drip bot pattern accumulates
+        // only across days, so each day on its own looks innocuous. The
+        // previous 2+ click gate hid those CIDRs from past-range views
+        // entirely (the 7d listing showed ~187 vs ground truth ~1000+).
+        const forceSnapshot = day.clicks.length >= 1 && day.conv === 0;
 
         if (!trig.qualifies && !forceSnapshot) continue;
 
@@ -802,7 +788,10 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       const score = Math.min(100, Object.values(signals).reduce((a, b) => a + b, 0));
 
       // Evidence flags for the dossier-creation gate below.
-      const hasZeroConvActivity = agg.hits >= 2 && agg.conv === 0;
+      // Any allowed click with zero conversions qualifies — a 1-click-per-day
+      // slow-drip bot is still a bot, and the dossier is where past-range
+      // views look for the historical record.
+      const hasZeroConvActivity = agg.hits >= 1 && agg.conv === 0;
       const hasTemporal         = agg.totalSubSecond > 0;
       const hasWebView          = agg.webviewBotCount > 0;
       const hasSlowDrip         = agg.slowDripIpCount > 0 || agg.returnTier1 > 0 || agg.returnTier2 > 0;
