@@ -228,13 +228,57 @@ router.post('/:id/toggle', async (req, res) => {
 });
 
 router.post('/:id/delete', async (req, res) => {
-  await CloudflareRule.deleteOne({ _id: req.params.id });
+  const rule = await CloudflareRule.findById(req.params.id);
+  if (rule) {
+    // If this rule came from intelligence, reset the cf_exported flag
+    // so the CIDR can be re-added later
+    if (rule.source === 'intelligence' && rule.source_ref) {
+      await CidrIntelligence.updateOne(
+        { _id: rule.source_ref },
+        { $set: { cf_exported: false, cf_exported_at: null } }
+      );
+    }
+    // Also reset by matching the CIDR value (covers rules added without source_ref)
+    if (rule.rule_type === 'cidr' && rule.value) {
+      const ws = await resolveWorkspace(req);
+      await CidrIntelligence.updateMany(
+        { workspace_id: ws._id, cidr: rule.value },
+        { $set: { cf_exported: false, cf_exported_at: null } }
+      );
+    }
+    await CloudflareRule.deleteOne({ _id: req.params.id });
+  }
   res.redirect('/admin/cloudflare');
 });
 
 router.post('/bulk-delete', async (req, res) => {
   const ids = (req.body.ids || '').split(',').filter(Boolean);
-  if (ids.length) await CloudflareRule.deleteMany({ _id: { $in: ids } });
+  if (ids.length) {
+    const ws = await resolveWorkspace(req);
+    // Find rules before deleting so we can reset cf_exported
+    const rules = await CloudflareRule.find({ _id: { $in: ids } }).lean();
+    const sourceRefIds = [];
+    const cidrValues = [];
+    for (const r of rules) {
+      if (r.source === 'intelligence' && r.source_ref) sourceRefIds.push(r.source_ref);
+      if (r.rule_type === 'cidr' && r.value) cidrValues.push(r.value);
+    }
+    // Reset cf_exported by source_ref
+    if (sourceRefIds.length) {
+      await CidrIntelligence.updateMany(
+        { _id: { $in: sourceRefIds } },
+        { $set: { cf_exported: false, cf_exported_at: null } }
+      );
+    }
+    // Also reset by CIDR value match
+    if (cidrValues.length) {
+      await CidrIntelligence.updateMany(
+        { workspace_id: ws._id, cidr: { $in: cidrValues } },
+        { $set: { cf_exported: false, cf_exported_at: null } }
+      );
+    }
+    await CloudflareRule.deleteMany({ _id: { $in: ids } });
+  }
   res.redirect(`/admin/cloudflare?flash=${ids.length}+rules+deleted`);
 });
 
