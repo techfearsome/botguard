@@ -84,7 +84,17 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
-app.use(compression());
+app.use(compression({
+  // Skip compression for Server-Sent Events streams — compression buffers
+  // the response body which prevents SSE events from reaching the client
+  // in real-time. The /admin/live/stream endpoint sets Content-Type to
+  // text/event-stream, so we detect and skip it here.
+  filter: function (req, res) {
+    if (req.path === '/admin/live/stream') return false;
+    if (res.getHeader('Content-Type')?.includes('text/event-stream')) return false;
+    return compression.filter(req, res);
+  },
+}));
 app.use(cookieParser());
 
 // Body parsing. We parse JSON for the standard content-type AND for text/plain,
