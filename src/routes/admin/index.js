@@ -1450,6 +1450,9 @@ router.get('/intelligence', async (req, res) => {
   // Cloudflare export filter
   const cfFilter = req.query.cf || 'all';
 
+  // Last seen filter — filter by when the block was last active
+  const lastSeenFilter = req.query.last_seen || 'all';
+
   // Frequency filter (HIGH/MEDIUM/LOW abuser grading, separate from score).
   // Values: 'all' (default), 'high', 'medium', 'low', 'labelled' (any of the
   // three), 'unlabelled' (CIDRs that haven't qualified for a label).
@@ -1517,6 +1520,27 @@ router.get('/intelligence', async (req, res) => {
     if (versionFilter !== 'all') filter.ip_version = versionFilter;
     if (cfFilter === 'cf_yes') filter.cf_exported = true;
     else if (cfFilter === 'cf_no') filter.cf_exported = { $ne: true };
+
+    // Last seen filter
+    if (lastSeenFilter !== 'all') {
+      const now = new Date();
+      let cutoff;
+      if (lastSeenFilter === 'today') {
+        cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      } else if (lastSeenFilter === '24h') {
+        cutoff = new Date(now - 24 * 60 * 60 * 1000);
+      } else if (lastSeenFilter === '3d') {
+        cutoff = new Date(now - 3 * 24 * 60 * 60 * 1000);
+      } else if (lastSeenFilter === '7d') {
+        cutoff = new Date(now - 7 * 24 * 60 * 60 * 1000);
+      } else if (lastSeenFilter === 'older') {
+        // Blocks NOT seen in the last 7 days
+        filter.last_seen = { $lt: new Date(now - 7 * 24 * 60 * 60 * 1000) };
+      }
+      if (cutoff && lastSeenFilter !== 'older') {
+        filter.last_seen = { $gte: cutoff };
+      }
+    }
     applyFrequencyFilter(filter, freqFilter);
 
     // Frequency labels sort by a synthetic rank — high > medium > low > null.
@@ -1893,6 +1917,7 @@ router.get('/intelligence', async (req, res) => {
     minScore,
     versionFilter,
     cfFilter,
+    lastSeenFilter,
     sortParam: typeof sortParam !== 'undefined' ? sortParam : 'score_desc',
     rangeKey,
     rangeStart,
