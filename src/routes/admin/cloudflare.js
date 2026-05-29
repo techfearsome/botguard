@@ -228,57 +228,13 @@ router.post('/:id/toggle', async (req, res) => {
 });
 
 router.post('/:id/delete', async (req, res) => {
-  const rule = await CloudflareRule.findById(req.params.id);
-  if (rule) {
-    // If this rule came from intelligence, reset the cf_exported flag
-    // so the CIDR can be re-added later
-    if (rule.source === 'intelligence' && rule.source_ref) {
-      await CidrIntelligence.updateOne(
-        { _id: rule.source_ref },
-        { $set: { cf_exported: false, cf_exported_at: null } }
-      );
-    }
-    // Also reset by matching the CIDR value (covers rules added without source_ref)
-    if (rule.rule_type === 'cidr' && rule.value) {
-      const ws = await resolveWorkspace(req);
-      await CidrIntelligence.updateMany(
-        { workspace_id: ws._id, cidr: rule.value },
-        { $set: { cf_exported: false, cf_exported_at: null } }
-      );
-    }
-    await CloudflareRule.deleteOne({ _id: req.params.id });
-  }
+  await CloudflareRule.deleteOne({ _id: req.params.id });
   res.redirect('/admin/cloudflare');
 });
 
 router.post('/bulk-delete', async (req, res) => {
   const ids = (req.body.ids || '').split(',').filter(Boolean);
-  if (ids.length) {
-    const ws = await resolveWorkspace(req);
-    // Find rules before deleting so we can reset cf_exported
-    const rules = await CloudflareRule.find({ _id: { $in: ids } }).lean();
-    const sourceRefIds = [];
-    const cidrValues = [];
-    for (const r of rules) {
-      if (r.source === 'intelligence' && r.source_ref) sourceRefIds.push(r.source_ref);
-      if (r.rule_type === 'cidr' && r.value) cidrValues.push(r.value);
-    }
-    // Reset cf_exported by source_ref
-    if (sourceRefIds.length) {
-      await CidrIntelligence.updateMany(
-        { _id: { $in: sourceRefIds } },
-        { $set: { cf_exported: false, cf_exported_at: null } }
-      );
-    }
-    // Also reset by CIDR value match
-    if (cidrValues.length) {
-      await CidrIntelligence.updateMany(
-        { workspace_id: ws._id, cidr: { $in: cidrValues } },
-        { $set: { cf_exported: false, cf_exported_at: null } }
-      );
-    }
-    await CloudflareRule.deleteMany({ _id: { $in: ids } });
-  }
+  if (ids.length) await CloudflareRule.deleteMany({ _id: { $in: ids } });
   res.redirect(`/admin/cloudflare?flash=${ids.length}+rules+deleted`);
 });
 
@@ -396,46 +352,9 @@ router.get('/logs', async (req, res) => {
   });
 });
 
-// ── Log ingestion API (called by the Worker) ─────────────────────────
-// The Worker POSTs log data here after each decision.
-// Authenticated via CF_SYNC_KEY in the x-botguard-key header.
-// This route is NOT behind requireAdmin — it's called by the Worker.
-router.post('/api/log', async (req, res) => {
-  const syncKey = process.env.CF_SYNC_KEY;
-  if (!syncKey) return res.status(503).json({ error: 'CF_SYNC_KEY not set' });
-
-  const key = req.headers['x-botguard-key'];
-  if (!key || key !== syncKey) return res.status(401).json({ error: 'unauthorized' });
-
-  const CloudflareLog = require('../../models/CloudflareLog');
-  const { Workspace } = require('../../models');
-
-  // Get workspace
-  const ws = await Workspace.findOne().lean();
-  if (!ws) return res.status(404).json({ error: 'no workspace' });
-
-  const d = req.body;
-  try {
-    await CloudflareLog.create({
-      workspace_id: ws._id,
-      ip: d.ip || '',
-      asn: d.asn || null,
-      country: d.country || '',
-      user_agent: d.user_agent || '',
-      url: d.url || '',
-      method: d.method || 'GET',
-      action: d.action || 'allow',
-      reason: d.reason || '',
-      matched_rule: d.matched_rule || '',
-      scan_mode: d.scan_mode || '',
-      processing_ms: d.processing_ms || 0,
-      ts: new Date(),
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// NOTE: The log ingestion API (/api/log) is mounted in the PARENT router
+// (admin/index.js) BEFORE the requireAdmin middleware, so the Worker can
+// reach it without admin session auth. See the comment there.
 
 // ── Export as plain text ─────────────────────────────────────────────
 router.get('/export', async (req, res) => {

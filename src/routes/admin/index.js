@@ -41,6 +41,45 @@ router.get('/login', loginPage);
 router.post('/login', loginSubmit);
 router.get('/logout', logout);
 
+// --- Cloudflare Worker log API (BEFORE requireAdmin) ---
+// The Worker authenticates with CF_SYNC_KEY, not admin sessions.
+// Must be mounted before the requireAdmin gate or the Worker gets 401.
+router.post('/cloudflare/api/log', async (req, res) => {
+  const syncKey = process.env.CF_SYNC_KEY;
+  if (!syncKey) return res.status(503).json({ error: 'CF_SYNC_KEY not set' });
+
+  const key = req.headers['x-botguard-key'];
+  if (!key || key !== syncKey) return res.status(401).json({ error: 'unauthorized' });
+
+  const CloudflareLog = require('../../models/CloudflareLog');
+
+  // Get workspace (single-tenant: just grab the first one)
+  const ws = await Workspace.findOne().lean();
+  if (!ws) return res.status(404).json({ error: 'no workspace' });
+
+  const d = req.body;
+  try {
+    await CloudflareLog.create({
+      workspace_id: ws._id,
+      ip: d.ip || '',
+      asn: d.asn || null,
+      country: d.country || '',
+      user_agent: d.user_agent || '',
+      url: d.url || '',
+      method: d.method || 'GET',
+      action: d.action || 'allow',
+      reason: d.reason || '',
+      matched_rule: d.matched_rule || '',
+      scan_mode: d.scan_mode || '',
+      processing_ms: d.processing_ms || 0,
+      ts: new Date(),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Everything below this gate requires authentication ---
 router.use(requireAdmin);
 
@@ -677,11 +716,6 @@ router.get('/live/stream', async (req, res) => {
   function send(eventName, data) {
     res.write(`event: ${eventName}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
-    // Flush the response buffer — critical behind reverse proxies
-    // (Cloudflare, Traefik/Caddy in Coolify, Docker networking).
-    // Without this, SSE data sits in the proxy buffer and never
-    // reaches the browser until the buffer fills up.
-    if (typeof res.flush === 'function') res.flush();
   }
   send('snapshot', live.snapshot(wsId));
 
@@ -707,7 +741,6 @@ router.get('/live/stream', async (req, res) => {
   // is supposed to be long-lived.
   const keepalive = setInterval(() => {
     res.write(': keepalive\n\n');
-    if (typeof res.flush === 'function') res.flush();
   }, 25000);
 
   // Clean up when the client disconnects
