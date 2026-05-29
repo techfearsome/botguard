@@ -4,11 +4,10 @@
   <div>
     <h1>Provider Blacklist</h1>
     <p class="muted">
-      Catches what ProxyCheck.io misses. Two rule types:
-      <strong>ASN rules</strong> (exact match against the ASN number ProxyCheck returns) and
-      <strong>Term rules</strong> (substring match against the provider/organization name).
-      Term rules are powerful — <code>m247</code> catches every ASN M247 ever registers,
-      <code>vpn</code> catches every provider with "VPN" in the name.
+      Catches what ProxyCheck.io misses. Three rule types:
+      <strong>ASN rules</strong> (exact match against ASN number),
+      <strong>IP/CIDR rules</strong> (single IPs, wildcards, or IP ranges), and
+      <strong>Term rules</strong> (substring match against provider/organization name).
     </p>
   </div>
 </div>
@@ -22,6 +21,9 @@
       <div style="display:flex; gap:16px; align-items:center;">
         <label style="font-weight:normal;">
           <input type="radio" name="rule_type" value="asn" checked onchange="toggleRuleType()"> ASN (number)
+        </label>
+        <label style="font-weight:normal;">
+          <input type="radio" name="rule_type" value="cidr" onchange="toggleRuleType()"> IP / CIDR (range)
         </label>
         <label style="font-weight:normal;">
           <input type="radio" name="rule_type" value="term" onchange="toggleRuleType()"> Term (provider/org match)
@@ -38,6 +40,20 @@
         <div class="form-row">
           <label>Org name (optional, descriptive)</label>
           <input type="text" name="asn_org" placeholder="e.g. M247 Europe">
+        </div>
+      </div>
+    </div>
+
+    <div id="cidr-fields" style="display:none;">
+      <div class="grid-2">
+        <div class="form-row">
+          <label>IP / CIDR range</label>
+          <input type="text" name="cidr" placeholder="e.g. 68.65.105.215, 47.144.3.*, 43.199.0.0/16, 2601:408::/32">
+          <small class="muted">Accepts: single IP, wildcard (x.x.x.*), CIDR notation (/24, /32), IPv4 and IPv6.</small>
+        </div>
+        <div class="form-row">
+          <label>Label (optional)</label>
+          <input type="text" name="asn_org" placeholder="e.g. Datacenter pool, Bot network">
         </div>
       </div>
     </div>
@@ -132,16 +148,19 @@
       <tr class="<%= e.active ? '' : 'row-inactive' %>">
         <td>
           <% if (e.asn) { %><span class="badge badge-cat-other">ASN</span>
+          <% } else if (e.cidr) { %><span class="badge" style="background:#EEEDFE; color:#534AB7;">IP/CIDR</span>
           <% } else if (e.term) { %><span class="badge badge-cat-proxy">TERM</span>
           <% } else { %>–<% } %>
         </td>
         <td>
           <% if (e.asn) { %><code>AS<%= e.asn %></code>
+          <% } else if (e.cidr) { %><code><%= e.cidr %></code>
           <% } else if (e.term) { %><code><%= e.term %></code>
           <% } %>
         </td>
         <td>
           <% if (e.term) { %><small><%= e.term_field || 'any' %></small>
+          <% } else if (e.cidr) { %><small><%= e.cidr.includes(':') ? 'IPv6' : 'IPv4' %></small>
           <% } else { %>–<% } %>
         </td>
         <td><small><%= e.asn_org || '–' %></small></td>
@@ -171,6 +190,7 @@
   function toggleRuleType() {
     var type = document.querySelector('input[name="rule_type"]:checked').value;
     document.getElementById('asn-fields').style.display  = type === 'asn'  ? '' : 'none';
+    document.getElementById('cidr-fields').style.display = type === 'cidr' ? '' : 'none';
     document.getElementById('term-fields').style.display = type === 'term' ? '' : 'none';
   }
 </script>

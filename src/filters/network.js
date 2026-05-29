@@ -112,16 +112,16 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
     enrichment.region = String(headers['cf-region']);
   }
 
-  // --- 2. ASN blacklist overlay (the ProxyCheck gap fix) ---
-  // Run lookup whenever we have ANY identifying info from ProxyCheck. Term rules can match
-  // even when ProxyCheck didn't return an ASN (some lookups give us provider but no ASN).
-  // Combine provider + organisation into the haystack since they're often complementary
-  // (provider="OVH SAS", organisation="Smtp.fr - Emailing Services" - the term might be in either).
-  if (enrichment.asn || enrichment.asn_org || enrichment.organisation) {
+  // --- 2. Blacklist overlay (ASN + CIDR + Term) ---
+  // Always run when we have an IP (for CIDR/IP rules) or identifying info from
+  // ProxyCheck (for ASN/term rules). CIDR rules must fire even when ProxyCheck
+  // returns no ASN data (timeout, unknown IP, etc).
+  if (ip || enrichment.asn || enrichment.asn_org || enrichment.organisation) {
     const haystack = [enrichment.asn_org, enrichment.organisation].filter(Boolean).join(' | ');
     const asnHit = await lookupAsn(enrichment.asn || null, workspaceId, {
       provider: haystack,
       asnOrg: enrichment.asn_org,
+      ip: ip,
     });
     if (asnHit.match) {
       flags.push(...asnHit.flags);

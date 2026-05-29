@@ -26,22 +26,70 @@ const logger = require('./logger');
 const CACHE_TTL_MS = 60_000;
 let cache = {
   byAsn: new Map(),     // asn -> entry
+  cidrRules: [],        // [{cidr, prefix_bits, ...entry}, ...]
   termRules: [],        // [{term_lower, term_field, ...entry}, ...]
   loadedAt: 0,
 };
 
+// ── CIDR matching helpers ────────────────────────────────────────────
+
+function ipv4ToInt(ip) {
+  const p = ip.split('.');
+  if (p.length !== 4) return null;
+  return ((parseInt(p[0]) << 24) | (parseInt(p[1]) << 16) |
+          (parseInt(p[2]) << 8) | parseInt(p[3])) >>> 0;
+}
+
+function ipv4InCidr(ip, rangeIp, bits) {
+  const mask = bits ? (~0 << (32 - bits)) >>> 0 : 0xFFFFFFFF;
+  const a = ipv4ToInt(ip), b = ipv4ToInt(rangeIp);
+  if (a === null || b === null) return false;
+  return (a & mask) === (b & mask);
+}
+
+function expandIPv6(ip) {
+  let parts = ip.split(':');
+  const ei = parts.indexOf('');
+  if (ei !== -1) {
+    const head = parts.slice(0, ei);
+    const tail = parts.slice(ei + 1).filter(p => p !== '');
+    parts = [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail];
+  }
+  return parts.map(p => p.padStart(4, '0')).join(':');
+}
+
+function ipv6InCidr(ip, rangeIp, bits) {
+  const n = Math.ceil(bits / 4);
+  const ipHex = expandIPv6(ip).replace(/:/g, '').substring(0, n);
+  const rangeHex = expandIPv6(rangeIp).replace(/:/g, '').substring(0, n);
+  return ipHex === rangeHex;
+}
+
+function ipInCidr(visitorIp, cidrString) {
+  if (!visitorIp || !cidrString) return false;
+  const [range, bitsStr] = cidrString.split('/');
+  const bits = parseInt(bitsStr || (range.includes(':') ? '128' : '32'));
+  const isV6 = visitorIp.includes(':');
+  const cidrIsV6 = range.includes(':');
+  if (isV6 !== cidrIsV6) return false; // can't compare v4 to v6
+  if (isV6) return ipv6InCidr(visitorIp, range, bits);
+  return ipv4InCidr(visitorIp, range, bits);
+}
+
 async function loadCache() {
   const entries = await AsnBlacklist.find({ active: true }).lean();
   const byAsn = new Map();
+  const cidrRules = [];
   const termRules = [];
 
   for (const e of entries) {
     if (e.asn) {
       const existing = byAsn.get(e.asn);
-      // Workspace-specific entries win over globals
       if (!existing || (e.workspace_id && !existing.workspace_id)) {
         byAsn.set(e.asn, e);
       }
+    } else if (e.cidr) {
+      cidrRules.push(e);
     } else if (e.term) {
       termRules.push({
         ...e,
@@ -49,11 +97,12 @@ async function loadCache() {
         _term_field: e.term_field || 'any',
       });
     }
-    // CIDR rules ignored for now - reserved for week 3
   }
 
-  cache = { byAsn, termRules, loadedAt: Date.now() };
-  logger.info('asn_blacklist_loaded', { asn_rules: byAsn.size, term_rules: termRules.length });
+  cache = { byAsn, cidrRules, termRules, loadedAt: Date.now() };
+  logger.info('asn_blacklist_loaded', {
+    asn_rules: byAsn.size, cidr_rules: cidrRules.length, term_rules: termRules.length,
+  });
 }
 
 async function ensureCache() {
@@ -84,11 +133,9 @@ async function ensureCache() {
  * Multi-rule policy: if both an ASN rule and a term rule match, the ASN rule wins
  * (more specific). The term rule still gets a flag so you can see it would have hit.
  */
-async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '' } = {}) {
+async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '', ip = '' } = {}) {
   await ensureCache();
 
-  // Build the haystack for term matching from whatever we got.
-  // We dedupe and lowercase once.
   const providerStr = String(provider || '').toLowerCase();
   const orgStr = String(asnOrg || '').toLowerCase();
 
@@ -102,8 +149,20 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '' }
     }
   }
 
-  // --- 2. Term scan (always runs; we want to know if a term would have matched even
-  //        when ASN already won, for visibility flags) ---
+  // --- 2. CIDR/IP match ---
+  let cidrHit = null;
+  if (ip && cache.cidrRules.length > 0) {
+    for (const rule of cache.cidrRules) {
+      if (rule.workspace_id && workspaceId &&
+          rule.workspace_id.toString() !== workspaceId.toString()) continue;
+      if (ipInCidr(ip, rule.cidr)) {
+        cidrHit = rule;
+        break; // first match wins
+      }
+    }
+  }
+
+  // --- 3. Term scan ---
   const termHits = [];
   for (const rule of cache.termRules) {
     // Workspace scope check
@@ -123,8 +182,8 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '' }
     if (matched) termHits.push(rule);
   }
 
-  // --- 3. Pick the winning rule ---
-  // Priority: ASN rule > term rule with hard_block > term rule with high > etc.
+  // --- 4. Pick the winning rule ---
+  // Priority: ASN rule > CIDR rule > term rule with hard_block > term rule with high > etc.
   const severityRank = { hard_block: 4, high: 3, medium: 2, low: 1 };
   let winner = null;
   let matchKind = null;
@@ -134,6 +193,10 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '' }
     winner = asnHit;
     matchKind = 'asn';
     matchedValue = asnHit.asn;
+  } else if (cidrHit) {
+    winner = cidrHit;
+    matchKind = 'cidr';
+    matchedValue = cidrHit.cidr;
   } else if (termHits.length > 0) {
     termHits.sort((a, b) =>
       (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0) ||
@@ -146,7 +209,7 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '' }
     return { match: false, score_weight: 0, flags: [] };
   }
 
-  // --- 4. Increment hit counters (fire-and-forget) ---
+  // --- 5. Increment hit counters (fire-and-forget) ---
   for (const r of [winner, ...(asnHit && termHits.length ? termHits : [])]) {
     if (!r) continue;
     AsnBlacklist.updateOne(
@@ -155,13 +218,16 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '' }
     ).catch(() => {});
   }
 
-  // --- 5. Build flags ---
+  // --- 6. Build flags ---
   const flags = [
-    `${matchKind === 'asn' ? 'asn' : 'term'}_blacklist_${winner.category}`,
+    `${matchKind}_blacklist_${winner.category}`,
     `asn_${winner.severity}`,
   ];
   if (matchKind === 'term') {
     flags.push(`term_match:${winner._term_lower}`);
+  }
+  if (matchKind === 'cidr') {
+    flags.push(`cidr_match:${winner.cidr}`);
   }
   // Note when an ASN rule won but a term would also have matched
   if (matchKind === 'asn' && termHits.length > 0) {
