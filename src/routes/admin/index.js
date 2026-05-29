@@ -1405,6 +1405,7 @@ router.get('/firewall/full.csv', async (req, res) => {
 // ---------- CIDR Intelligence (bot subnet detection) ----------
 
 const CidrIntelligence = require('../../models/CidrIntelligence');
+const CloudflareRule = require('../../models/CloudflareRule');
 
 // Summary endpoint — polled every 30s by the live view for new detections.
 //
@@ -2600,6 +2601,139 @@ router.post('/intelligence/mark-exported', async (req, res) => {
   );
   res.redirect('/admin/intelligence');
 });
+
+// ── Intelligence settings (auto-export to Cloudflare) ────────────────
+
+router.get('/intelligence/settings', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const autoCf = ws.settings?.intelligence_auto_cf || {
+    enabled: false, min_score: 60, min_days: 2, min_hits: 5, auto_sync: true,
+  };
+
+  // Count how many CIDRs would qualify under current settings
+  const qualifyingCount = await CidrIntelligence.countDocuments({
+    workspace_id: ws._id,
+    score: { $gte: autoCf.min_score },
+    days_seen_count: { $gte: autoCf.min_days },
+    hit_count: { $gte: autoCf.min_hits },
+    cf_exported: { $ne: true },
+    status: { $in: ['new', 'reviewing', 'blocked', 'exported'] },
+  });
+
+  const cfRuleCount = await CloudflareRule.countDocuments({
+    workspace_id: ws._id, active: true,
+  });
+
+  res.render('admin/intelligence_settings', {
+    ws, page: 'intelligence', autoCf, qualifyingCount, cfRuleCount,
+    flash: req.query.flash || '',
+  });
+});
+
+router.post('/intelligence/settings', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const body = req.body;
+
+  await ws.constructor.updateOne(
+    { _id: ws._id },
+    { $set: {
+      'settings.intelligence_auto_cf.enabled':   body.enabled === 'on',
+      'settings.intelligence_auto_cf.min_score':  parseInt(body.min_score, 10) || 60,
+      'settings.intelligence_auto_cf.min_days':   parseInt(body.min_days, 10) || 2,
+      'settings.intelligence_auto_cf.min_hits':   parseInt(body.min_hits, 10) || 5,
+      'settings.intelligence_auto_cf.auto_sync':  body.auto_sync === 'on',
+    }}
+  );
+  res.redirect('/admin/intelligence/settings?flash=Settings+saved');
+});
+
+// Run auto-export now (manual trigger)
+router.post('/intelligence/settings/run-auto-export', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const autoCf = ws.settings?.intelligence_auto_cf || {};
+  if (!autoCf.enabled) {
+    return res.redirect('/admin/intelligence/settings?flash=Auto-export+is+disabled');
+  }
+
+  try {
+    const count = await runAutoExport(ws);
+    res.redirect(`/admin/intelligence/settings?flash=Auto-exported+${count}+CIDRs+to+Cloudflare`);
+  } catch (err) {
+    res.redirect(`/admin/intelligence/settings?flash=Error:+${encodeURIComponent(err.message)}`);
+  }
+});
+
+/**
+ * Auto-export qualifying CIDRs to Cloudflare.
+ * Called from settings page (manual) or from the cidrAnalyser interval.
+ */
+async function runAutoExport(ws) {
+  const autoCf = ws.settings?.intelligence_auto_cf || {};
+  if (!autoCf.enabled) return 0;
+
+  const qualifying = await CidrIntelligence.find({
+    workspace_id: ws._id,
+    score: { $gte: autoCf.min_score || 60 },
+    days_seen_count: { $gte: autoCf.min_days || 2 },
+    hit_count: { $gte: autoCf.min_hits || 5 },
+    cf_exported: { $ne: true },
+    status: { $in: ['new', 'reviewing', 'blocked', 'exported'] },
+  }).lean();
+
+  let added = 0;
+  for (const entry of qualifying) {
+    // Check if rule already exists in Cloudflare
+    const exists = await CloudflareRule.findOne({
+      workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
+    });
+    if (exists) {
+      // Just mark as cf_exported
+      await CidrIntelligence.updateOne(
+        { _id: entry._id },
+        { $set: { cf_exported: true, cf_exported_at: new Date() } }
+      );
+      continue;
+    }
+
+    try {
+      await CloudflareRule.create({
+        workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
+        action: 'block', label: entry.asn_org || '',
+        notes: `Auto-exported: score ${entry.score}, ${entry.hit_count} hits, ${entry.days_seen_count} days`,
+        source: 'intelligence', source_ref: entry._id.toString(), active: true,
+      });
+      await CidrIntelligence.updateOne(
+        { _id: entry._id },
+        { $set: { cf_exported: true, cf_exported_at: new Date() } }
+      );
+      added++;
+    } catch (err) {
+      // Duplicate or other error — skip
+    }
+  }
+
+  // Auto-sync to Cloudflare KV if enabled
+  if (added > 0 && autoCf.auto_sync) {
+    try {
+      const { syncToCloudflareKV } = require('../../lib/cloudflareSync');
+      await syncToCloudflareKV(ws._id);
+    } catch (e) { /* non-fatal */ }
+  }
+
+  // Update last run stats
+  await ws.constructor.updateOne(
+    { _id: ws._id },
+    { $set: {
+      'settings.intelligence_auto_cf.last_run_at': new Date(),
+      'settings.intelligence_auto_cf.last_exported_count': added,
+    }}
+  );
+
+  return added;
+}
+
+// Export for use by cidrAnalyser interval
+router._runAutoExport = runAutoExport;
 
 // ---------- Settings (API keys, password info) ----------
 router.get('/settings', async (req, res) => {

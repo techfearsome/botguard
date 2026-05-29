@@ -33,6 +33,7 @@ function fmtRate(rate) {
   <div style="display:flex; gap:6px; align-items:flex-start; flex-wrap:wrap;">
     <a href="/admin/intelligence/history" class="btn" title="Browse historical snapshots">History</a>
     <a href="/admin/intelligence/seed" class="btn" title="Import known-bad CIDRs from external lists">Seed</a>
+    <a href="/admin/intelligence/settings" class="btn" title="Auto-export settings">⚙ Settings</a>
     <form method="POST" action="/admin/intelligence/run-now" style="display:inline">
       <button type="submit" class="btn" title="Trigger analysis run immediately">↻ Run Now</button>
     </form>
@@ -121,15 +122,6 @@ function fmtRate(rate) {
       <option value="all"    <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'all'    ? 'selected' : '' %>>All (CF)</option>
       <option value="cf_yes" <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'cf_yes' ? 'selected' : '' %>>In Cloudflare</option>
       <option value="cf_no"  <%= (typeof cfFilter !== 'undefined' ? cfFilter : 'all') === 'cf_no'  ? 'selected' : '' %>>Not in Cloudflare</option>
-    </select>
-    <% const _ls = (typeof lastSeenFilter !== 'undefined') ? lastSeenFilter : 'all'; %>
-    <select name="last_seen" style="width:auto; min-width:130px; max-width:170px; padding:6px 10px; font-size:13px;" title="Filter by when the block was last active">
-      <option value="all"   <%= _ls === 'all'   ? 'selected' : '' %>>All time</option>
-      <option value="today" <%= _ls === 'today' ? 'selected' : '' %>>Active today</option>
-      <option value="24h"   <%= _ls === '24h'   ? 'selected' : '' %>>Last 24 hours</option>
-      <option value="3d"    <%= _ls === '3d'    ? 'selected' : '' %>>Last 3 days</option>
-      <option value="7d"    <%= _ls === '7d'    ? 'selected' : '' %>>Last 7 days</option>
-      <option value="older" <%= _ls === 'older' ? 'selected' : '' %>>Older than 7 days</option>
     </select>
     <%# Frequency-grading filter. Independent of score. HIGH/MEDIUM/LOW
         labels are assigned by cidrAnalyser based on clicks + unique ad IDs
@@ -273,13 +265,13 @@ function fmtRate(rate) {
   // Build base URL preserving current filters
   const sp = typeof sortParam !== 'undefined' ? sortParam : 'score_desc';
   const _fq2 = (typeof freqFilter !== 'undefined') ? freqFilter : 'all';
-  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=${_fq2}&last_seen=${_ls}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${sp}`;
+  const paginationBase = `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=${_fq2}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${sp}`;
   function pgUrl(p, pp) { return `${paginationBase}&page=${p}&per_page=${pp}`; }
   // Sort URL builder: clicking a header toggles between asc/desc
   function sortUrl(field) {
     const cur = sp;
     const next = cur === field + '_desc' ? field + '_asc' : field + '_desc';
-    return `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=${_fq2}&last_seen=${_ls}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${next}&per_page=${pp}`;
+    return `/admin/intelligence?status=${statusFilter}&min_score=${minScore}&version=${versionFilter}&cf=${typeof cfFilter !== 'undefined' ? cfFilter : 'all'}&frequency=${_fq2}&range=${currentRange}&date_from=${dFrom}&date_to=${dTo}&sort=${next}&per_page=${pp}`;
   }
   function sortArrow(field) {
     if (sp === field + '_desc') return ' ▼';

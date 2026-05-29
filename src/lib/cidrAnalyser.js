@@ -923,6 +923,64 @@ async function runAnalysis(opts = {}) {
         intelligence_upserted: totalUpserted, window_hours: windowHours,
       });
     }
+
+    // Auto-export qualifying CIDRs to Cloudflare (if enabled)
+    for (const ws of workspaces) {
+      try {
+        const fullWs = await Workspace.findById(ws._id).lean();
+        const autoCf = fullWs?.settings?.intelligence_auto_cf;
+        if (!autoCf?.enabled) continue;
+
+        const CloudflareRule = require('../models/CloudflareRule');
+        const CidrIntelligence = require('../models/CidrIntelligence');
+
+        const qualifying = await CidrIntelligence.find({
+          workspace_id: ws._id,
+          score: { $gte: autoCf.min_score || 60 },
+          days_seen_count: { $gte: autoCf.min_days || 2 },
+          hit_count: { $gte: autoCf.min_hits || 5 },
+          cf_exported: { $ne: true },
+          status: { $in: ['new', 'reviewing', 'blocked', 'exported'] },
+        }).lean();
+
+        let autoAdded = 0;
+        for (const entry of qualifying) {
+          const exists = await CloudflareRule.findOne({
+            workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
+          });
+          if (exists) {
+            await CidrIntelligence.updateOne({ _id: entry._id }, { $set: { cf_exported: true, cf_exported_at: new Date() } });
+            continue;
+          }
+          try {
+            await CloudflareRule.create({
+              workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
+              action: 'block', label: entry.asn_org || '',
+              notes: `Auto: score ${entry.score}, ${entry.hit_count} hits, ${entry.days_seen_count}d`,
+              source: 'intelligence', source_ref: entry._id.toString(), active: true,
+            });
+            await CidrIntelligence.updateOne({ _id: entry._id }, { $set: { cf_exported: true, cf_exported_at: new Date() } });
+            autoAdded++;
+          } catch (e) { /* dup or error — skip */ }
+        }
+
+        if (autoAdded > 0) {
+          logger.info('auto_cf_export', { workspace: ws.slug, added: autoAdded });
+          if (autoCf.auto_sync) {
+            try {
+              const { syncToCloudflareKV } = require('./cloudflareSync');
+              await syncToCloudflareKV(ws._id);
+            } catch (e) { /* non-fatal */ }
+          }
+          await Workspace.updateOne({ _id: ws._id }, { $set: {
+            'settings.intelligence_auto_cf.last_run_at': new Date(),
+            'settings.intelligence_auto_cf.last_exported_count': autoAdded,
+          }});
+        }
+      } catch (e) {
+        logger.warn('auto_cf_export_error', { workspace: ws.slug, err: e.message });
+      }
+    }
   } catch (err) {
     logger.warn('cidr_analysis_error', { err: err.message });
   } finally { workerRunning = false; }
