@@ -1104,7 +1104,9 @@ router.post('/asn', async (req, res) => {
     const ruleType = body.rule_type || 'asn';
     const doc = {
       workspace_id: body.scope === 'global' ? null : ws._id,
-      asn_org: body.asn_org || '',
+      asn_org: ruleType === 'cidr'
+        ? String(body.cidr_label || '').trim()
+        : String(Array.isArray(body.asn_org) ? body.asn_org[0] : (body.asn_org || '')).trim(),
       category: body.category,
       severity: body.severity || 'high',
       score_weight: Number(body.score_weight) || 50,
