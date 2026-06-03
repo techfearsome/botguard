@@ -1,46 +1,214 @@
 <!DOCTYPE html>
-<%
-  // Login uses the same theme system as the admin pages, but since the user
-  // isn't authenticated yet we don't have a workspace - default to dark.
-  // (We could persist a public theme preference cookie later if desired.)
-%>
-<html lang="en" data-theme="dark">
+<html lang="en-US">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BotGuard — Sign in</title>
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/admin.css') %>">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Log In &lsaquo; Blog &mdash; WordPress</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #f0f0f1;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+      font-size: 13px;
+      color: #3c434a;
+      min-height: 100vh;
+    }
+    .login {
+      width: 100%;
+      max-width: 320px;
+      margin: 0 auto;
+      padding: 8% 0 0;
+    }
+    .login h1 {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .login h1 a {
+      display: inline-block;
+      width: 84px;
+      height: 84px;
+      text-indent: -9999px;
+      overflow: hidden;
+      background-image: url('data:image/svg+xml;charset=UTF-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 122.5 122.5"><g fill="%233858e9"><path d="M8.7 61.3c0 20.8 12.1 38.7 29.6 47.3L13 37.5c-2.8 7.2-4.3 15.2-4.3 23.8zM96.7 58.5c0-6.5-2.3-11-4.3-14.5-2.7-4.3-5.2-8-5.2-12.3 0-4.8 3.7-9.3 8.8-9.3h.7a53 53 0 0 0-79.3 6h4.2c6.8 0 17.3-.8 17.3-.8 3.5-.2 3.9 4.9.4 5.3 0 0-3.5.4-7.4.6l23.6 70.1 14.2-42.5L60 33.5c-3.5-.2-6.8-.6-6.8-.6-3.5-.2-3.1-5.5.4-5.3 0 0 10.7.8 17 .8 6.8 0 17.3-.8 17.3-.8 3.5-.2 3.9 4.9.4 5.3 0 0-3.5.4-7.4.6l23.4 69.6 6.5-21.6c2.8-8.8 4.9-15 4.9-20.5zM61.3 64.5l-19.4 56.4a53 53 0 0 0 32.6-1.4l-.5-1-12.7-34zM107.1 34.3a42.3 42.3 0 0 1-3 22.7l-24.2 70a53.1 53.1 0 0 0 27.2-70.7z"/><path d="M61.3 0a61.3 61.3 0 1 0 0 122.7A61.3 61.3 0 0 0 61.3 0zm0 119.7A58.5 58.5 0 1 1 61.3 3a58.5 58.5 0 0 1 0 116.7z"/></g></svg>');
+      background-size: 84px;
+      background-repeat: no-repeat;
+      background-position: center;
+    }
+    #loginform {
+      background: #fff;
+      border: 1px solid #c3c4c7;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.04);
+      padding: 26px 24px 34px;
+      margin-bottom: 24px;
+    }
+    .login-title {
+      display: none;
+    }
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 3px;
+      color: #1d2327;
+    }
+    .user-pass-wrap {
+      margin-bottom: 16px;
+    }
+    input[type="text"],
+    input[type="password"] {
+      display: block;
+      width: 100%;
+      padding: 3px 5px;
+      font-size: 24px;
+      font-family: inherit;
+      line-height: 1.3;
+      color: #2c3338;
+      background: #fff;
+      border: 1px solid #8c8f94;
+      border-radius: 4px;
+      margin: 2px 6px 16px 0;
+      min-height: 40px;
+    }
+    input[type="text"]:focus,
+    input[type="password"]:focus {
+      border-color: #2271b1;
+      box-shadow: 0 0 0 1px #2271b1;
+      outline: 2px solid transparent;
+    }
+    .forgetmenot {
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .forgetmenot label {
+      font-size: 13px;
+      font-weight: 400;
+      cursor: pointer;
+    }
+    .forgetmenot input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+    }
+    .submit {
+      text-align: right;
+    }
+    .button-primary {
+      display: inline-block;
+      background: #2271b1;
+      border: 1px solid #2271b1;
+      border-radius: 3px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 2.15;
+      padding: 0 12px;
+      cursor: pointer;
+      min-height: 32px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .button-primary:hover {
+      background: #135e96;
+      border-color: #135e96;
+    }
+    .button-primary:focus {
+      background: #135e96;
+      border-color: #043959;
+      box-shadow: 0 0 0 1px #043959;
+      outline: 2px solid transparent;
+    }
+    .login-error {
+      background: #fff;
+      border: 1px solid #c3c4c7;
+      border-left: 4px solid #d63638;
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: #3c434a;
+    }
+    .login-error strong {
+      font-weight: 600;
+    }
+    #nav, #backtoblog {
+      text-align: center;
+      margin: 0 auto;
+      padding: 0 24px 12px;
+      font-size: 13px;
+    }
+    #nav a, #backtoblog a {
+      color: #50575e;
+      text-decoration: none;
+    }
+    #nav a:hover, #backtoblog a:hover {
+      color: #2271b1;
+    }
+    .privacy-policy-page-link {
+      text-align: center;
+      margin-top: 16px;
+    }
+    .privacy-policy-page-link a {
+      font-size: 12px;
+      color: #787c82;
+      text-decoration: none;
+    }
+    .clear {
+      clear: both;
+    }
+  </style>
 </head>
-<body>
-  <div class="login-shell">
-    <form class="login-card" method="POST" action="/admin/login" autocomplete="on">
-      <div class="login-brand">
-        <span class="nav-brand-mark" aria-hidden="true"></span>
-        <strong>BotGuard</strong>
-      </div>
-      <h1>Sign in</h1>
-      <p class="login-sub">Admin access for traffic protection &amp; analytics.</p>
+<body class="login wp-core-ui">
+  <div class="login">
+    <h1><a href="https://wordpress.org/" title="Powered by WordPress">Blog</a></h1>
 
-      <% if (error) { %>
-        <div class="login-err" role="alert">
-          <%= error === 'invalid' ? 'Invalid username or password.' : 'Login failed. Please try again.' %>
-        </div>
-      <% } %>
+    <% if (error) { %>
+    <div class="login-error" id="login_error">
+      <strong>Error:</strong> The username or password you entered is incorrect.
+      <a href="/admin/login">Lost your password?</a>
+    </div>
+    <% } %>
 
+    <form name="loginform" id="loginform" action="/admin/login" method="post">
       <input type="hidden" name="next" value="<%= next_url %>">
 
-      <div class="form-row">
-        <label for="login-username">Username</label>
-        <input id="login-username" type="text" name="username" required autocomplete="username" autofocus>
+      <div class="user-pass-wrap">
+        <label for="user_login">Username or Email Address</label>
+        <input type="text" name="username" id="user_login" class="input" value="" size="20" autocapitalize="off" autocomplete="username" required autofocus>
       </div>
 
-      <div class="form-row">
-        <label for="login-password">Password</label>
-        <input id="login-password" type="password" name="password" required autocomplete="current-password">
+      <div class="user-pass-wrap">
+        <div class="wp-pwd">
+          <label for="user_pass">Password</label>
+          <input type="password" name="password" id="user_pass" class="input" value="" size="20" autocomplete="current-password" spellcheck="false" required>
+        </div>
       </div>
 
-      <button type="submit" class="btn btn-primary">Sign in</button>
+      <div class="forgetmenot">
+        <input name="rememberme" type="checkbox" id="rememberme" value="forever">
+        <label for="rememberme">Remember Me</label>
+      </div>
+
+      <p class="submit">
+        <input type="submit" name="wp-submit" id="wp-submit" class="button button-primary button-large" value="Log In">
+      </p>
     </form>
+
+    <p id="nav">
+      <a href="/admin/login">Lost your password?</a>
+    </p>
+
+    <p id="backtoblog">
+      <a href="/">&larr; Go to Blog</a>
+    </p>
+
+    <div class="privacy-policy-page-link">
+      <a href="/">Privacy Policy</a>
+    </div>
   </div>
+  <div class="clear"></div>
 </body>
 </html>
