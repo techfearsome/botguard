@@ -251,15 +251,20 @@ router.get('/readme.html', (req, res) => {
 // ----------------------------------------------------------------------------
 
 /**
- * Set the X-Pingback header on a response. Stock WP sends this on every
- * frontend page response, advertising the XML-RPC endpoint for legacy
- * trackback/pingback functionality. Even if the host's RPC system is
- * dormant, the header is still emitted - so we do too.
+ * Set WordPress headers on a response. Stock WP sends these on every
+ * frontend page response:
+ *   - X-Pingback: advertising the XML-RPC endpoint
+ *   - Link: REST API discovery (rel="https://api.w.org/")
+ *
+ * These are the two headers fingerprinters (Wappalyzer, BuiltWith) check
+ * first before even looking at the HTML body.
  */
 function setPingbackHeader(req, res) {
   const host = req.hostname || req.get('host') || 'localhost';
   const protocol = req.protocol || 'https';
   res.set('X-Pingback', `${protocol}://${host}/xmlrpc.php`);
+  // REST API discovery — WP sends this on EVERY page, not just /wp-json/
+  res.set('Link', `<${protocol}://${host}/wp-json/>; rel="https://api.w.org/"`);
 }
 
 /**

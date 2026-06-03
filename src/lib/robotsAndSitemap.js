@@ -147,8 +147,9 @@ function buildRobotsTxt(opts) {
   }
 
   // Single blank line + Sitemap directive at the bottom (WP convention).
+  // WordPress 5.5+ points to /wp-sitemap.xml, not /sitemap.xml.
   lines.push('');
-  lines.push(`Sitemap: ${protocol}://${host}/sitemap.xml`);
+  lines.push(`Sitemap: ${protocol}://${host}/wp-sitemap.xml`);
 
   return lines.join('\n') + '\n';
 }
@@ -257,11 +258,107 @@ async function listIndexableCampaigns(workspaceId) {
   return Campaign.find(filter).select('slug root_path updated_at').lean();
 }
 
+/**
+ * Build WordPress 5.5+ core sitemap INDEX. This is what `/wp-sitemap.xml` returns.
+ * Points to sub-sitemaps for pages and posts.
+ *
+ * WordPress format:
+ *   <?xml version="1.0" encoding="UTF-8"?>
+ *   <?xml-stylesheet type="text/xsl" href="/wp-sitemap-index.xsl" ?>
+ *   <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+ *     <sitemap><loc>https://example.com/wp-sitemap-posts-page-1.xml</loc></sitemap>
+ *     <sitemap><loc>https://example.com/wp-sitemap-posts-post-1.xml</loc></sitemap>
+ *   </sitemapindex>
+ */
+function buildWpSitemapIndex(opts) {
+  const { host, protocol = 'https' } = opts;
+  const base = `${protocol}://${host}`;
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml-stylesheet type="text/xsl" href="/wp-sitemap-index.xsl" ?>',
+    '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    `\t<sitemap>`,
+    `\t\t<loc>${escapeXml(base)}/wp-sitemap-posts-page-1.xml</loc>`,
+    `\t</sitemap>`,
+    `\t<sitemap>`,
+    `\t\t<loc>${escapeXml(base)}/wp-sitemap-posts-post-1.xml</loc>`,
+    `\t</sitemap>`,
+    '</sitemapindex>',
+  ];
+  return xml.join('\n') + '\n';
+}
+
+/**
+ * Build a WordPress-style sub-sitemap for pages.
+ * Returns XML matching `/wp-sitemap-posts-page-1.xml` format.
+ */
+function buildWpSitemapPages(opts) {
+  const { host, protocol = 'https', publicPages = [] } = opts;
+  const base = `${protocol}://${host}`;
+
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml-stylesheet type="text/xsl" href="/wp-sitemap.xsl" ?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+  ];
+
+  for (const page of publicPages) {
+    if (!page || !page.slug) continue;
+    if (page.meta && page.meta.noindex) continue;
+    let url;
+    if (page.slug === 'home') url = `${base}/`;
+    else if (page.slug === 'privacy') url = `${base}/privacy`;
+    else if (page.slug === 'terms') url = `${base}/terms`;
+    else url = `${base}/p/${encodeURIComponent(page.slug)}`;
+    const lastmod = page.updated_at ? new Date(page.updated_at).toISOString().slice(0, 10) : null;
+    xml.push('\t<url>');
+    xml.push(`\t\t<loc>${escapeXml(url)}</loc>`);
+    if (lastmod) xml.push(`\t\t<lastmod>${lastmod}</lastmod>`);
+    xml.push('\t</url>');
+  }
+
+  xml.push('</urlset>');
+  return xml.join('\n') + '\n';
+}
+
+/**
+ * Build a WordPress-style sub-sitemap for "posts" (campaigns).
+ * Returns XML matching `/wp-sitemap-posts-post-1.xml` format.
+ */
+function buildWpSitemapPosts(opts) {
+  const { host, protocol = 'https', indexableCampaigns = [] } = opts;
+  const base = `${protocol}://${host}`;
+
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml-stylesheet type="text/xsl" href="/wp-sitemap.xsl" ?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+  ];
+
+  for (const c of indexableCampaigns) {
+    if (!c || !c.slug) continue;
+    const url = c.root_path
+      ? `${base}/${encodeURIComponent(c.root_path)}`
+      : `${base}/go/${encodeURIComponent(c.slug)}`;
+    const lastmod = c.updated_at ? new Date(c.updated_at).toISOString().slice(0, 10) : null;
+    xml.push('\t<url>');
+    xml.push(`\t\t<loc>${escapeXml(url)}</loc>`);
+    if (lastmod) xml.push(`\t\t<lastmod>${lastmod}</lastmod>`);
+    xml.push('\t</url>');
+  }
+
+  xml.push('</urlset>');
+  return xml.join('\n') + '\n';
+}
+
 module.exports = {
   buildRobotsTxt,
   buildSitemapXml,
+  buildWpSitemapIndex,
+  buildWpSitemapPages,
+  buildWpSitemapPosts,
   listDisallowedRootPaths,
   listIndexableCampaigns,
-  AI_CRAWLERS,        // exported for tests
-  INTERNAL_PATHS,     // exported for tests
+  AI_CRAWLERS,
+  INTERNAL_PATHS,
 };
