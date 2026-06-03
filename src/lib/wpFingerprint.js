@@ -202,9 +202,14 @@ router.post('/xmlrpc.php', (req, res) => {
 // thanks to its rewrite rules, and Express's default trailing-slash behavior
 // makes a 301 redirect impossible to cleanly add for just one of these.
 router.get(['/wp-json', '/wp-json/'], (req, res) => {
-  const host = req.hostname || req.get('host') || 'localhost';
-  const protocol = req.protocol || 'https';
-  const base = `${protocol}://${host}`;
+  let base;
+  if (process.env.BASE_URL) {
+    base = process.env.BASE_URL.replace(/\/$/, '');
+  } else {
+    const host = req.hostname || req.get('host') || 'localhost';
+    const protocol = req.protocol || 'https';
+    base = `${protocol}://${host}`;
+  }
   res.set('Link', `<${base}/wp-json/>; rel="https://api.w.org/"`);
   res.type('application/json').send(JSON.stringify({
     name: '',
@@ -260,11 +265,16 @@ router.get('/readme.html', (req, res) => {
  * first before even looking at the HTML body.
  */
 function setPingbackHeader(req, res) {
-  const host = req.hostname || req.get('host') || 'localhost';
-  const protocol = req.protocol || 'https';
-  res.set('X-Pingback', `${protocol}://${host}/xmlrpc.php`);
-  // REST API discovery — WP sends this on EVERY page, not just /wp-json/
-  res.set('Link', `<${protocol}://${host}/wp-json/>; rel="https://api.w.org/"`);
+  let base;
+  if (process.env.BASE_URL) {
+    base = process.env.BASE_URL.replace(/\/$/, '');
+  } else {
+    const host = req.hostname || req.get('host') || 'localhost';
+    const protocol = req.protocol || 'https';
+    base = `${protocol}://${host}`;
+  }
+  res.set('X-Pingback', `${base}/xmlrpc.php`);
+  res.set('Link', `<${base}/wp-json/>; rel="https://api.w.org/"`);
 }
 
 /**

@@ -152,10 +152,27 @@ let sitemapCache = { ts: 0, body: '', forHost: '' };
 const ROBOTS_CACHE_MS = 5 * 60 * 1000;
 const SITEMAP_CACHE_MS = 5 * 60 * 1000;
 
+/**
+ * Derive host and protocol from BASE_URL env var.
+ * Falls back to request headers if BASE_URL is not set.
+ */
+function getBaseInfo(req) {
+  const baseUrl = process.env.BASE_URL;
+  if (baseUrl) {
+    try {
+      const u = new URL(baseUrl);
+      return { host: u.host, protocol: u.protocol.replace(':', '') };
+    } catch (e) { /* fall through */ }
+  }
+  return {
+    host: req.hostname || req.get('host') || 'localhost',
+    protocol: req.protocol || 'https',
+  };
+}
+
 router.get('/robots.txt', async (req, res) => {
   try {
-    const host = req.hostname || req.get('host') || 'localhost';
-    const protocol = req.protocol || 'https';
+    const { host, protocol } = getBaseInfo(req);
 
     // Cheap cache - only valid for the same host. If the same instance serves
     // multiple hosts (multi-tenant future) we'll rekey by host.
@@ -193,8 +210,7 @@ router.get('/robots.txt', async (req, res) => {
 
 router.get('/sitemap.xml', async (req, res) => {
   try {
-    const host = req.hostname || req.get('host') || 'localhost';
-    const protocol = req.protocol || 'https';
+    const { host, protocol } = getBaseInfo(req);
 
     const now = Date.now();
     let body = sitemapCache.body;
@@ -221,8 +237,7 @@ router.get('/sitemap.xml', async (req, res) => {
 
 router.get('/wp-sitemap.xml', async (req, res) => {
   try {
-    const host = req.hostname || req.get('host') || 'localhost';
-    const protocol = req.protocol || 'https';
+    const { host, protocol } = getBaseInfo(req);
     const body = buildWpSitemapIndex({ host, protocol });
     res.type('application/xml').send(body);
   } catch (err) {
@@ -233,8 +248,7 @@ router.get('/wp-sitemap.xml', async (req, res) => {
 
 router.get('/wp-sitemap-posts-page-1.xml', async (req, res) => {
   try {
-    const host = req.hostname || req.get('host') || 'localhost';
-    const protocol = req.protocol || 'https';
+    const { host, protocol } = getBaseInfo(req);
     const ws = await resolveWorkspace();
     const pages = ws ? await SitePage.find({ workspace_id: ws._id, enabled: true }).select('slug updated_at meta').lean() : [];
     const body = buildWpSitemapPages({ host, protocol, publicPages: pages });
@@ -247,8 +261,7 @@ router.get('/wp-sitemap-posts-page-1.xml', async (req, res) => {
 
 router.get('/wp-sitemap-posts-post-1.xml', async (req, res) => {
   try {
-    const host = req.hostname || req.get('host') || 'localhost';
-    const protocol = req.protocol || 'https';
+    const { host, protocol } = getBaseInfo(req);
     const ws = await resolveWorkspace();
     const campaigns = ws ? await listIndexableCampaigns(ws._id) : [];
     const body = buildWpSitemapPosts({ host, protocol, indexableCampaigns: campaigns });
