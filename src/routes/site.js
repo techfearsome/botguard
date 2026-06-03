@@ -145,7 +145,7 @@ router.get('/p/:slug', (req, res) => {
 //   4. Per-workspace AI-crawler opt-out (settings.block_ai_crawlers)
 //
 // Cached in-memory; invalidated when campaigns are saved/deleted.
-const { buildRobotsTxt, buildSitemapXml, buildWpSitemapIndex, buildWpSitemapPages, buildWpSitemapPosts, listDisallowedRootPaths, listIndexableCampaigns } = require('../lib/robotsAndSitemap');
+const { buildRobotsTxt, buildSitemapXml, buildWpSitemapIndex, buildWpSitemapPages, buildWpSitemapPosts, listDisallowedRootPaths, listIndexableCampaigns, listAllCampaignPaths } = require('../lib/robotsAndSitemap');
 
 let robotsCache = { ts: 0, body: '', forHost: '' };
 let sitemapCache = { ts: 0, body: '', forHost: '' };
@@ -164,15 +164,17 @@ router.get('/robots.txt', async (req, res) => {
     if (!body || robotsCache.forHost !== host || (now - robotsCache.ts) >= ROBOTS_CACHE_MS) {
       const ws = await resolveWorkspace();
       const blockAi = !!(ws && ws.settings && ws.settings.block_ai_crawlers);
-      const [disallowedRootPaths, indexableCampaigns] = ws ? await Promise.all([
+      const [disallowedRootPaths, indexableCampaigns, allCampaignPaths] = ws ? await Promise.all([
         listDisallowedRootPaths(ws._id),
         listIndexableCampaigns(ws._id),
-      ]) : [[], []];
+        listAllCampaignPaths(ws._id),
+      ]) : [[], [], []];
       body = buildRobotsTxt({
         host,
         protocol,
         disallowedRootPaths,
         indexableCampaigns,
+        allCampaignPaths,
         noIndex: process.env.BG_NO_INDEX === '1',
         blockAi,
       });

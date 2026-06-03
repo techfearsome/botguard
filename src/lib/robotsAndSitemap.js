@@ -87,12 +87,32 @@ const AI_CRAWLERS = [
  * @param {boolean} opts.blockAi
  * @returns {string}
  */
+/**
+ * Build the robots.txt content.
+ *
+ * Output shape mirrors WordPress default + proper Google Ads bot handling.
+ *
+ * CRITICAL: AdsBot-Google and AdsBot-Google-Mobile do NOT follow User-agent: *
+ * rules. They MUST have their own section or Google Ads can't check landing
+ * page quality, tanking Quality Score and raising CPCs. These bots need
+ * access to ALL campaign landing pages (/go/* and custom root_paths)
+ * regardless of indexable status — they're verifying ad destinations, not
+ * indexing pages for search.
+ *
+ * Sections:
+ *   1. User-agent: *        — general crawlers (Googlebot, Bingbot, etc.)
+ *   2. User-agent: AdsBot-* — Google Ads quality checkers (access everything public)
+ *   3. User-agent: Mediapartners-Google — Google AdSense (access everything)
+ *   4. AI crawlers           — optional Disallow: / per-bot
+ *   5. Sitemap directive
+ */
 function buildRobotsTxt(opts) {
   const {
     host,
     protocol = 'https',
     disallowedRootPaths = [],
     indexableCampaigns = [],
+    allCampaignPaths = [],    // ALL campaign root_paths (for AdsBot access)
     noIndex = false,
     blockAi = false,
   } = opts;
@@ -100,34 +120,32 @@ function buildRobotsTxt(opts) {
   const lines = [];
 
   if (noIndex) {
-    // Staging / dev: block everyone everywhere. No comments, no sitemap.
     lines.push('User-agent: *');
     lines.push('Disallow: /');
     return lines.join('\n') + '\n';
   }
 
-  // Standard policy. WordPress-shaped opener.
+  // ── Section 1: General crawlers (User-agent: *) ────────────────────
+  // WordPress-shaped opener for fingerprint consistency.
   lines.push('User-agent: *');
   lines.push('Disallow: /wp-admin/');
   lines.push('Allow: /wp-admin/admin-ajax.php');
 
-  // Real internal mounts (admin, cb, lv, px, healthz, plus the blanket /go/).
-  // Indexable campaigns at /go/<slug> get a per-slug Allow line emitted
-  // BEFORE the blanket Disallow, so crawlers honoring the longest-match
-  // (Google, Bing) treat the Allow as the override. Older spec-compliant
-  // crawlers do "first match wins" which also works with this ordering.
+  // Allow indexable campaign pages at /go/<slug> before the blanket Disallow
   for (const c of indexableCampaigns) {
     if (c && c.slug) {
       lines.push(`Allow: /go/${c.slug}`);
+      // If campaign also has a custom root_path, allow that too
+      if (c.root_path) lines.push(`Allow: /${c.root_path}`);
     }
   }
+
+  // Block internal routes
   for (const p of INTERNAL_PATHS) {
     lines.push(`Disallow: ${p}/`);
   }
 
-  // Custom campaign root paths that opted OUT of indexing. Indexable ones
-  // simply get no Disallow line - their root_path falls through to the
-  // catch-all crawl-allow.
+  // Block non-indexable custom root_paths
   for (const rp of disallowedRootPaths) {
     if (!rp || typeof rp !== 'string') continue;
     const slug = rp.trim().toLowerCase();
@@ -135,9 +153,49 @@ function buildRobotsTxt(opts) {
     lines.push(`Disallow: /${slug}`);
   }
 
-  // Allow CSS/JS so Google can render pages for ranking.
+  // Allow public assets (CSS/JS needed for Google to render pages)
   lines.push('Allow: /static/');
+  // Explicitly allow public page paths (redundant but clear)
+  lines.push('Allow: /p/');
+  lines.push('Allow: /privacy');
+  lines.push('Allow: /terms');
 
+  // ── Section 2: AdsBot-Google ───────────────────────────────────────
+  // CRITICAL: AdsBot ignores User-agent: * rules. Must have own section.
+  // Needs access to ALL landing pages (every /go/ path and root_path),
+  // not just indexable ones — it's checking ad quality, not SEO indexing.
+  lines.push('');
+  lines.push('User-agent: AdsBot-Google');
+  lines.push('Allow: /go/');
+  for (const rp of allCampaignPaths) {
+    if (rp) lines.push(`Allow: /${rp}`);
+  }
+  lines.push('Allow: /p/');
+  lines.push('Allow: /static/');
+  lines.push('Disallow: /admin/');
+  lines.push('Disallow: /cb/');
+  lines.push('Disallow: /lv/');
+  lines.push('Disallow: /px/');
+
+  lines.push('');
+  lines.push('User-agent: AdsBot-Google-Mobile');
+  lines.push('Allow: /go/');
+  for (const rp of allCampaignPaths) {
+    if (rp) lines.push(`Allow: /${rp}`);
+  }
+  lines.push('Allow: /p/');
+  lines.push('Allow: /static/');
+  lines.push('Disallow: /admin/');
+  lines.push('Disallow: /cb/');
+  lines.push('Disallow: /lv/');
+  lines.push('Disallow: /px/');
+
+  // ── Section 3: Mediapartners-Google (AdSense) ──────────────────────
+  lines.push('');
+  lines.push('User-agent: Mediapartners-Google');
+  lines.push('Allow: /');
+
+  // ── Section 4: AI crawlers (optional block) ────────────────────────
   if (blockAi) {
     for (const ua of AI_CRAWLERS) {
       lines.push('');
@@ -146,8 +204,7 @@ function buildRobotsTxt(opts) {
     }
   }
 
-  // Single blank line + Sitemap directive at the bottom (WP convention).
-  // WordPress 5.5+ points to /wp-sitemap.xml, not /sitemap.xml.
+  // ── Sitemap directive ──────────────────────────────────────────────
   lines.push('');
   lines.push(`Sitemap: ${protocol}://${host}/wp-sitemap.xml`);
 
@@ -351,6 +408,21 @@ function buildWpSitemapPosts(opts) {
   return xml.join('\n') + '\n';
 }
 
+/**
+ * Fetch ALL campaign root_paths (for AdsBot access). Unlike
+ * listDisallowedRootPaths, this returns every root_path regardless
+ * of indexable status — AdsBot needs access to all landing pages.
+ */
+async function listAllCampaignPaths(workspaceId) {
+  const filter = {
+    root_path: { $type: 'string', $ne: '' },
+    status: { $ne: 'archived' },
+  };
+  if (workspaceId) filter.workspace_id = workspaceId;
+  const docs = await Campaign.find(filter).select('root_path').lean();
+  return docs.map((d) => d.root_path).filter(Boolean);
+}
+
 module.exports = {
   buildRobotsTxt,
   buildSitemapXml,
@@ -359,6 +431,7 @@ module.exports = {
   buildWpSitemapPosts,
   listDisallowedRootPaths,
   listIndexableCampaigns,
+  listAllCampaignPaths,
   AI_CRAWLERS,
   INTERNAL_PATHS,
 };
