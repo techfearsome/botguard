@@ -85,10 +85,6 @@ app.use(helmet({
 }));
 
 app.use(compression({
-  // Skip compression for Server-Sent Events streams — compression buffers
-  // the response body which prevents SSE events from reaching the client
-  // in real-time. The /admin/live/stream endpoint sets Content-Type to
-  // text/event-stream, so we detect and skip it here.
   filter: function (req, res) {
     if (req.path === '/admin/live/stream') return false;
     if (res.getHeader('Content-Type')?.includes('text/event-stream')) return false;
@@ -167,12 +163,29 @@ app.use('/', wpFingerprintRouter);
 const { isReservedPath } = require('./lib/reservedPaths');
 const { handleClick: goHandleClick } = require('./routes/go');
 const { DEFAULT_SLUG: DEFAULT_WS_SLUG } = require('./lib/bootstrap');
+const { Campaign, Workspace } = require('./models');
 
 app.get(/^\/([a-z0-9][a-z0-9_-]{1,63})$/, async (req, res, next) => {
   const candidate = req.params[0];
   // Defensive: if a reserved path somehow got past validation, return 404
-  // rather than serving the campaign. This protects future system routes too.
   if (isReservedPath(candidate)) return next();
+
+  // Check if a campaign with this root_path actually exists.
+  // If not, fall through to the 404 handler instead of showing
+  // "Campaign not found" — the 404 page from /admin/site is more appropriate.
+  try {
+    const ws = await Workspace.findOne({ slug: DEFAULT_WS_SLUG }).select('_id').lean();
+    if (!ws) return next();
+    const campaign = await Campaign.findOne({
+      workspace_id: ws._id,
+      root_path: candidate,
+      status: { $ne: 'archived' },
+    }).select('_id').lean();
+    if (!campaign) return next();
+  } catch (e) {
+    return next();
+  }
+
   return goHandleClick(req, res, {
     workspaceSlug: DEFAULT_WS_SLUG,
     lookupKind: 'root_path',
