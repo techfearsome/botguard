@@ -23,7 +23,7 @@
     "mongoose": "^8.7.0",
     "morgan": "^1.10.0",
     "nanoid": "^3.3.7",
-    "ua-parser-js": "^1.0.39"
+    "ua-parser-js": "^2.0.10"
   },
   "devDependencies": {
     "jsdom": "^24.1.0",
