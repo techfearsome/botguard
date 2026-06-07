@@ -1,4 +1,14 @@
 <%- include('../partials/header', { ws, page, title: 'Click Log - BotGuard' }) %>
+<%
+  // Convert 2-letter ISO country code to emoji flag
+  // "US" → 🇺🇸, "TR" → 🇹🇷, "PK" → 🇵🇰
+  function countryFlag(code) {
+    if (!code || code.length !== 2) return '';
+    return String.fromCodePoint(
+      ...code.toUpperCase().split('').map(c => 0x1F1E6 + c.charCodeAt(0) - 65)
+    );
+  }
+%>
 
 <div class="page-header">
   <div>
@@ -95,7 +105,7 @@
           <% } else { %>–<% } %>
           <% if (c.hosting && !c.is_proxy) { %><br><small class="muted">hosting</small><% } %>
         </td>
-        <td><%= c.country || '–' %></td>
+        <td><% if (c.country) { %><span title="<%= c.country %>"><%= countryFlag(c.country) %> <%= c.country %></span><% } else { %>–<% } %></td>
         <td>
           <%= c.ua_parsed?.device_label || c.ua_parsed?.device_type || '–' %>
         </td>
