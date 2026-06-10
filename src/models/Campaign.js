@@ -96,6 +96,11 @@ const CampaignSchema = new mongoose.Schema({
     },
   },
 
+  // Second-layer residential proxy detection via ipgeolocation.io
+  // Only runs when enabled AND IPGEO_API_KEY is set in .env.
+  // Catches residential proxies that ProxyCheck misses.
+  residential_proxy_detection: { type: Boolean, default: false },
+
   // Conversion tracking
   postback_url: String,
   conversion_pixel: String,

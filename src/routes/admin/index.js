@@ -219,6 +219,7 @@ router.post('/campaigns', async (req, res) => {
         proxy_gate: proxyGate,
       },
       postback_url: body.postback_url || '',
+      residential_proxy_detection: body.residential_proxy_detection === 'on',
       notes: body.notes || '',
     });
     // New campaigns may have added a custom root_path - the next /robots.txt
@@ -394,6 +395,7 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.country_gate': countryGate,
           'filter_config.proxy_gate': proxyGate,
           postback_url: body.postback_url || '',
+          residential_proxy_detection: body.residential_proxy_detection === 'on',
           notes: body.notes || '',
         },
       }

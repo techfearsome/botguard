@@ -12,4 +12,5 @@ module.exports = {
   CidrDailySnapshot: require('./CidrDailySnapshot'),
   CloudflareRule: require('./CloudflareRule'),
   CloudflareLog: require('./CloudflareLog'),
+  IpgeoCache: require('./IpgeoCache'),
 };

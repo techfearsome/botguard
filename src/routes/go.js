@@ -171,6 +171,11 @@ async function handleClick(req, res, opts) {
       mode_at_decision: result.mode_at_decision,
     });
 
+    // Store ipgeolocation.io security data if the residential proxy filter ran
+    if (result.ipgeo_security) {
+      doc.ipgeo_security = result.ipgeo_security;
+    }
+
     // --- Country gate (post-network, has ProxyCheck country verdict) ---
     const countryResult = countryGateCheck({ country: doc.country, campaign });
     if (countryResult.blocked) {

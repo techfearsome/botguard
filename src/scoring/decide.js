@@ -30,6 +30,7 @@ const { getProfile } = require('./profiles');
 const HARD_BLOCK_FLAGS = new Set([
   'asn_hard_block',
   'webdriver_flag',
+  'residential_proxy',      // ipgeolocation.io detected residential proxy
 ]);
 
 function decide({ layerScores, layerFlags, profile, campaign, prefetcher }) {

@@ -3,6 +3,7 @@ const { headersFilter } = require('../filters/headers');
 const { patternFilter } = require('../filters/pattern');
 const { refererFilter } = require('../filters/referer');
 const { behaviorFilter } = require('../filters/behavior');
+const { residentialProxyFilter } = require('../filters/residentialProxy');
 const { decide } = require('../scoring/decide');
 const logger = require('./logger');
 
@@ -14,10 +15,11 @@ const logger = require('./logger');
  *
  * Returns a payload that's directly mergeable into the click document:
  *   {
- *     scores: { network, headers, behavior, pattern, referer, total, profile_used, flags },
+ *     scores: { network, headers, behavior, pattern, referer, residential, total, profile_used, flags },
  *     decision, decision_reason, mode_at_decision,
  *     enrichment: { asn, asn_org, country, region, city, ip_type, is_proxy, ... },
- *     prefetcher: { is_prefetcher, kind } | null
+ *     prefetcher: { is_prefetcher, kind } | null,
+ *     ipgeo_security: { ... } | null
  *   }
  */
 async function runFilterChain({
@@ -26,10 +28,11 @@ async function runFilterChain({
   fingerprint,                 // null on first request, populated on /go/fp callback
   workspaceId, campaign,
 }) {
-  const layerScores = { network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0 };
-  const layerFlags = { network: [], headers: [], behavior: [], pattern: [], referer: [] };
+  const layerScores = { network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0, residential: 0 };
+  const layerFlags = { network: [], headers: [], behavior: [], pattern: [], referer: [], residential: [] };
   let enrichment = {};
   let prefetcher = null;
+  let ipgeo_security = null;
 
   // --- Network (async, may hit ProxyCheck + ASN blacklist Mongo lookup) ---
   try {
@@ -41,6 +44,24 @@ async function runFilterChain({
   } catch (err) {
     logger.warn('network_filter_error', { err: err.message });
     layerFlags.network = ['filter_error'];
+  }
+
+  // --- Residential proxy detection (async, hits ipgeolocation.io API) ---
+  // Runs AFTER network so it can check if ProxyCheck already caught the IP.
+  // Only fires when campaign has it enabled AND IPGEO_API_KEY is set.
+  try {
+    // Build a minimal doc-like object for the filter to check existing flags
+    const docProxy = {
+      ip,
+      scores: { flags: layerFlags.network },
+    };
+    const r = await residentialProxyFilter(docProxy, campaign || {});
+    layerScores.residential = r.score;
+    layerFlags.residential = r.flags;
+    if (r.ipgeo) ipgeo_security = docProxy.ipgeo_security || r.ipgeo;
+  } catch (err) {
+    logger.warn('residential_proxy_filter_error', { err: err.message });
+    layerFlags.residential = ['filter_error'];
   }
 
   // --- Headers (sync) ---
@@ -107,6 +128,7 @@ async function runFilterChain({
       behavior: layerScores.behavior,
       pattern: layerScores.pattern,
       referer: layerScores.referer,
+      residential: layerScores.residential,
       total: verdict.total,
       profile_used: verdict.profile_used,
       flags: verdict.flags,
@@ -116,6 +138,7 @@ async function runFilterChain({
     mode_at_decision: verdict.mode_at_decision,
     enrichment,
     prefetcher,
+    ipgeo_security,
   };
 }
 
