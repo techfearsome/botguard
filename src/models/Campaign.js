@@ -96,10 +96,15 @@ const CampaignSchema = new mongoose.Schema({
     },
   },
 
-  // Second-layer residential proxy detection via ipgeolocation.io
-  // Only runs when enabled AND IPGEO_API_KEY is set in .env.
-  // Catches residential proxies that ProxyCheck misses.
-  residential_proxy_detection: { type: Boolean, default: false },
+  // Second-layer residential proxy detection
+  // Catches residential proxies that ProxyCheck misses (IPRoyal, 922Proxy, etc.)
+  // Provider configurable per campaign. Only runs when enabled AND API key set.
+  residential_proxy_detection: { type: Boolean, default: false }, // backward compat
+  residential_proxy: {
+    enabled:  { type: Boolean, default: false },
+    // 'auto' picks first configured, or pick a specific provider
+    provider: { type: String, enum: ['auto', 'ipgeolocation', 'spur', 'ipinfo'], default: 'auto' },
+  },
 
   // Conversion tracking
   postback_url: String,

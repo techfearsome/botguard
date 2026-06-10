@@ -12,7 +12,10 @@ const mongoose = require('mongoose');
 const IpgeoCacheSchema = new mongoose.Schema({
   ip: { type: String, required: true, unique: true, index: true },
 
-  // Raw security response
+  // Which provider produced this result
+  provider: { type: String, default: 'ipgeolocation', index: true },
+
+  // Raw security response (provider-agnostic normalized fields)
   threat_score:         { type: Number, default: 0 },
   is_proxy:             { type: Boolean, default: false },
   is_residential_proxy: { type: Boolean, default: false },
@@ -35,6 +38,9 @@ const IpgeoCacheSchema = new mongoose.Schema({
   proxy_last_seen:        { type: String, default: '' },
   vpn_confidence_score:   { type: Number, default: 0 },
   vpn_last_seen:          { type: String, default: '' },
+
+  // Full normalized result as JSON string (for provider router cache)
+  cached_result: { type: String, default: '' },
 
   // Cache metadata
   checked_at: { type: Date, default: Date.now },

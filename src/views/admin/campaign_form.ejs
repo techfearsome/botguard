@@ -351,17 +351,36 @@
 
   <fieldset style="border:1px solid var(--border-default); border-radius:var(--radius-md); padding:16px; margin-bottom:16px;">
     <legend style="font-weight:600; padding:0 6px;">Residential Proxy Detection (Layer 2)</legend>
+    <%
+      const rp = campaign?.residential_proxy || {};
+      const rpEnabled = rp.enabled || campaign?.residential_proxy_detection || false;
+      const rpProvider = rp.provider || 'auto';
+    %>
     <div class="form-row">
       <label style="font-weight:normal; display:flex; align-items:center; gap:8px;">
-        <input type="checkbox" name="residential_proxy_detection"
-          <%= campaign?.residential_proxy_detection ? 'checked' : '' %>
+        <input type="checkbox" name="residential_proxy_enabled"
+          <%= rpEnabled ? 'checked' : '' %>
           style="width:auto;">
-        Enable residential proxy detection via ipgeolocation.io
+        Enable residential proxy detection
       </label>
       <small class="muted">
-        Second-layer detection for residential proxies that ProxyCheck misses (IPRoyal, 922Proxy, Bright Data, etc.).
+        Second-layer detection for residential proxies that ProxyCheck misses.
         Only runs when ProxyCheck doesn't catch the IP — no double API spending.
-        Requires <code>IPGEO_API_KEY</code> in .env. Each lookup costs 2 credits.
+      </small>
+    </div>
+    <div class="form-row" style="margin-top:8px;">
+      <label>Detection provider</label>
+      <select name="residential_proxy_provider">
+        <option value="auto" <%= rpProvider === 'auto' ? 'selected' : '' %>>Auto (use first configured)</option>
+        <option value="ipgeolocation" <%= rpProvider === 'ipgeolocation' ? 'selected' : '' %>>ipgeolocation.io (2 credits/lookup)</option>
+        <option value="spur" <%= rpProvider === 'spur' ? 'selected' : '' %>>Spur (Context API)</option>
+        <option value="ipinfo" <%= rpProvider === 'ipinfo' ? 'selected' : '' %>>ipinfo.io (Privacy + Residential Proxy)</option>
+      </select>
+      <small class="muted">
+        Set the API key in <code>.env</code>:
+        <code>IPGEO_API_KEY</code> for ipgeolocation.io,
+        <code>SPUR_API_TOKEN</code> for Spur,
+        <code>IPINFO_TOKEN</code> for ipinfo.io.
       </small>
     </div>
   </fieldset>
