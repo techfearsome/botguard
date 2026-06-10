@@ -76,6 +76,11 @@ async function residentialProxyFilter(doc, campaign) {
     vpn_provider_names: data.vpn_provider_names,
     confidence: data.confidence,
     checked_at: new Date(),
+    // Store raw provider response for detailed display on click detail page
+    // Spur: client, tunnels, risks, infrastructure
+    // ipinfo: privacy, residential_proxy
+    // ipgeolocation: full security fields
+    raw: data.raw || null,
   };
 
   // ── Score based on findings ────────────────────────────────────────
