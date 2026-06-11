@@ -39,18 +39,39 @@ import { CodeJar } from '/static/js/vendor/codejar.js';
     })();
   }
 
+  // ── Size threshold: skip Prism for documents above this size ────────
+  // Prism re-parses the entire document on every keystroke. For a 50KB+
+  // landing page, that creates/destroys thousands of DOM nodes per keypress,
+  // freezing the browser. Above this threshold, we debounce highlighting
+  // so it only runs after the user pauses typing.
+  const DEBOUNCE_THRESHOLD = 8000;  // bytes: instant highlighting below this
+  const DEBOUNCE_MS = 500;          // ms to wait after last keystroke
+  const SKIP_THRESHOLD = 200000;    // bytes: skip highlighting entirely above this
+
+  let highlightTimer = null;
+
   function highlightHtml(editorEl) {
-    // Prism.highlightElement expects the element to have a class like
-    // "language-markup" - we set that when creating the element.
-    //
-    // Skip empty/whitespace-only content. Prism would strip the element's
-    // innerHTML entirely (no tokens to render), which destroys the seed
-    // newline we put in to anchor the cursor for empty editors. Once the
-    // user types real content, this guard short-circuits and Prism runs
-    // normally on every CodeJar onInput cycle.
     if (!window.Prism) return;
     const text = editorEl.textContent || '';
     if (!text.trim()) return;
+
+    const size = text.length;
+
+    // Giant documents: skip highlighting entirely, just show plain text
+    if (size > SKIP_THRESHOLD) return;
+
+    // Large documents: debounce — highlight only after user pauses typing
+    if (size > DEBOUNCE_THRESHOLD) {
+      // Clear any pending highlight
+      if (highlightTimer) clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        window.Prism.highlightElement(editorEl);
+        highlightTimer = null;
+      }, DEBOUNCE_MS);
+      return;
+    }
+
+    // Small documents: instant highlighting (original behavior)
     window.Prism.highlightElement(editorEl);
   }
 
