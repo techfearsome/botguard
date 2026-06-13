@@ -28,7 +28,7 @@
   <section class="panel">
     <h3>Layer Scores</h3>
     <table class="table table-dense">
-      <% ['network','headers','residential','behavior','pattern','referer'].forEach(k => { %>
+      <% ['network','headers','behavior','pattern','referer'].forEach(k => { %>
         <tr>
           <td><%= k %></td>
           <td><%= click.scores?.[k] ?? 0 %></td>
@@ -151,87 +151,50 @@
   </section>
 </div>
 
-<%# ── Layer 2: Residential Proxy Detection ──────────────────────────── %>
-<% const ipgeo = click.ipgeo_security; %>
-<% if (ipgeo) { %>
+<%# ── Mobile App Placement (from utm_content mobileapp::) ──────────── %>
+<% if (typeof appInfo !== 'undefined' && appInfo) { %>
 <section class="panel">
   <h3>
-    Layer 2: Residential Proxy Detection
+    App Placement
     <span class="badge" style="font-size:11px; margin-left:6px;
-      background:<%= ipgeo.is_residential_proxy ? '#FCEBEB' : '#EAF3DE' %>;
-      color:<%= ipgeo.is_residential_proxy ? '#A32D2D' : '#3B6D11' %>;">
-      <%= ipgeo.is_residential_proxy ? 'RESIDENTIAL PROXY' : 'CLEAN' %>
+      background:<%= appInfo.platform === 'ios' ? '#007AFF22' : '#34A85322' %>;
+      color:<%= appInfo.platform === 'ios' ? '#007AFF' : '#34A853' %>;">
+      <%= appInfo.platform === 'ios' ? 'iOS' : 'Android' %>
     </span>
-    <small class="muted" style="font-weight:normal; margin-left:8px;">
-      via <%= ipgeo.provider || 'unknown' %>
-      <% if (ipgeo.checked_at) { %> · checked <%- localTime(ipgeo.checked_at) %><% } %>
-    </small>
   </h3>
-  <div class="grid-2">
-    <table class="table table-dense">
-      <tr><td>Provider</td><td><strong><%= ipgeo.provider || '–' %></strong></td></tr>
-      <tr><td>Residential proxy</td>
-        <td><% if (ipgeo.is_residential_proxy) { %><span class="badge badge-block">YES</span><% if (ipgeo.proxy_provider_names?.length) { %> <small>— <%= ipgeo.proxy_provider_names.join(', ') %></small><% } %><% } else { %><span class="badge badge-allow">no</span><% } %></td>
-      </tr>
-      <tr><td>VPN</td>
-        <td><% if (ipgeo.is_vpn) { %><span class="badge badge-warn">YES</span><% if (ipgeo.vpn_provider_names?.length) { %> <small>— <%= ipgeo.vpn_provider_names.join(', ') %></small><% } %><% } else { %><span class="badge badge-allow">no</span><% } %></td>
-      </tr>
-      <tr><td>Proxy</td><td><%= ipgeo.is_proxy ? '⚠ yes' : '–' %></td></tr>
-      <tr><td>Tor</td><td><%= ipgeo.is_tor ? '⚠ yes' : '–' %></td></tr>
-      <tr><td>Hosting/Cloud</td><td><%= ipgeo.is_hosting ? 'yes' : '–' %></td></tr>
-    </table>
-    <table class="table table-dense">
-      <tr><td>Threat score</td>
-        <td><strong><%= ipgeo.threat_score || 0 %></strong>/100
-          <div class="bar" style="display:inline-block;vertical-align:middle;width:100px;margin-left:8px;">
-            <div class="bar-fill" style="width:<%= Math.min(100,ipgeo.threat_score||0) %>%;background:<%= (ipgeo.threat_score||0)>=60?'#ef4444':(ipgeo.threat_score||0)>=30?'#f97316':'#22c55e' %>;"></div>
-          </div>
-        </td>
-      </tr>
-      <tr><td>Confidence</td><td><%= ipgeo.confidence || 0 %>%</td></tr>
-      <% if (ipgeo.proxy_provider_names?.length) { %><tr><td>Proxy providers</td><td><%= ipgeo.proxy_provider_names.join(', ') %></td></tr><% } %>
-      <% if (ipgeo.vpn_provider_names?.length) { %><tr><td>VPN providers</td><td><%= ipgeo.vpn_provider_names.join(', ') %></td></tr><% } %>
+  <div style="display:flex; gap:16px; align-items:flex-start;">
+    <% if (appInfo.icon_url) { %>
+      <img src="<%= appInfo.icon_url %>" alt="" style="width:64px; height:64px; border-radius:14px; border:1px solid var(--border-default);">
+    <% } %>
+    <table class="table table-dense" style="flex:1;">
+      <% if (appInfo.name) { %>
+        <tr><td style="width:120px;">App name</td><td><strong><%= appInfo.name %></strong></td></tr>
+      <% } %>
+      <% if (appInfo.developer) { %>
+        <tr><td>Developer</td><td><%= appInfo.developer %></td></tr>
+      <% } %>
+      <% if (appInfo.category) { %>
+        <tr><td>Category</td><td><%= appInfo.category %></td></tr>
+      <% } %>
+      <% if (appInfo.price) { %>
+        <tr><td>Price</td><td><%= appInfo.price %></td></tr>
+      <% } %>
+      <% if (appInfo.rating != null) { %>
+        <tr><td>Rating</td><td><%= appInfo.rating.toFixed(1) %> ★ <small class="muted">(<%= (appInfo.rating_count || 0).toLocaleString() %> ratings)</small></td></tr>
+      <% } %>
+      <tr><td>App ID</td><td class="mono"><%= appInfo.app_id || appInfo.package_name || '–' %></td></tr>
+      <% if (appInfo.bundle_id) { %>
+        <tr><td>Bundle ID</td><td class="mono"><%= appInfo.bundle_id %></td></tr>
+      <% } %>
+      <tr><td>Store link</td><td><a href="<%= appInfo.store_url %>" target="_blank" rel="noopener"><%= appInfo.store_url %></a></td></tr>
+      <% if (appInfo.description) { %>
+        <tr><td>Description</td><td><small class="muted"><%= appInfo.description %>…</small></td></tr>
+      <% } %>
+      <% if (appInfo.readable_name && !appInfo.name) { %>
+        <tr><td>Package</td><td><code><%= appInfo.package_name %></code> <small class="muted">(<%= appInfo.readable_name %>)</small></td></tr>
+      <% } %>
     </table>
   </div>
-  <% const raw = ipgeo.raw; %>
-  <% if (raw && ipgeo.provider === 'spur') { %>
-    <h4 style="margin-top:16px;">Spur Client Intelligence</h4>
-    <div class="grid-2">
-      <table class="table table-dense">
-        <tr><td>Infrastructure</td><td><strong><%= raw.infrastructure || '–' %></strong></td></tr>
-        <% if (raw.organization) { %><tr><td>Organization</td><td><%= raw.organization %></td></tr><% } %>
-        <% if (raw.as) { %><tr><td>ASN</td><td>AS<%= raw.as.number %> — <%= raw.as.organization %></td></tr><% } %>
-        <% if (raw.risks?.length) { %><tr><td>Risks</td><td><div class="flag-cloud"><% raw.risks.forEach(r => { %><span class="flag" style="color:#ef4444;border-color:#ef4444;"><%= r %></span><% }) %></div></td></tr><% } %>
-        <% if (raw.services?.length) { %><tr><td>Services</td><td><%= raw.services.join(', ') %></td></tr><% } %>
-      </table>
-      <table class="table table-dense">
-        <% const cl = raw.client || {}; %>
-        <% if (cl.count) { %><tr><td>Unique users</td><td><strong><%= cl.count %></strong> across <%= cl.countries || '?' %> countries</td></tr><% } %>
-        <% if (cl.proxies?.length) { %><tr><td>Proxy providers</td><td><div class="flag-cloud"><% cl.proxies.forEach(p => { %><span class="flag" style="color:#f97316;border-color:#f97316;"><%= p.replace(/_PROXY$/,'').replace(/_/g,' ') %></span><% }) %></div></td></tr><% } %>
-        <% if (cl.behaviors?.length) { %><tr><td>Behaviors</td><td><%= cl.behaviors.join(', ') %></td></tr><% } %>
-        <% if (cl.types?.length) { %><tr><td>Client types</td><td><%= cl.types.join(', ') %></td></tr><% } %>
-        <% if (cl.concentration) { %><tr><td>Concentration</td><td><%= cl.concentration.city %>, <%= cl.concentration.state %>, <%= cl.concentration.country %> <small class="muted">density: <%= cl.concentration.density %></small></td></tr><% } %>
-      </table>
-    </div>
-    <% if (raw.tunnels?.length) { %>
-      <h4 style="margin-top:12px;">Tunnels</h4>
-      <table class="table table-dense">
-        <tr><th>Type</th><th>Operator</th><th>Anonymous</th><th>Entries</th></tr>
-        <% raw.tunnels.forEach(t => { %><tr><td><%= t.type %></td><td><strong><%= (t.operator||'').replace(/_/g,' ') %></strong></td><td><%= t.anonymous ? 'yes' : 'no' %></td><td><% if (t.entries?.length) { %><code><%= t.entries.join(', ') %></code><% } else { %>–<% } %></td></tr><% }) %>
-      </table>
-    <% } %>
-  <% } %>
-  <% if (raw && ipgeo.provider === 'ipinfo') { %>
-    <% const rp = raw.residential_proxy || {}; %>
-    <% if (rp.service) { %>
-      <h4 style="margin-top:16px;">ipinfo.io Residential Proxy</h4>
-      <table class="table table-dense">
-        <tr><td>Service</td><td><strong><%= rp.service %></strong></td></tr>
-        <% if (rp.last_seen) { %><tr><td>Last seen</td><td><%= rp.last_seen %></td></tr><% } %>
-        <% if (rp.percent_days_seen != null) { %><tr><td>Persistence</td><td><%= rp.percent_days_seen %>% of last 7 days</td></tr><% } %>
-      </table>
-    <% } %>
-  <% } %>
 </section>
 <% } %>
 

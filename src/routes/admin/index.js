@@ -41,45 +41,6 @@ router.get('/login', loginPage);
 router.post('/login', loginSubmit);
 router.get('/logout', logout);
 
-// --- Cloudflare Worker log API (BEFORE requireAdmin) ---
-// The Worker authenticates with CF_SYNC_KEY, not admin sessions.
-// Must be mounted before the requireAdmin gate or the Worker gets 401.
-router.post('/cloudflare/api/log', async (req, res) => {
-  const syncKey = process.env.CF_SYNC_KEY;
-  if (!syncKey) return res.status(503).json({ error: 'CF_SYNC_KEY not set' });
-
-  const key = req.headers['x-botguard-key'];
-  if (!key || key !== syncKey) return res.status(401).json({ error: 'unauthorized' });
-
-  const CloudflareLog = require('../../models/CloudflareLog');
-
-  // Get workspace (single-tenant: just grab the first one)
-  const ws = await Workspace.findOne().lean();
-  if (!ws) return res.status(404).json({ error: 'no workspace' });
-
-  const d = req.body;
-  try {
-    await CloudflareLog.create({
-      workspace_id: ws._id,
-      ip: d.ip || '',
-      asn: d.asn || null,
-      country: d.country || '',
-      user_agent: d.user_agent || '',
-      url: d.url || '',
-      method: d.method || 'GET',
-      action: d.action || 'allow',
-      reason: d.reason || '',
-      matched_rule: d.matched_rule || '',
-      scan_mode: d.scan_mode || '',
-      processing_ms: d.processing_ms || 0,
-      ts: new Date(),
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // --- Everything below this gate requires authentication ---
 router.use(requireAdmin);
 
@@ -219,11 +180,6 @@ router.post('/campaigns', async (req, res) => {
         proxy_gate: proxyGate,
       },
       postback_url: body.postback_url || '',
-      residential_proxy_detection: body.residential_proxy_enabled === 'on',
-      residential_proxy: {
-        enabled: body.residential_proxy_enabled === 'on',
-        provider: body.residential_proxy_provider || 'auto',
-      },
       notes: body.notes || '',
     });
     // New campaigns may have added a custom root_path - the next /robots.txt
@@ -399,9 +355,6 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.country_gate': countryGate,
           'filter_config.proxy_gate': proxyGate,
           postback_url: body.postback_url || '',
-          residential_proxy_detection: body.residential_proxy_enabled === 'on',
-          'residential_proxy.enabled': body.residential_proxy_enabled === 'on',
-          'residential_proxy.provider': body.residential_proxy_provider || 'auto',
           notes: body.notes || '',
         },
       }
@@ -1112,9 +1065,7 @@ router.post('/asn', async (req, res) => {
     const ruleType = body.rule_type || 'asn';
     const doc = {
       workspace_id: body.scope === 'global' ? null : ws._id,
-      asn_org: ruleType === 'cidr'
-        ? String(body.cidr_label || '').trim()
-        : String(Array.isArray(body.asn_org) ? body.asn_org[0] : (body.asn_org || '')).trim(),
+      asn_org: body.asn_org || '',
       category: body.category,
       severity: body.severity || 'high',
       score_weight: Number(body.score_weight) || 50,
@@ -1127,27 +1078,6 @@ router.post('/asn', async (req, res) => {
       doc.term = (body.term || '').trim().toLowerCase();
       doc.term_field = body.term_field || 'any';
       if (!doc.term) throw new Error('Term is required for term rules');
-    } else if (ruleType === 'cidr') {
-      let value = (body.cidr || '').trim();
-      if (!value) throw new Error('IP or CIDR range is required');
-      // Auto-detect and normalize format
-      if (value.includes('*')) {
-        // Wildcard → CIDR: 47.144.3.* → 47.144.3.0/24
-        value = value.replace('.*', '.0/24');
-      } else if (!value.includes('/')) {
-        // Single IP → add prefix length
-        if (value.includes(':')) {
-          value = value + '/128';   // IPv6 single
-        } else {
-          value = value + '/32';    // IPv4 single
-        }
-      }
-      doc.cidr = value;
-      // Check for duplicate
-      const existsQ = { cidr: value };
-      if (doc.workspace_id) existsQ.workspace_id = doc.workspace_id;
-      else existsQ.workspace_id = null;
-      if (await AsnBlacklist.findOne(existsQ)) throw new Error('This IP/CIDR rule already exists');
     } else {
       doc.asn = body.asn ? Number(body.asn) : null;
       if (!doc.asn) throw new Error('ASN is required for ASN rules');
@@ -1413,7 +1343,6 @@ router.get('/firewall/full.csv', async (req, res) => {
 // ---------- CIDR Intelligence (bot subnet detection) ----------
 
 const CidrIntelligence = require('../../models/CidrIntelligence');
-const CloudflareRule = require('../../models/CloudflareRule');
 
 // Summary endpoint — polled every 30s by the live view for new detections.
 //
@@ -2610,139 +2539,6 @@ router.post('/intelligence/mark-exported', async (req, res) => {
   res.redirect('/admin/intelligence');
 });
 
-// ── Intelligence settings (auto-export to Cloudflare) ────────────────
-
-router.get('/intelligence/settings', async (req, res) => {
-  const ws = await resolveWorkspace(req);
-  const autoCf = ws.settings?.intelligence_auto_cf || {
-    enabled: false, min_score: 60, min_days: 2, min_hits: 5, auto_sync: true,
-  };
-
-  // Count how many CIDRs would qualify under current settings
-  const qualifyingCount = await CidrIntelligence.countDocuments({
-    workspace_id: ws._id,
-    score: { $gte: autoCf.min_score },
-    days_seen_count: { $gte: autoCf.min_days },
-    hit_count: { $gte: autoCf.min_hits },
-    cf_exported: { $ne: true },
-    status: { $in: ['new', 'reviewing', 'blocked', 'exported'] },
-  });
-
-  const cfRuleCount = await CloudflareRule.countDocuments({
-    workspace_id: ws._id, active: true,
-  });
-
-  res.render('admin/intelligence_settings', {
-    ws, page: 'intelligence', autoCf, qualifyingCount, cfRuleCount,
-    flash: req.query.flash || '',
-  });
-});
-
-router.post('/intelligence/settings', async (req, res) => {
-  const ws = await resolveWorkspace(req);
-  const body = req.body;
-
-  await ws.constructor.updateOne(
-    { _id: ws._id },
-    { $set: {
-      'settings.intelligence_auto_cf.enabled':   body.enabled === 'on',
-      'settings.intelligence_auto_cf.min_score':  parseInt(body.min_score, 10) || 60,
-      'settings.intelligence_auto_cf.min_days':   parseInt(body.min_days, 10) || 2,
-      'settings.intelligence_auto_cf.min_hits':   parseInt(body.min_hits, 10) || 5,
-      'settings.intelligence_auto_cf.auto_sync':  body.auto_sync === 'on',
-    }}
-  );
-  res.redirect('/admin/intelligence/settings?flash=Settings+saved');
-});
-
-// Run auto-export now (manual trigger)
-router.post('/intelligence/settings/run-auto-export', async (req, res) => {
-  const ws = await resolveWorkspace(req);
-  const autoCf = ws.settings?.intelligence_auto_cf || {};
-  if (!autoCf.enabled) {
-    return res.redirect('/admin/intelligence/settings?flash=Auto-export+is+disabled');
-  }
-
-  try {
-    const count = await runAutoExport(ws);
-    res.redirect(`/admin/intelligence/settings?flash=Auto-exported+${count}+CIDRs+to+Cloudflare`);
-  } catch (err) {
-    res.redirect(`/admin/intelligence/settings?flash=Error:+${encodeURIComponent(err.message)}`);
-  }
-});
-
-/**
- * Auto-export qualifying CIDRs to Cloudflare.
- * Called from settings page (manual) or from the cidrAnalyser interval.
- */
-async function runAutoExport(ws) {
-  const autoCf = ws.settings?.intelligence_auto_cf || {};
-  if (!autoCf.enabled) return 0;
-
-  const qualifying = await CidrIntelligence.find({
-    workspace_id: ws._id,
-    score: { $gte: autoCf.min_score || 60 },
-    days_seen_count: { $gte: autoCf.min_days || 2 },
-    hit_count: { $gte: autoCf.min_hits || 5 },
-    cf_exported: { $ne: true },
-    status: { $in: ['new', 'reviewing', 'blocked', 'exported'] },
-  }).lean();
-
-  let added = 0;
-  for (const entry of qualifying) {
-    // Check if rule already exists in Cloudflare
-    const exists = await CloudflareRule.findOne({
-      workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
-    });
-    if (exists) {
-      // Just mark as cf_exported
-      await CidrIntelligence.updateOne(
-        { _id: entry._id },
-        { $set: { cf_exported: true, cf_exported_at: new Date() } }
-      );
-      continue;
-    }
-
-    try {
-      await CloudflareRule.create({
-        workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
-        action: 'block', label: entry.asn_org || '',
-        notes: `Auto-exported: score ${entry.score}, ${entry.hit_count} hits, ${entry.days_seen_count} days`,
-        source: 'intelligence', source_ref: entry._id.toString(), active: true,
-      });
-      await CidrIntelligence.updateOne(
-        { _id: entry._id },
-        { $set: { cf_exported: true, cf_exported_at: new Date() } }
-      );
-      added++;
-    } catch (err) {
-      // Duplicate or other error — skip
-    }
-  }
-
-  // Auto-sync to Cloudflare KV if enabled
-  if (added > 0 && autoCf.auto_sync) {
-    try {
-      const { syncToCloudflareKV } = require('../../lib/cloudflareSync');
-      await syncToCloudflareKV(ws._id);
-    } catch (e) { /* non-fatal */ }
-  }
-
-  // Update last run stats
-  await ws.constructor.updateOne(
-    { _id: ws._id },
-    { $set: {
-      'settings.intelligence_auto_cf.last_run_at': new Date(),
-      'settings.intelligence_auto_cf.last_exported_count': added,
-    }}
-  );
-
-  return added;
-}
-
-// Export for use by cidrAnalyser interval
-router._runAutoExport = runAutoExport;
-
 // ---------- Settings (API keys, password info) ----------
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);
@@ -2930,7 +2726,21 @@ router.get('/clicks/:id', async (req, res) => {
     .lean();
   if (!click) return res.status(404).send('Click not found');
   const conversions = await Conversion.find({ click_id: click.click_id }).sort({ ts: -1 }).lean();
-  res.render('admin/click_detail', { ws, click, conversions, page: 'clicks' });
+
+  // Enrich mobile app placement from utm_content (lazy — only on detail view)
+  let appInfo = click.app_placement || null;
+  if (!appInfo && click.utm?.content) {
+    try {
+      const { resolveAppPlacement } = require('../../lib/appLookup');
+      appInfo = await resolveAppPlacement(click.utm.content);
+      // Persist so we don't re-fetch on next view
+      if (appInfo) {
+        Click.updateOne({ _id: click._id }, { $set: { app_placement: appInfo } }).catch(() => {});
+      }
+    } catch (e) {}
+  }
+
+  res.render('admin/click_detail', { ws, click, conversions, appInfo, page: 'clicks' });
 });
 
 // ---------- Decision replay ----------

@@ -32,10 +32,6 @@ const ClickSchema = new mongoose.Schema({
   scraper: Boolean,        // ProxyCheck detection.scraper
   risk_score: Number,      // ProxyCheck risk 0-100
 
-  // Layer 2 residential proxy detection (ipgeolocation.io / Spur / ipinfo.io)
-  // Stored as Mixed because the shape varies by provider and includes raw response
-  ipgeo_security: { type: mongoose.Schema.Types.Mixed, default: null },
-
   // Device / UA
   user_agent: String,
   ua_parsed: {
@@ -55,6 +51,12 @@ const ClickSchema = new mongoose.Schema({
   referer: String,
   referer_host: String,
   in_app_browser: { type: String, default: null },  // 'fb' | 'ig' | 'tiktok' | 'linkedin' | null
+
+  // Layer 2 residential proxy detection (ipgeolocation.io / Spur / ipinfo.io)
+  ipgeo_security: { type: mongoose.Schema.Types.Mixed, default: null },
+
+  // Mobile app placement enrichment (resolved from utm_content mobileapp::)
+  app_placement: { type: mongoose.Schema.Types.Mixed, default: null },
 
   // Attribution
   utm: {
