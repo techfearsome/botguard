@@ -94,10 +94,45 @@ const BING_VALUETRACK_KEYS = [
 function parseUtm(query) {
   const utm = {};
   if (!query || typeof query !== 'object') return utm;
+
+  // First pass: extract UTM values from the parsed query object
   for (const key of UTM_KEYS) {
     const v = query[`utm_${key}`];
     if (v && typeof v === 'string') utm[key] = v.slice(0, 256);
   }
+
+  // Fix: some tracking templates or redirect chains encode & as %26,
+  // causing the entire query string to be stuffed into one parameter.
+  // e.g. utm_source=google&utm_medium=display_ads&utm_campaign=...
+  // Express decodes %26 to & but treats it as part of the value.
+  //
+  // Detect: if any UTM value contains &utm_ or &gclid= or &wbraid=,
+  // the URL was malformed. Re-parse the embedded params.
+  for (const key of UTM_KEYS) {
+    const val = utm[key];
+    if (!val || !val.includes('&')) continue;
+
+    // This value has embedded query params — split and re-parse
+    const parts = val.split('&');
+    // First part is the real value for this key
+    utm[key] = parts[0].slice(0, 256);
+
+    // Remaining parts are the embedded params
+    for (let i = 1; i < parts.length; i++) {
+      const eqIdx = parts[i].indexOf('=');
+      if (eqIdx === -1) continue;
+      const pKey = parts[i].substring(0, eqIdx);
+      const pVal = parts[i].substring(eqIdx + 1);
+      // Only fill UTM keys that weren't already set from the real query
+      for (const uk of UTM_KEYS) {
+        if (pKey === `utm_${uk}` && !query[`utm_${uk}`]) {
+          utm[uk] = pVal.slice(0, 256);
+        }
+      }
+    }
+    break; // Only the first malformed key needs fixing
+  }
+
   return utm;
 }
 
