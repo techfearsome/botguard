@@ -35,8 +35,9 @@ function getModels() {
 }
 
 // ── Fake UA detection ────────────────────────────────────────────────
-const FAKE_UA_RE = /iPhone OS (1[9]|[2-9]\d)_|Android (1[5-9]|[2-9]\d)\.|HeadlessChrome|PhantomJS|Selenium|puppeteer|python-requests/i;
-function isFakeUA(ua) { return ua && FAKE_UA_RE.test(ua); }
+// Enhanced multi-signal detection: impossible versions, automation tools,
+// impossible browser/OS combos, client-hint mismatches, frozen UAs.
+const { analyzeFakeUA, isFakeUA } = require('./fakeUaDetect');
 
 // ── Frequency grading ─────────────────────────────────────────────────
 //
@@ -202,11 +203,21 @@ function scorePersistence(priorDaysSeen, isReturning) {
   return s;
 }
 
-function scoreFakeUA(fakeUACount) {
-  if (fakeUACount >= 10) return 5;
-  if (fakeUACount >= 3)  return 4;
-  if (fakeUACount >= 1)  return 2;
-  return 0;
+function scoreFakeUA(fakeUACount, strongFakeCount = 0) {
+  // Strong fakes (client-hint mismatches, impossible browser/OS combos,
+  // automation tools) are near-impossible to fake by accident, so they
+  // score higher than version-only fakes. Max raised from 5 to 8.
+  let s = 0;
+  if (fakeUACount >= 10) s = 5;
+  else if (fakeUACount >= 3) s = 4;
+  else if (fakeUACount >= 1) s = 2;
+
+  // Bonus for strong (severity-3) fakes
+  if (strongFakeCount >= 5) s += 3;
+  else if (strongFakeCount >= 2) s += 2;
+  else if (strongFakeCount >= 1) s += 1;
+
+  return Math.min(s, 8);
 }
 
 function scoreClickIdSignal(hits, totalUniqueIds, hitsWithNoClickId) {
@@ -356,6 +367,20 @@ function scoreCrossCampaign(campaignCount, totalHits) {
   return 0;
 }
 
+// ── ASN reputation (0–8) ─────────────────────────────────────────────
+// A new CIDR from an ASN that has historically produced many confirmed
+// bots starts with elevated suspicion. Bot operators reuse the same
+// hosting/ISP infrastructure, so this "guilt by association" is justified.
+function scoreAsnReputation(reputation) {
+  if (!reputation) return 0;
+  const repScore = reputation.reputation_score || 0;
+  if (repScore >= 80) return 8;
+  if (repScore >= 60) return 6;
+  if (repScore >= 40) return 4;
+  if (repScore >= 20) return 2;
+  return 0;
+}
+
 
 // Replaces the old slow_drip signal. Now covers 1min–30min+ returns.
 // Tier 1 (1-5min) returns score less than tier 3 (30min+) because
@@ -474,7 +499,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     workspace_id: workspaceId,
     ts: { $gte: windowStart, $lte: windowEnd },
   })
-    .select('ip ts decision conversion_count user_agent asn_org country external_ids dwell_ms campaign_id')
+    .select('ip ts decision conversion_count user_agent ua_parsed asn_org country external_ids dwell_ms campaign_id')
     .lean();
 
   if (!clicks.length) {
@@ -501,6 +526,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         asn: '', country: '', version: sub.version,
         dwellValues: [],  // v2.1: collect dwell_ms for bounce scoring
         campaignIds: new Set(),  // v2.3: cross-campaign correlation
+        fakeUAFlags: {},  // v2.4: enhanced fake UA flag → count
+        strongFakeCount: 0,  // v2.4: severity-3 fake UAs
       };
       bySubnet.set(date, day);
     }
@@ -521,7 +548,15 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     day.conv += parseInt(c.conversion_count || 0, 10) || 0;
     day.uaCounts[ua] = (day.uaCounts[ua] || 0) + 1;
     if (c.campaign_id) day.campaignIds.add(c.campaign_id.toString());
-    if (isFakeUA(ua)) day.fakeUACount++;
+    // v2.4: enhanced fake UA detection using ua_parsed + client hints
+    const fakeResult = analyzeFakeUA({ ua, uaParsed: c.ua_parsed || {} });
+    if (fakeResult.isFake) {
+      day.fakeUACount++;
+      if (fakeResult.severity >= 3) day.strongFakeCount++;
+      for (const f of fakeResult.flags) {
+        day.fakeUAFlags[f] = (day.fakeUAFlags[f] || 0) + 1;
+      }
+    }
     if (isWebViewBot(ua)) day.webviewBotCount++;
     // v2.1: collect dwell time for bounce scoring
     if (c.dwell_ms != null && c.dwell_ms >= 0) day.dwellValues.push(c.dwell_ms);
@@ -682,6 +717,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       returnTier1: 0, returnTier2: 0, returnTier3: 0, returnTotalIps: 0,
       dwellValues: [],  // all dwell_ms values across days
       campaignIds: new Set(),  // v2.3: cross-campaign correlation
+      fakeUAFlags: {},  // v2.4: merged fake UA flags
+      strongFakeCount: 0,  // v2.4
     };
     for (const [, day] of byDay) {
       agg.version = day.version;
@@ -702,6 +739,13 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       }
       agg.conv += day.conv;
       agg.fakeUACount += day.fakeUACount;
+      agg.strongFakeCount += day.strongFakeCount || 0;
+      // v2.4: merge fake UA flags
+      if (day.fakeUAFlags) {
+        for (const [f, n] of Object.entries(day.fakeUAFlags)) {
+          agg.fakeUAFlags[f] = (agg.fakeUAFlags[f] || 0) + n;
+        }
+      }
       // v2.3: merge campaign IDs for cross-campaign correlation
       if (day.campaignIds) {
         for (const cid of day.campaignIds) agg.campaignIds.add(cid);
@@ -753,6 +797,19 @@ async function analyseWorkspace(workspaceId, opts = {}) {
   const now = referenceDate;
 
   if (writeLiveState) {
+    // v2.4: Load ASN reputations for all ASNs seen in this batch.
+    // A new CIDR from a known-bad ASN starts with elevated suspicion.
+    const AsnReputation = require('../models/AsnReputation');
+    const asnOrgsInBatch = [...new Set([...cidrAggregate.values()].map(a => a.asn).filter(Boolean))];
+    const asnReputationMap = new Map();
+    if (asnOrgsInBatch.length > 0) {
+      const reps = await AsnReputation.find({
+        workspace_id: workspaceId,
+        asn_org: { $in: asnOrgsInBatch },
+      }).lean();
+      for (const r of reps) asnReputationMap.set(r.asn_org, r);
+    }
+
     for (const [cidr, agg] of cidrAggregate) {
       const uniqueIps = agg.uniqueIps.size;
 
@@ -798,7 +855,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         rotation:    scoreRotation(agg.hits, uniqueIps),
         ua_uniform:  scoreUAUniformity(agg.uaCounts, agg.hits, agg.fakeUACount),
         persistence: scorePersistence(priorDaysSeen, isReturning),
-        fake_ua:     scoreFakeUA(agg.fakeUACount),
+        fake_ua:     scoreFakeUA(agg.fakeUACount, agg.strongFakeCount),
         click_id:    scoreClickIdSignal(agg.hits, totalUniqueIds, agg.hitsNoClickId),
         temporal:    scoreTemporal(agg.totalSubSecond, agg.totalSub5s, agg.globalMinGapMs),
         webview_ua:  scoreWebViewUA(agg.webviewBotCount, agg.hits),
@@ -811,6 +868,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         frequency:      scoreFrequencyLabel(freqLabel),
         // v2.3 — cross-campaign correlation
         cross_campaign: scoreCrossCampaign(agg.campaignIds.size, agg.hits),
+        // v2.4 — ASN reputation memory
+        asn_reputation: scoreAsnReputation(asnReputationMap.get(agg.asn)),
       };
       const score = Math.min(100, Object.values(signals).reduce((a, b) => a + b, 0));
 
@@ -873,6 +932,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
             conv_rate: agg.hits > 0 ? agg.conv / agg.hits : 0,
             top_uas: topUAs, sample_ips: [...agg.sampleIps],
             fake_ua_count: agg.fakeUACount,
+            strong_fake_count: agg.strongFakeCount || 0,
+            fake_ua_flags: agg.fakeUAFlags || {},
             unique_gclids: agg.gclids.size, unique_wbraids: agg.wbraids.size,
             unique_gbraids: agg.gbraids.size, unique_fbclids: agg.fbclids.size,
             unique_msclkids: agg.msclkids.size,
@@ -923,6 +984,65 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         { upsert: true }
       );
       upserted++;
+
+      // v2.4: Update ASN reputation memory.
+      // Count this CIDR toward its ASN's reputation if it's flagged (score>=60)
+      // and we haven't already counted it.
+      if (agg.asn && score >= 40) {
+        try {
+          const AsnReputation = require('../models/AsnReputation');
+          const isFlagged = score >= 60;
+          const rep = await AsnReputation.findOne({ workspace_id: workspaceId, asn_org: agg.asn });
+
+          if (!rep) {
+            // First CIDR from this ASN
+            await AsnReputation.create({
+              workspace_id: workspaceId,
+              asn_org: agg.asn,
+              total_cidrs_seen: 1,
+              flagged_cidrs: isFlagged ? 1 : 0,
+              total_bot_hits: isFlagged ? agg.hits : 0,
+              total_conversions: agg.conv,
+              counted_cidrs: [cidr],
+              reputation_score: isFlagged ? 20 : 5,
+              last_updated: now,
+            });
+          } else if (!rep.counted_cidrs.includes(cidr)) {
+            // New CIDR from a known ASN
+            const newTotal = rep.total_cidrs_seen + 1;
+            const newFlagged = rep.flagged_cidrs + (isFlagged ? 1 : 0);
+            const newBotHits = rep.total_bot_hits + (isFlagged ? agg.hits : 0);
+            const newConv = rep.total_conversions + agg.conv;
+
+            // Reputation = ratio of flagged CIDRs, scaled, minus conversion legitimacy
+            const flaggedRatio = newFlagged / newTotal;
+            let repScore = Math.round(flaggedRatio * 100);
+            // An ASN with real conversions is more legitimate — reduce score
+            if (newConv > 0) repScore = Math.max(0, repScore - Math.min(30, newConv * 2));
+            // Volume bonus: many flagged CIDRs is worse than one
+            if (newFlagged >= 20) repScore = Math.min(100, repScore + 20);
+            else if (newFlagged >= 10) repScore = Math.min(100, repScore + 10);
+            repScore = Math.min(100, Math.max(0, repScore));
+
+            await AsnReputation.updateOne(
+              { _id: rep._id },
+              {
+                $set: {
+                  total_cidrs_seen: newTotal,
+                  flagged_cidrs: newFlagged,
+                  total_bot_hits: newBotHits,
+                  total_conversions: newConv,
+                  reputation_score: repScore,
+                  last_updated: now,
+                },
+                $push: { counted_cidrs: cidr },
+              }
+            );
+          }
+        } catch (e) {
+          logger.warn('asn_reputation_update_error', { asn: agg.asn, err: e.message });
+        }
+      }
     }
   }
 

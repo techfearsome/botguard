@@ -9,8 +9,8 @@ module.exports = {
   SitePage: require('./SitePage'),
   FirewallEntry: require('./FirewallEntry'),
   CidrIntelligence: require('./CidrIntelligence'),
+  AsnReputation: require('./AsnReputation'),
   CidrDailySnapshot: require('./CidrDailySnapshot'),
   CloudflareRule: require('./CloudflareRule'),
   CloudflareLog: require('./CloudflareLog'),
-  IpgeoCache: require('./IpgeoCache'),
 };

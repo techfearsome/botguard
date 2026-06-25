@@ -46,6 +46,8 @@ const SignalSchema = new mongoose.Schema({
   frequency:      { type: Number, default: 0 },  // 0-10 (HIGH/MEDIUM/LOW label feedback)
   // v2.3 — cross-campaign correlation
   cross_campaign: { type: Number, default: 0 },  // 0-10 (one CIDR hitting many campaigns)
+  // v2.4 — ASN reputation memory
+  asn_reputation: { type: Number, default: 0 },  // 0-8 (known-bad ASN association)
 }, { _id: false });
 
 const CidrIntelligenceSchema = new mongoose.Schema({
@@ -92,6 +94,8 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   top_uas: [{ ua: String, count: Number }],
   sample_ips: [String],
   fake_ua_count: { type: Number, default: 0 },
+  strong_fake_count: { type: Number, default: 0 },  // v2.4: severity-3 fakes
+  fake_ua_flags: { type: mongoose.Schema.Types.Mixed, default: {} },  // v2.4: flag → count
 
   // ── Click-ID correlation ───────────────────────────────────────────
   unique_gclids:         { type: Number, default: 0 },

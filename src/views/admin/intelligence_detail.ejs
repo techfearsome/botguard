@@ -55,7 +55,7 @@
       <tr><td>Unique IPs</td><td><%= entry.unique_ip_count %></td></tr>
       <tr><td>Conversions</td><td><%= entry.conversion_count %> (<%= ((entry.conv_rate || 0) * 100).toFixed(1) %>%)</td></tr>
       <tr><td>Days seen</td><td><%= entry.days_seen_count %> (consecutive: <%= entry.consecutive_days || 0 %>)</td></tr>
-      <tr><td>Fake UAs</td><td><%= entry.fake_ua_count || 0 %></td></tr>
+      <tr><td>Fake UAs</td><td><%= entry.fake_ua_count || 0 %><% if (entry.strong_fake_count > 0) { %> <span class="badge badge-block" style="margin-left:4px;"><%= entry.strong_fake_count %> strong</span><% } %></td></tr>
       <tr><td>Blocked hits</td><td><%= entry.blocked_hits || 0 %></td></tr>
       <tr style="background:<%= (entry.campaign_count||0) >= 3 ? 'rgba(239,68,68,0.08)' : 'transparent' %>;">
         <td>Campaigns hit</td>
@@ -97,6 +97,45 @@
     <p class="muted" style="margin-top:8px; font-size:13px;">
       ⚠ A single CIDR clicking <%= campaigns.length %> unrelated campaigns is a strong bot indicator — real users
       respond to one ad for one offer, not many.
+    </p>
+  <% } %>
+</section>
+<% } %>
+
+<%# ── Fake UA signal breakdown ───────────────────────────────────── %>
+<% const fakeFlags = entry.fake_ua_flags && Object.keys(entry.fake_ua_flags).length > 0 ? Object.entries(entry.fake_ua_flags).sort((a,b)=>b[1]-a[1]) : []; %>
+<% if (fakeFlags.length > 0) { %>
+<section class="panel" style="margin-bottom:24px;">
+  <h3>Fake / Spoofed UA Signals
+    <span class="muted" style="font-weight:normal; font-size:13px;">— why these UAs are flagged</span>
+  </h3>
+  <table class="table table-dense">
+    <% const flagLabels = {
+      impossible_version: 'Impossible OS version (iOS 19+, Android 15+)',
+      automation_tool: 'Automation tool (Selenium, Puppeteer, curl, etc.)',
+      safari_on_nonapple: 'Safari on non-Apple OS (impossible)',
+      edge_on_ios: 'Edge on iOS (wrong format)',
+      ie_on_nonwindows: 'Internet Explorer on non-Windows',
+      samsung_on_nonandroid: 'Samsung Internet on non-Android',
+      ch_platform_mismatch: 'Client-hint platform mismatch (UA lies about OS)',
+      ch_mobile_mismatch_desktop_ua: 'Client hints say mobile, UA says desktop',
+      ch_mobile_mismatch_mobile_ua: 'Client hints say desktop, UA says mobile',
+      frozen_ua: 'Frozen/reduced UA (Chrome 100+)',
+      browser_type_bot: 'Parser classified as bot',
+      ancient_browser: 'Ancient browser version (Chrome/FF < 90)',
+      empty_ua: 'No User-Agent at all',
+    }; %>
+    <% fakeFlags.forEach(([flag, count]) => { %>
+      <tr>
+        <td><%= flagLabels[flag] || flag.replace(/_/g, ' ') %></td>
+        <td><strong><%= count %></strong> clicks</td>
+      </tr>
+    <% }) %>
+  </table>
+  <% if (fakeFlags.some(([f]) => f.startsWith('ch_'))) { %>
+    <p class="muted" style="font-size:13px; margin-top:8px;">
+      ⚠ Client-hint mismatches are among the strongest bot signals — the browser's Sec-CH-UA headers
+      contradict its User-Agent string, meaning the UA is deliberately spoofed.
     </p>
   <% } %>
 </section>
