@@ -1087,6 +1087,31 @@ function startCidrAnalyser() {
   runAnalysis();
   const timer = setInterval(runAnalysis, intervalSeconds * 1000);
   if (timer.unref) timer.unref();
+
+  // v2.5: hourly maintenance (auto-archive stale CIDRs, auto-escalate persistent offenders)
+  const maintenanceInterval = parseInt(process.env.INTEL_MAINTENANCE_INTERVAL_MINUTES || '60', 10);
+  const runMaintenanceCycle = async () => {
+    try {
+      const { runMaintenance } = require('./intelligenceMaintenance');
+      const { Workspace } = require('../models');
+      const workspaces = await Workspace.find().lean();
+      for (const ws of workspaces) {
+        const result = await runMaintenance(ws);
+        if (result.archived > 0 || result.escalated > 0) {
+          logger.info('intel_maintenance_cycle', {
+            workspace: ws.slug, archived: result.archived, escalated: result.escalated,
+          });
+        }
+      }
+    } catch (e) {
+      logger.warn('intel_maintenance_error', { err: e.message });
+    }
+  };
+  const maintenanceTimer = setInterval(runMaintenanceCycle, maintenanceInterval * 60 * 1000);
+  if (maintenanceTimer.unref) maintenanceTimer.unref();
+  // Run once shortly after startup (not immediately — let the first analysis complete)
+  setTimeout(runMaintenanceCycle, 5 * 60 * 1000);
+
   return timer;
 }
 

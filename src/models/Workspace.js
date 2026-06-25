@@ -51,15 +51,12 @@ const WorkspaceSchema = new mongoose.Schema({
       deploy_error: { type: String, default: '' },
     },
 
-    // Intelligence auto-export to Cloudflare
-    intelligence_auto_cf: {
-      enabled:    { type: Boolean, default: false },
-      min_score:  { type: Number, default: 60 },     // minimum score to auto-export
-      min_days:   { type: Number, default: 2 },       // minimum days seen
-      min_hits:   { type: Number, default: 5 },       // minimum hit count
-      auto_sync:  { type: Boolean, default: true },    // auto push to KV after adding
-      last_run_at: { type: Date },
-      last_exported_count: { type: Number, default: 0 },
+    // Intelligence maintenance (auto-archive + auto-escalate)
+    intelligence_maintenance: {
+      enabled:             { type: Boolean, default: true },
+      archive_after_days:  { type: Number, default: 14 },
+      escalate_after_days: { type: Number, default: 5 },
+      escalate_min_score:  { type: Number, default: 70 },
     },
   },
   created_at: { type: Date, default: Date.now },

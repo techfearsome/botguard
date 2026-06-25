@@ -6,7 +6,7 @@
 
 const mongoose = require('mongoose');
 
-const STATUSES = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
+const STATUSES = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed', 'archived'];
 
 // Frequency labels are a separate axis from `score`. Score asks "how confident
 // are we this is a bot?" — based on signal strength. Frequency asks "how often
@@ -150,6 +150,10 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   blocked_at:   { type: Date },
   exported_at:  { type: Date },
   dismissed_at: { type: Date },
+  archived_at: { type: Date },
+  // v2.5: auto-escalation tracking
+  auto_escalated: { type: Boolean, default: false },
+  auto_escalated_at: { type: Date },
   watchlisted_at: { type: Date },
   notes:        { type: String, default: '', maxlength: 500 },
 

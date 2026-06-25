@@ -1435,6 +1435,7 @@ router.get('/intelligence', async (req, res) => {
   if (statusFilter === 'active')           statusQuery = { $in: ['new', 'reviewing', 'watchlist'] };
   else if (statusFilter === 'all_flagged') statusQuery = { $in: ['new', 'reviewing', 'watchlist', 'blocked', 'exported'] };
   else if (statusFilter === 'all')         statusQuery = { $in: ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'] };
+  else if (statusFilter === 'archived')    statusQuery = 'archived';
   else                                     statusQuery = statusFilter;
 
   // Score filter
@@ -2113,6 +2114,84 @@ router.get('/intelligence/:id/detail', async (req, res) => {
     topUAs, topIPs, campaigns, decisionCounts, timeline,
     totalClicks: clicks.length,
   });
+});
+
+// ── Account-level Google Ads invalid traffic evidence report ─────────
+// Bundles all flagged CIDRs with their click IDs into a single CSV,
+// formatted for Google Ads invalid-click disputes. Recovers ad spend.
+router.get('/intelligence/evidence-report.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const minScore = parseInt(req.query.min_score, 10) || 60;
+  const days = parseInt(req.query.days, 10) || 30;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  // Get all flagged CIDRs above the threshold
+  const cidrs = await CidrIntelligence.find({
+    workspace_id: ws._id,
+    score: { $gte: minScore },
+    status: { $nin: ['dismissed', 'archived'] },
+  }).select('cidr score asn_org country signals hit_count campaign_count last_seen').lean();
+
+  if (cidrs.length === 0) {
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', 'attachment; filename="botguard-evidence-empty.csv"');
+    return res.send('No flagged CIDRs found above score threshold ' + minScore);
+  }
+
+  // Build prefix matchers for each CIDR
+  const cidrPrefixes = cidrs.map(c => {
+    let prefix;
+    if (c.cidr.includes(':')) prefix = c.cidr.replace(/::\/\d+$/, ':');
+    else prefix = c.cidr.replace(/\.\d+\/\d+$/, '.');
+    return { cidr: c.cidr, prefix, meta: c };
+  });
+
+  // Header row
+  const rows = [[
+    'cidr', 'cidr_score', 'asn', 'country', 'campaigns_hit',
+    'click_timestamp', 'ip', 'campaign', 'gclid', 'wbraid', 'gbraid',
+    'decision', 'conversions', 'top_signals',
+  ]];
+
+  // For each CIDR, fetch its clicks and add rows
+  for (const { cidr, prefix, meta } of cidrPrefixes) {
+    const clicks = await Click.find({
+      workspace_id: ws._id,
+      ip: new RegExp('^' + prefix.replace(/[.]/g, '\\.')),
+      ts: { $gte: since },
+    })
+      .select('ip ts decision conversion_count external_ids campaign_id')
+      .populate('campaign_id', 'name')
+      .sort({ ts: -1 })
+      .limit(1000)
+      .lean();
+
+    // Top signals for this CIDR (for the dispute narrative)
+    const topSignals = Object.entries(meta.signals || {})
+      .filter(([k, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k]) => k)
+      .join('; ');
+
+    for (const c of clicks) {
+      const eid = c.external_ids || {};
+      rows.push([
+        cidr, meta.score, (meta.asn_org || '').replace(/,/g, ';'), meta.country || '',
+        meta.campaign_count || '',
+        new Date(c.ts).toISOString(), c.ip,
+        (c.campaign_id?.name || '').replace(/,/g, ';'),
+        eid.gclid || '', eid.wbraid || '', eid.gbraid || '',
+        c.decision || 'allow', c.conversion_count || 0,
+        topSignals,
+      ]);
+    }
+  }
+
+  const csv = rows.map(r => r.map(f => `"${String(f).replace(/"/g, '""')}"`).join(',')).join('\n');
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="botguard-invalid-traffic-evidence-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(csv);
 });
 
 router.get('/intelligence/:id/detail/export.csv', async (req, res) => {
