@@ -44,6 +44,8 @@ const SignalSchema = new mongoose.Schema({
   // so they can score CIDRs that hit you days ago and haven't returned.
   historical_ids: { type: Number, default: 0 },  // 0-12 (multi-day ad-id diversity, zero conv)
   frequency:      { type: Number, default: 0 },  // 0-10 (HIGH/MEDIUM/LOW label feedback)
+  // v2.3 — cross-campaign correlation
+  cross_campaign: { type: Number, default: 0 },  // 0-10 (one CIDR hitting many campaigns)
 }, { _id: false });
 
 const CidrIntelligenceSchema = new mongoose.Schema({
@@ -118,6 +120,10 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   ip_return_tier3:    { type: Number, default: 0 },   // 30min+ returns
   ip_return_total_ips:{ type: Number, default: 0 },   // IPs with any return
   hits_per_ip:        { type: Number, default: 0 },
+
+  // v2.3: cross-campaign correlation
+  campaign_count: { type: Number, default: 0, index: true },
+  campaign_ids:   [{ type: mongoose.Schema.Types.ObjectId, ref: 'Campaign' }],
 
   // ── v2.1: Dwell / bounce evidence ──────────────────────────────────
   avg_dwell_ms:       { type: Number, default: null },   // average time on page (ms)

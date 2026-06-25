@@ -6,7 +6,7 @@
  * Scoring runs against the FULL accumulated history, not just the current
  * 60-second or 24-hour window. Weak signals compound over days.
  *
- * 12 scoring signals (max raw 145, capped at 100):
+ * 15 scoring signals (max raw 155, capped at 100):
  *
  *   Signal         Max   Source
  *   ─────────────  ────  ───────────────────────────────────────────
@@ -338,7 +338,25 @@ function scoreBehavioral(sameIpUaRepeats, uaDiversityRatio, totalHits) {
   return Math.min(s, 10);
 }
 
-// ── IP-return scoring (0–10) — tiered by gap duration ────────────────
+// ── Cross-campaign correlation (0–10) ────────────────────────────────
+// A real user clicks one campaign — they saw one ad, they're interested in
+// one offer. A CIDR hitting MANY different campaigns is sweeping your ad
+// inventory: a bot operator clicking every ad they can find. This catches
+// sophisticated bots that stay under per-campaign volume thresholds but
+// reveal themselves by their breadth across unrelated campaigns.
+function scoreCrossCampaign(campaignCount, totalHits) {
+  if (campaignCount <= 1) return 0;
+  if (totalHits < 3) return 0;  // need enough volume to be meaningful
+  // The more campaigns one CIDR touches, the more bot-like
+  if (campaignCount >= 8) return 10;
+  if (campaignCount >= 5) return 8;
+  if (campaignCount >= 4) return 6;
+  if (campaignCount >= 3) return 4;
+  if (campaignCount >= 2) return 2;
+  return 0;
+}
+
+
 // Replaces the old slow_drip signal. Now covers 1min–30min+ returns.
 // Tier 1 (1-5min) returns score less than tier 3 (30min+) because
 // 1-5min could be a real re-click, but 30min+ is definitively bot.
@@ -456,7 +474,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     workspace_id: workspaceId,
     ts: { $gte: windowStart, $lte: windowEnd },
   })
-    .select('ip ts decision conversion_count user_agent asn_org country external_ids dwell_ms')
+    .select('ip ts decision conversion_count user_agent asn_org country external_ids dwell_ms campaign_id')
     .lean();
 
   if (!clicks.length) {
@@ -482,6 +500,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         fakeUACount: 0, webviewBotCount: 0, conv: 0,
         asn: '', country: '', version: sub.version,
         dwellValues: [],  // v2.1: collect dwell_ms for bounce scoring
+        campaignIds: new Set(),  // v2.3: cross-campaign correlation
       };
       bySubnet.set(date, day);
     }
@@ -501,6 +520,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
     });
     day.conv += parseInt(c.conversion_count || 0, 10) || 0;
     day.uaCounts[ua] = (day.uaCounts[ua] || 0) + 1;
+    if (c.campaign_id) day.campaignIds.add(c.campaign_id.toString());
     if (isFakeUA(ua)) day.fakeUACount++;
     if (isWebViewBot(ua)) day.webviewBotCount++;
     // v2.1: collect dwell time for bounce scoring
@@ -661,6 +681,7 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       slowDripIpCount: 0, hitsPerIp: 0,
       returnTier1: 0, returnTier2: 0, returnTier3: 0, returnTotalIps: 0,
       dwellValues: [],  // all dwell_ms values across days
+      campaignIds: new Set(),  // v2.3: cross-campaign correlation
     };
     for (const [, day] of byDay) {
       agg.version = day.version;
@@ -681,6 +702,10 @@ async function analyseWorkspace(workspaceId, opts = {}) {
       }
       agg.conv += day.conv;
       agg.fakeUACount += day.fakeUACount;
+      // v2.3: merge campaign IDs for cross-campaign correlation
+      if (day.campaignIds) {
+        for (const cid of day.campaignIds) agg.campaignIds.add(cid);
+      }
       agg.asn = agg.asn || day.asn;
       agg.country = agg.country || day.country;
       // v2.1: merge dwell values
@@ -784,6 +809,8 @@ async function analyseWorkspace(workspaceId, opts = {}) {
         // v2.2 — historical & label-feedback signals
         historical_ids: scoreHistoricalClickIds(history),
         frequency:      scoreFrequencyLabel(freqLabel),
+        // v2.3 — cross-campaign correlation
+        cross_campaign: scoreCrossCampaign(agg.campaignIds.size, agg.hits),
       };
       const score = Math.min(100, Object.values(signals).reduce((a, b) => a + b, 0));
 
@@ -867,6 +894,9 @@ async function analyseWorkspace(workspaceId, opts = {}) {
             ip_return_tier3: agg.returnTier3,
             ip_return_total_ips: agg.returnTotalIps,
             hits_per_ip: Math.round(agg.hitsPerIp * 100) / 100,
+            // v2.3: cross-campaign correlation
+            campaign_count: agg.campaignIds.size,
+            campaign_ids: [...agg.campaignIds],
             // v2.1: dwell/bounce evidence
             avg_dwell_ms: agg.dwellValues.length > 0
               ? Math.round(agg.dwellValues.reduce((a, b) => a + b, 0) / agg.dwellValues.length)
@@ -922,64 +952,6 @@ async function runAnalysis(opts = {}) {
         clicks_processed: totalProcessed, snapshots_written: totalSnapshots,
         intelligence_upserted: totalUpserted, window_hours: windowHours,
       });
-    }
-
-    // Auto-export qualifying CIDRs to Cloudflare (if enabled)
-    for (const ws of workspaces) {
-      try {
-        const fullWs = await Workspace.findById(ws._id).lean();
-        const autoCf = fullWs?.settings?.intelligence_auto_cf;
-        if (!autoCf?.enabled) continue;
-
-        const CloudflareRule = require('../models/CloudflareRule');
-        const CidrIntelligence = require('../models/CidrIntelligence');
-
-        const qualifying = await CidrIntelligence.find({
-          workspace_id: ws._id,
-          score: { $gte: autoCf.min_score || 60 },
-          days_seen_count: { $gte: autoCf.min_days || 2 },
-          hit_count: { $gte: autoCf.min_hits || 5 },
-          cf_exported: { $ne: true },
-          status: { $in: ['new', 'reviewing', 'blocked', 'exported'] },
-        }).lean();
-
-        let autoAdded = 0;
-        for (const entry of qualifying) {
-          const exists = await CloudflareRule.findOne({
-            workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
-          });
-          if (exists) {
-            await CidrIntelligence.updateOne({ _id: entry._id }, { $set: { cf_exported: true, cf_exported_at: new Date() } });
-            continue;
-          }
-          try {
-            await CloudflareRule.create({
-              workspace_id: ws._id, rule_type: 'cidr', value: entry.cidr,
-              action: 'block', label: entry.asn_org || '',
-              notes: `Auto: score ${entry.score}, ${entry.hit_count} hits, ${entry.days_seen_count}d`,
-              source: 'intelligence', source_ref: entry._id.toString(), active: true,
-            });
-            await CidrIntelligence.updateOne({ _id: entry._id }, { $set: { cf_exported: true, cf_exported_at: new Date() } });
-            autoAdded++;
-          } catch (e) { /* dup or error — skip */ }
-        }
-
-        if (autoAdded > 0) {
-          logger.info('auto_cf_export', { workspace: ws.slug, added: autoAdded });
-          if (autoCf.auto_sync) {
-            try {
-              const { syncToCloudflareKV } = require('./cloudflareSync');
-              await syncToCloudflareKV(ws._id);
-            } catch (e) { /* non-fatal */ }
-          }
-          await Workspace.updateOne({ _id: ws._id }, { $set: {
-            'settings.intelligence_auto_cf.last_run_at': new Date(),
-            'settings.intelligence_auto_cf.last_exported_count': autoAdded,
-          }});
-        }
-      } catch (e) {
-        logger.warn('auto_cf_export_error', { workspace: ws.slug, err: e.message });
-      }
     }
   } catch (err) {
     logger.warn('cidr_analysis_error', { err: err.message });

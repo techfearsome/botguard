@@ -1,0 +1,191 @@
+<%- include('../partials/header', { ws, page, title: 'CIDR Detail - BotGuard' }) %>
+<%
+  function countryFlag(code) {
+    if (!code || code.length !== 2) return '';
+    return String.fromCodePoint(...code.toUpperCase().split('').map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+  }
+  function localTime(d) {
+    if (!d) return '–';
+    return new Date(d).toLocaleString();
+  }
+  const maxTimeline = Math.max(1, ...timeline.map(t => t[1]));
+%>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px; font-family:var(--font-mono);"><%= entry.cidr %>
+      <span class="badge" style="font-size:11px; vertical-align:middle;"><%= entry.ip_version %></span>
+    </h1>
+    <p class="muted">
+      <%= entry.asn_org || 'Unknown ASN' %>
+      <% if (entry.country) { %> · <%= countryFlag(entry.country) %> <%= entry.country %><% } %>
+      · <%= totalClicks %> clicks shown (last 30 days)
+    </p>
+  </div>
+  <a href="/admin/intelligence" class="btn">← Back to Intelligence</a>
+</div>
+
+<%# ── Score + Signals summary ────────────────────────────────────── %>
+<div class="grid-2" style="margin-bottom:24px;">
+  <section class="panel">
+    <h3>Score & Signals</h3>
+    <div style="font-size:48px; font-weight:700; line-height:1;
+      color:<%= entry.score >= 80 ? '#ef4444' : entry.score >= 60 ? '#f97316' : entry.score >= 40 ? '#eab308' : '#6b7280' %>;">
+      <%= entry.score %><span style="font-size:20px; color:var(--text-muted);">/100</span>
+    </div>
+    <table class="table table-dense" style="margin-top:12px;">
+      <% Object.entries(entry.signals || {}).filter(([k,v]) => v > 0).sort((a,b) => b[1]-a[1]).forEach(([k, v]) => { %>
+        <tr>
+          <td style="width:140px;"><%= k.replace(/_/g, ' ') %></td>
+          <td>
+            <div class="bar" style="display:inline-block; width:100px; vertical-align:middle;">
+              <div class="bar-fill" style="width:<%= Math.min(100, v * 5) %>%; background:#f97316;"></div>
+            </div>
+            <strong style="margin-left:8px;"><%= v %></strong>
+          </td>
+        </tr>
+      <% }) %>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h3>Summary</h3>
+    <table class="table table-dense">
+      <tr><td>Total hits</td><td><strong><%= entry.hit_count %></strong></td></tr>
+      <tr><td>Unique IPs</td><td><%= entry.unique_ip_count %></td></tr>
+      <tr><td>Conversions</td><td><%= entry.conversion_count %> (<%= ((entry.conv_rate || 0) * 100).toFixed(1) %>%)</td></tr>
+      <tr><td>Days seen</td><td><%= entry.days_seen_count %> (consecutive: <%= entry.consecutive_days || 0 %>)</td></tr>
+      <tr><td>Fake UAs</td><td><%= entry.fake_ua_count || 0 %></td></tr>
+      <tr><td>Blocked hits</td><td><%= entry.blocked_hits || 0 %></td></tr>
+      <tr style="background:<%= (entry.campaign_count||0) >= 3 ? 'rgba(239,68,68,0.08)' : 'transparent' %>;">
+        <td>Campaigns hit</td>
+        <td>
+          <strong><%= entry.campaign_count || campaigns.length %></strong>
+          <% if ((entry.campaign_count||0) >= 3) { %>
+            <span class="badge badge-block" style="margin-left:6px;">SWEEPING</span>
+          <% } %>
+        </td>
+      </tr>
+      <tr><td>Avg dwell</td><td><%= entry.avg_dwell_ms != null ? entry.avg_dwell_ms + 'ms' : '–' %></td></tr>
+      <tr><td>First / last seen</td><td><small><%= localTime(entry.historical_match?.first_seen_date || entry.created_at) %> → <%= localTime(entry.last_seen) %></small></td></tr>
+    </table>
+  </section>
+</div>
+
+<%# ── Cross-campaign breakdown ───────────────────────────────────── %>
+<% if (campaigns.length > 1) { %>
+<section class="panel" style="margin-bottom:24px;">
+  <h3>Cross-Campaign Activity
+    <span class="muted" style="font-weight:normal; font-size:13px;">— this CIDR hit <%= campaigns.length %> different campaigns</span>
+  </h3>
+  <table class="table table-dense">
+    <tr><th>Campaign</th><th>Clicks</th><th>Share</th></tr>
+    <% campaigns.forEach(([name, count]) => { %>
+      <tr>
+        <td><%= name %></td>
+        <td><strong><%= count %></strong></td>
+        <td>
+          <div class="bar" style="display:inline-block; width:150px; vertical-align:middle;">
+            <div class="bar-fill" style="width:<%= (count / totalClicks * 100).toFixed(0) %>%; background:#3b82f6;"></div>
+          </div>
+          <%= (count / totalClicks * 100).toFixed(0) %>%
+        </td>
+      </tr>
+    <% }) %>
+  </table>
+  <% if (campaigns.length >= 3) { %>
+    <p class="muted" style="margin-top:8px; font-size:13px;">
+      ⚠ A single CIDR clicking <%= campaigns.length %> unrelated campaigns is a strong bot indicator — real users
+      respond to one ad for one offer, not many.
+    </p>
+  <% } %>
+</section>
+<% } %>
+
+<%# ── Activity timeline ──────────────────────────────────────────── %>
+<% if (timeline.length > 1) { %>
+<section class="panel" style="margin-bottom:24px;">
+  <h3>Activity Timeline <span class="muted" style="font-weight:normal; font-size:13px;">— clicks per hour</span></h3>
+  <div style="display:flex; align-items:flex-end; gap:2px; height:120px; margin-top:12px; overflow-x:auto;">
+    <% timeline.forEach(([hour, count]) => { %>
+      <div style="display:flex; flex-direction:column; align-items:center; min-width:8px;" title="<%= hour %>:00 — <%= count %> clicks">
+        <div style="width:8px; background:#f97316; height:<%= Math.max(2, (count / maxTimeline * 100)) %>px; border-radius:2px 2px 0 0;"></div>
+      </div>
+    <% }) %>
+  </div>
+  <p class="muted" style="font-size:12px; margin-top:6px;">
+    <%= timeline[0][0].replace('T', ' ') %>:00 → <%= timeline[timeline.length-1][0].replace('T', ' ') %>:00 ·
+    peak <%= maxTimeline %> clicks/hour
+  </p>
+</section>
+<% } %>
+
+<%# ── UA + IP distribution ───────────────────────────────────────── %>
+<div class="grid-2" style="margin-bottom:24px;">
+  <section class="panel">
+    <h3>User-Agent Distribution <span class="muted" style="font-weight:normal; font-size:13px;">(top <%= topUAs.length %>)</span></h3>
+    <table class="table table-dense">
+      <% topUAs.forEach(([ua, count]) => { %>
+        <tr>
+          <td><small style="word-break:break-all;"><%= ua.length > 80 ? ua.slice(0, 80) + '…' : ua %></small></td>
+          <td style="white-space:nowrap;"><strong><%= count %></strong></td>
+        </tr>
+      <% }) %>
+    </table>
+    <% if (topUAs.length === 1 && totalClicks > 5) { %>
+      <p class="muted" style="font-size:12px; margin-top:6px;">⚠ Single UA across all <%= totalClicks %> clicks — strong uniformity signal.</p>
+    <% } %>
+  </section>
+
+  <section class="panel">
+    <h3>IP Distribution <span class="muted" style="font-weight:normal; font-size:13px;">(top <%= topIPs.length %> within block)</span></h3>
+    <table class="table table-dense">
+      <% topIPs.forEach(([ip, count]) => { %>
+        <tr>
+          <td class="mono"><small><%= ip %></small></td>
+          <td><strong><%= count %></strong> hits</td>
+        </tr>
+      <% }) %>
+    </table>
+  </section>
+</div>
+
+<%# ── Raw clicks ─────────────────────────────────────────────────── %>
+<section class="panel">
+  <h3>Clicks <span class="muted" style="font-weight:normal; font-size:13px;">(<%= totalClicks %> most recent)</span></h3>
+  <div style="overflow-x:auto;">
+    <table class="table table-dense">
+      <tr>
+        <th>Time</th><th>IP</th><th>Campaign</th><th>Device</th><th>Click ID</th><th>Conv</th><th>Decision</th>
+      </tr>
+      <% clicks.slice(0, 200).forEach(c => { %>
+        <tr>
+          <td><small><%= localTime(c.ts) %></small></td>
+          <td class="mono"><small><%= c.ip %></small></td>
+          <td><small><%= c.campaign_id?.name || '–' %></small></td>
+          <td><small><%= c.ua_parsed?.device_label || '–' %></small></td>
+          <td><small><%
+            const eid = c.external_ids || {};
+            const id = eid.gclid || eid.wbraid || eid.gbraid || eid.fbclid || eid.msclkid;
+          %><%= id ? (id.slice(0, 12) + '…') : '(none)' %></small></td>
+          <td><%= c.conversion_count > 0 ? '✓ ' + c.conversion_count : '–' %></td>
+          <td>
+            <span class="badge badge-<%= c.decision === 'block' ? 'block' : c.decision === 'would_block' ? 'warn' : 'allow' %>">
+              <%= c.decision || 'allow' %>
+            </span>
+          </td>
+        </tr>
+      <% }) %>
+    </table>
+  </div>
+  <% if (clicks.length > 200) { %>
+    <p class="muted" style="margin-top:8px;">Showing first 200 of <%= totalClicks %> clicks.</p>
+  <% } %>
+
+  <%# Export evidence button %>
+  <div style="margin-top:16px;">
+    <a href="/admin/intelligence/<%= entry._id %>/detail/export.csv" class="btn">⬇ Export clicks as CSV (evidence)</a>
+  </div>
+</section>
+
+<%- include('../partials/footer') %>

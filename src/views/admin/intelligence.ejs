@@ -33,7 +33,6 @@ function fmtRate(rate) {
   <div style="display:flex; gap:6px; align-items:flex-start; flex-wrap:wrap;">
     <a href="/admin/intelligence/history" class="btn" title="Browse historical snapshots">History</a>
     <a href="/admin/intelligence/seed" class="btn" title="Import known-bad CIDRs from external lists">Seed</a>
-    <a href="/admin/intelligence/settings" class="btn" title="Auto-export settings">⚙ Settings</a>
     <form method="POST" action="/admin/intelligence/run-now" style="display:inline">
       <button type="submit" class="btn" title="Trigger analysis run immediately">↻ Run Now</button>
     </form>
@@ -562,6 +561,7 @@ Unique ad IDs: <%= dayEv.unique_ad_ids || 0 %>"
           <% if (e._id) { %>
           <button class="btn btn-small action-toggle" onclick="toggleMenu(this)" style="font-size:16px; padding:2px 8px; line-height:1;">⋯</button>
           <div class="action-menu" style="display:none; position:absolute; right:0; top:100%; z-index:50; background:var(--bg-panel); border:1px solid var(--border-default); border-radius:var(--radius-md); box-shadow:0 4px 12px rgba(0,0,0,0.3); min-width:190px; padding:4px 0;">
+            <a href="/admin/intelligence/<%= e._id %>/detail" class="action-item" style="font-weight:600;">🔍 View details</a>
             <a href="/admin/clicks?cidr=<%= encodeURIComponent(e.cidr) %>&range=today" class="action-item">View clicks</a>
             <% if (e.status !== 'watchlist') { %>
             <form method="POST" action="/admin/intelligence/<%= e._id %>/status" style="margin:0;">

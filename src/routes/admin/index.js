@@ -2052,6 +2052,113 @@ router.post('/intelligence/analyse-range', async (req, res) => {
 //
 // Browse snapshots by date or by CIDR. Shows which CIDRs have been flagged
 // historically and how often.
+// ── CIDR drill-down: show the actual clicks behind a CIDR ────────────
+router.get('/intelligence/:id/detail', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const entry = await CidrIntelligence.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!entry) return res.status(404).send('CIDR not found');
+
+  // Helper to compute the IP→CIDR match for the clicks query.
+  // We need to find all clicks whose IP falls in this CIDR block.
+  const cidr = entry.cidr;
+  let ipPrefix = '';
+  if (entry.ip_version === 'v4') {
+    // 66.207.24.0/24 → match IPs starting with "66.207.24."
+    ipPrefix = cidr.replace(/\.\d+\/\d+$/, '.');
+  } else {
+    // 2a02:8108::/32 → match IPs starting with "2a02:8108:"
+    ipPrefix = cidr.replace(/::\/\d+$/, ':');
+  }
+
+  // Fetch clicks in this CIDR within the last 30 days
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const clicks = await Click.find({
+    workspace_id: ws._id,
+    ip: new RegExp('^' + ipPrefix.replace(/[.]/g, '\\.')),
+    ts: { $gte: since },
+  })
+    .select('click_id ip ts decision conversion_count user_agent ua_parsed asn_org country external_ids dwell_ms campaign_id utm scores')
+    .populate('campaign_id', 'name slug')
+    .sort({ ts: -1 })
+    .limit(500)
+    .lean();
+
+  // Build UA distribution
+  const uaDistribution = {};
+  const ipDistribution = {};
+  const campaignDistribution = {};
+  const decisionCounts = { allow: 0, block: 0, would_block: 0 };
+  const hourlyTimeline = {}; // hour → count
+
+  for (const c of clicks) {
+    const ua = c.user_agent || '(none)';
+    uaDistribution[ua] = (uaDistribution[ua] || 0) + 1;
+    ipDistribution[c.ip] = (ipDistribution[c.ip] || 0) + 1;
+    const campName = c.campaign_id?.name || '(unknown)';
+    campaignDistribution[campName] = (campaignDistribution[campName] || 0) + 1;
+    if (c.decision) decisionCounts[c.decision] = (decisionCounts[c.decision] || 0) + 1;
+    // Timeline by hour
+    const hourKey = new Date(c.ts).toISOString().slice(0, 13); // YYYY-MM-DDTHH
+    hourlyTimeline[hourKey] = (hourlyTimeline[hourKey] || 0) + 1;
+  }
+
+  // Sort distributions
+  const topUAs = Object.entries(uaDistribution).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const topIPs = Object.entries(ipDistribution).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  const campaigns = Object.entries(campaignDistribution).sort((a, b) => b[1] - a[1]);
+  const timeline = Object.entries(hourlyTimeline).sort((a, b) => a[0].localeCompare(b[0]));
+
+  res.render('admin/intelligence_detail', {
+    ws, page: 'intelligence', entry, clicks,
+    topUAs, topIPs, campaigns, decisionCounts, timeline,
+    totalClicks: clicks.length,
+  });
+});
+
+router.get('/intelligence/:id/detail/export.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const entry = await CidrIntelligence.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!entry) return res.status(404).send('CIDR not found');
+
+  let ipPrefix = '';
+  if (entry.ip_version === 'v4') ipPrefix = entry.cidr.replace(/\.\d+\/\d+$/, '.');
+  else ipPrefix = entry.cidr.replace(/::\/\d+$/, ':');
+
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const clicks = await Click.find({
+    workspace_id: ws._id,
+    ip: new RegExp('^' + ipPrefix.replace(/[.]/g, '\\.')),
+    ts: { $gte: since },
+  })
+    .select('click_id ip ts decision conversion_count user_agent asn_org country external_ids campaign_id')
+    .populate('campaign_id', 'name')
+    .sort({ ts: -1 })
+    .limit(5000)
+    .lean();
+
+  const rows = [['timestamp', 'ip', 'campaign', 'click_id', 'gclid', 'wbraid', 'gbraid', 'decision', 'conversions', 'country', 'asn', 'user_agent']];
+  for (const c of clicks) {
+    const eid = c.external_ids || {};
+    rows.push([
+      new Date(c.ts).toISOString(),
+      c.ip,
+      (c.campaign_id?.name || '').replace(/,/g, ';'),
+      c.click_id,
+      eid.gclid || '', eid.wbraid || '', eid.gbraid || '',
+      c.decision || 'allow',
+      c.conversion_count || 0,
+      c.country || '',
+      (c.asn_org || '').replace(/,/g, ';'),
+      (c.user_agent || '').replace(/,/g, ';').replace(/"/g, "'"),
+    ]);
+  }
+
+  const csv = rows.map(r => r.map(f => `"${String(f).replace(/"/g, '""')}"`).join(',')).join('\n');
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="cidr-${entry.cidr.replace(/[/:]/g, '_')}-evidence.csv"`);
+  res.send(csv);
+});
+
 router.get('/intelligence/history', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { CidrDailySnapshot } = require('../../models');
