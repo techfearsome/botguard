@@ -4,10 +4,6 @@
     if (!code || code.length !== 2) return '';
     return String.fromCodePoint(...code.toUpperCase().split('').map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
   }
-  function localTime(d) {
-    if (!d) return '–';
-    return new Date(d).toLocaleString();
-  }
   const maxTimeline = Math.max(1, ...timeline.map(t => t[1]));
 %>
 
@@ -67,7 +63,7 @@
         </td>
       </tr>
       <tr><td>Avg dwell</td><td><%= entry.avg_dwell_ms != null ? entry.avg_dwell_ms + 'ms' : '–' %></td></tr>
-      <tr><td>First / last seen</td><td><small><%= localTime(entry.historical_match?.first_seen_date || entry.created_at) %> → <%= localTime(entry.last_seen) %></small></td></tr>
+      <tr><td>First / last seen</td><td><small><%- localTime(entry.historical_match?.first_seen_date || entry.created_at) %> → <%- localTime(entry.last_seen) %></small></td></tr>
     </table>
   </section>
 </div>
@@ -199,7 +195,7 @@
       </tr>
       <% clicks.slice(0, 200).forEach(c => { %>
         <tr>
-          <td><small><%= localTime(c.ts) %></small></td>
+          <td><small><%- localTime(c.ts) %></small></td>
           <td class="mono"><small><%= c.ip %></small></td>
           <td><small><%= c.campaign_id?.name || '–' %></small></td>
           <td><small><%= c.ua_parsed?.device_label || '–' %></small></td>
