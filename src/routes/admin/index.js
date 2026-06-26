@@ -1065,7 +1065,9 @@ router.post('/asn', async (req, res) => {
     const ruleType = body.rule_type || 'asn';
     const doc = {
       workspace_id: body.scope === 'global' ? null : ws._id,
-      asn_org: body.asn_org || '',
+      asn_org: ruleType === 'cidr'
+        ? String(body.cidr_label || '').trim()
+        : String(Array.isArray(body.asn_org) ? body.asn_org[0] : (body.asn_org || '')).trim(),
       category: body.category,
       severity: body.severity || 'high',
       score_weight: Number(body.score_weight) || 50,
@@ -1078,6 +1080,21 @@ router.post('/asn', async (req, res) => {
       doc.term = (body.term || '').trim().toLowerCase();
       doc.term_field = body.term_field || 'any';
       if (!doc.term) throw new Error('Term is required for term rules');
+    } else if (ruleType === 'cidr') {
+      let value = (body.cidr || '').trim();
+      if (!value) throw new Error('IP or CIDR range is required');
+      // Auto-normalize: wildcards → CIDR, single IPs → /32 or /128
+      if (value.includes('*')) {
+        value = value.replace('.*', '.0/24');
+      } else if (!value.includes('/')) {
+        value = value.includes(':') ? value + '/128' : value + '/32';
+      }
+      doc.cidr = value;
+      // Check for duplicate
+      const existsQ = { cidr: value };
+      if (doc.workspace_id) existsQ.workspace_id = doc.workspace_id;
+      else existsQ.workspace_id = null;
+      if (await AsnBlacklist.findOne(existsQ)) throw new Error('This IP/CIDR rule already exists');
     } else {
       doc.asn = body.asn ? Number(body.asn) : null;
       if (!doc.asn) throw new Error('ASN is required for ASN rules');
