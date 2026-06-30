@@ -224,6 +224,30 @@ router.post('/optimize-exclusions', requireSyncKey, async (req, res) => {
     toAdd = [...new Set(toAdd)];
     toRemove = [...new Set(toRemove)];
 
+    // Google Ads IP exclusion format restrictions:
+    //   - Individual IPv4/IPv6 addresses (e.g. 192.168.0.1)
+    //   - IPv4 /32 masks (e.g. 192.168.0.1/32)
+    //   - IPv4 /24 masks (e.g. 192.168.0.0/24)
+    //   - IPv6 individual addresses only — broad ranges like /32 are rejected
+    // Filter out anything Google Ads won't accept.
+    toAdd = toAdd.filter(cidr => {
+      if (cidr.includes(':')) {
+        // IPv6: Google Ads only accepts individual addresses, not ranges
+        // /128 is an individual address, anything broader is rejected
+        if (cidr.includes('/')) {
+          const bits = parseInt(cidr.split('/')[1], 10);
+          if (bits < 128) return false;  // skip broad IPv6 ranges
+        }
+        return true;  // individual IPv6 address (no slash) is OK
+      }
+      // IPv4: only /24 and /32 are accepted, plus bare IPs
+      if (cidr.includes('/')) {
+        const bits = parseInt(cidr.split('/')[1], 10);
+        return bits === 24 || bits === 32;
+      }
+      return true;  // bare IPv4 address is OK
+    });
+
     // Final safety check: don't exceed limit
     const finalCount = existingExclusions.length - toRemove.length + toAdd.length;
     if (finalCount > maxLimit) {
