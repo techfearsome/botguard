@@ -2,8 +2,7 @@
  * BotGuard – Google Ads IP Exclusion Sync Script
  *
  * Syncs your campaign's IP exclusions with BotGuard's CIDR Intelligence.
- * Uses GAQL to read existing exclusions, AdsApp.mutate() for removals,
- * and campaign.excludeIpAddress() for additions.
+ * Uses GAQL to read existing exclusions and AdsApp.mutate() for all changes.
  *
  * Setup:
  *   1. Set CAMPAIGN_NAME, SERVER_URL, API_KEY below
@@ -22,6 +21,8 @@ var API_KEY       = "your-gads-sync-key-here";
 // ═══════════════════════════════════════════════════════════════════════
 
 function main() {
+  var customerId = AdsApp.currentAccount().getCustomerId().replace(/-/g, "");
+
   // 1. Find the campaign
   var campaignIterator = AdsApp.campaigns()
       .withCondition("Name = '" + CAMPAIGN_NAME + "'")
@@ -43,7 +44,6 @@ function main() {
     var query = "SELECT campaign_criterion.criterion_id, campaign_criterion.ip_block.ip_address " +
                 "FROM campaign_criterion " +
                 "WHERE campaign_criterion.type = 'IP_BLOCK' " +
-                "AND campaign_criterion.negative = TRUE " +
                 "AND campaign.id = " + campaignId;
 
     var results = AdsApp.search(query);
@@ -51,18 +51,18 @@ function main() {
     while (results.hasNext()) {
       var row = results.next();
       var ip = row.campaignCriterion.ipBlock.ipAddress;
-      var criterionId = row.campaignCriterion.criterionId;
+      var cId = row.campaignCriterion.criterionId;
       if (ip) {
         currentExclusions.push(ip);
-        criterionMap[ip] = criterionId;
+        criterionMap[ip] = cId;
       }
     }
   } catch (e) {
-    Logger.log("WARN: GAQL query failed: " + e.message);
-    Logger.log("Proceeding with empty exclusion list (first-time sync).");
+    Logger.log("WARN: GAQL query issue: " + e.message);
+    Logger.log("Proceeding with empty exclusion list.");
   }
 
-  Logger.log("Current exclusions: " + currentExclusions.length);
+  Logger.log("Current exclusions in Google Ads: " + currentExclusions.length);
 
   // 3. POST to BotGuard for optimization
   var payload = {
@@ -91,65 +91,81 @@ function main() {
     return;
   }
 
-  // 4. Parse the response
   var instructions = JSON.parse(response.getContentText());
   var toAdd = instructions.add || [];
   var toRemove = instructions.remove || [];
   var stats = instructions.stats || {};
 
-  Logger.log("Server response — Add: " + toAdd.length + " | Remove: " + toRemove.length);
-  if (stats.threats_in_database) {
-    Logger.log("Threats in DB: " + stats.threats_in_database +
-               " | Final count: " + stats.final_count + "/" + stats.limit);
+  Logger.log("Server: Add " + toAdd.length + " | Remove " + toRemove.length);
+  if (stats.final_count) {
+    Logger.log("DB threats: " + stats.threats_in_database + " | Final: " + stats.final_count + "/" + stats.limit);
   }
 
-  // 5. Execute REMOVALS first (free up slots before adding)
-  //    Use AdsApp.mutate() with the criterion resource name
-  if (toRemove.length > 0) {
-    var customerId = AdsApp.currentAccount().getCustomerId().replace(/-/g, "");
-    var removeOps = [];
+  if (toAdd.length === 0 && toRemove.length === 0) {
+    Logger.log("Nothing to change. Campaign is in sync.");
+    return;
+  }
 
-    for (var r = 0; r < toRemove.length; r++) {
-      var cid = criterionMap[toRemove[r]];
-      if (cid) {
-        removeOps.push({
-          "campaignCriterionOperation": {
-            "remove": "customers/" + customerId + "/campaignCriteria/" + campaignId + "~" + cid
-          }
-        });
-      }
+  // 4. Build all mutations in one batch
+  var operations = [];
+  var campaignResource = "customers/" + customerId + "/campaigns/" + campaignId;
+
+  // REMOVALS — use resource name with criterion ID
+  for (var r = 0; r < toRemove.length; r++) {
+    var removeCid = criterionMap[toRemove[r]];
+    if (removeCid) {
+      operations.push({
+        "campaignCriterionOperation": {
+          "remove": "customers/" + customerId + "/campaignCriteria/" + campaignId + "~" + removeCid
+        }
+      });
+    } else {
+      Logger.log("WARN: Cannot remove '" + toRemove[r] + "' — criterion ID not found.");
     }
+  }
 
-    if (removeOps.length > 0) {
-      // Process in batches of 50 (API limit)
-      var removed = 0;
-      for (var batch = 0; batch < removeOps.length; batch += 50) {
-        var chunk = removeOps.slice(batch, batch + 50);
-        try {
-          var mutateResult = AdsApp.mutate(chunk);
-          for (var mr = 0; mr < mutateResult.length; mr++) {
-            if (mutateResult[mr].isSuccessful()) removed++;
+  // ADDITIONS — create negative IP_BLOCK criterion
+  for (var a = 0; a < toAdd.length; a++) {
+    operations.push({
+      "campaignCriterionOperation": {
+        "create": {
+          "campaign": campaignResource,
+          "negative": true,
+          "ipBlock": {
+            "ipAddress": toAdd[a]
           }
-        } catch (e) {
-          Logger.log("WARN: Batch removal failed: " + e.message);
         }
       }
-      Logger.log("Removed " + removed + " stale exclusions.");
-    }
+    });
   }
 
-  // 6. Execute ADDITIONS
-  var added = 0;
-  for (var a = 0; a < toAdd.length; a++) {
+  Logger.log("Sending " + operations.length + " mutations (" +
+    toRemove.length + " removals + " + toAdd.length + " additions)...");
+
+  // 5. Execute mutations in batches of 100
+  var totalSuccess = 0;
+  var totalFailed = 0;
+
+  for (var batch = 0; batch < operations.length; batch += 100) {
+    var chunk = operations.slice(batch, Math.min(batch + 100, operations.length));
     try {
-      campaign.excludeIpAddress(toAdd[a]);
-      added++;
+      var mutateResults = AdsApp.mutate(chunk);
+      for (var m = 0; m < mutateResults.length; m++) {
+        if (mutateResults[m].isSuccessful()) {
+          totalSuccess++;
+        } else {
+          totalFailed++;
+          var err = mutateResults[m].getError();
+          if (err) Logger.log("FAIL: " + err);
+        }
+      }
     } catch (e) {
-      Logger.log("WARN: Failed to add " + toAdd[a] + ": " + e.message);
+      Logger.log("ERROR: Batch mutation failed: " + e.message);
+      totalFailed += chunk.length;
     }
   }
-  Logger.log("Added " + added + " new exclusions.");
 
-  Logger.log("Sync complete. Campaign now has ~" +
-    (currentExclusions.length - toRemove.length + added) + " exclusions.");
+  Logger.log("Results: " + totalSuccess + " succeeded, " + totalFailed + " failed.");
+  Logger.log("Campaign now has ~" +
+    (currentExclusions.length - toRemove.length + toAdd.length) + " exclusions.");
 }
