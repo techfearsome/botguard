@@ -230,6 +230,22 @@ router.post('/optimize-exclusions', requireSyncKey, async (req, res) => {
       toAdd = toAdd.slice(0, maxLimit - (existingExclusions.length - toRemove.length));
     }
 
+    // Mark CIDRs in intelligence database
+    // toAdd → gads_exported: true (now active in Google Ads)
+    if (toAdd.length > 0) {
+      await CidrIntelligence.updateMany(
+        { workspace_id: ws._id, cidr: { $in: toAdd } },
+        { $set: { gads_exported: true, gads_exported_at: new Date() } }
+      );
+    }
+    // toRemove → gads_exported: false (removed from Google Ads)
+    if (toRemove.length > 0) {
+      await CidrIntelligence.updateMany(
+        { workspace_id: ws._id, cidr: { $in: toRemove } },
+        { $set: { gads_exported: false, gads_exported_at: null } }
+      );
+    }
+
     // Update last sync stats on workspace
     try {
       await Workspace.updateOne({ _id: ws._id }, { $set: {

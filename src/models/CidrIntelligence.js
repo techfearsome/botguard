@@ -6,7 +6,7 @@
 
 const mongoose = require('mongoose');
 
-const STATUSES = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed', 'archived'];
+const STATUSES = ['new', 'reviewing', 'watchlist', 'blocked', 'exported', 'dismissed'];
 
 // Frequency labels are a separate axis from `score`. Score asks "how confident
 // are we this is a bot?" — based on signal strength. Frequency asks "how often
@@ -44,10 +44,6 @@ const SignalSchema = new mongoose.Schema({
   // so they can score CIDRs that hit you days ago and haven't returned.
   historical_ids: { type: Number, default: 0 },  // 0-12 (multi-day ad-id diversity, zero conv)
   frequency:      { type: Number, default: 0 },  // 0-10 (HIGH/MEDIUM/LOW label feedback)
-  // v2.3 — cross-campaign correlation
-  cross_campaign: { type: Number, default: 0 },  // 0-10 (one CIDR hitting many campaigns)
-  // v2.4 — ASN reputation memory
-  asn_reputation: { type: Number, default: 0 },  // 0-8 (known-bad ASN association)
 }, { _id: false });
 
 const CidrIntelligenceSchema = new mongoose.Schema({
@@ -94,8 +90,6 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   top_uas: [{ ua: String, count: Number }],
   sample_ips: [String],
   fake_ua_count: { type: Number, default: 0 },
-  strong_fake_count: { type: Number, default: 0 },  // v2.4: severity-3 fakes
-  fake_ua_flags: { type: mongoose.Schema.Types.Mixed, default: {} },  // v2.4: flag → count
 
   // ── Click-ID correlation ───────────────────────────────────────────
   unique_gclids:         { type: Number, default: 0 },
@@ -125,10 +119,6 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   ip_return_total_ips:{ type: Number, default: 0 },   // IPs with any return
   hits_per_ip:        { type: Number, default: 0 },
 
-  // v2.3: cross-campaign correlation
-  campaign_count: { type: Number, default: 0, index: true },
-  campaign_ids:   [{ type: mongoose.Schema.Types.ObjectId, ref: 'Campaign' }],
-
   // ── v2.1: Dwell / bounce evidence ──────────────────────────────────
   avg_dwell_ms:       { type: Number, default: null },   // average time on page (ms)
   bounce_rate_5s:     { type: Number, default: null },   // ratio of visitors leaving < 5s
@@ -150,16 +140,16 @@ const CidrIntelligenceSchema = new mongoose.Schema({
   blocked_at:   { type: Date },
   exported_at:  { type: Date },
   dismissed_at: { type: Date },
-  archived_at: { type: Date },
-  // v2.5: auto-escalation tracking
-  auto_escalated: { type: Boolean, default: false },
-  auto_escalated_at: { type: Date },
   watchlisted_at: { type: Date },
   notes:        { type: String, default: '', maxlength: 500 },
 
   // ── Cloudflare edge firewall status ────────────────────────────────
   cf_exported:    { type: Boolean, default: false, index: true },
   cf_exported_at: { type: Date },
+
+  // Google Ads exclusion sync
+  gads_exported:    { type: Boolean, default: false, index: true },
+  gads_exported_at: { type: Date },
 
   // ── Historical correlation ─────────────────────────────────────────
   historical_match: {
