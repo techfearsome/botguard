@@ -96,6 +96,63 @@ function aggregateCidrs(cidrs) {
   return result;
 }
 
+// ── Google Ads IPv6 formatting ────────────────────────────────────────
+
+/**
+ * Expand an IPv6 address for Google Ads.
+ *
+ * Google Ads rejects zero-compressed (::) syntax but accepts fully
+ * expanded addresses. This function expands :: into explicit :0 segments.
+ *
+ * Examples:
+ *   2003:d8::/32         → 2003:d8:0:0:0:0:0:0/32
+ *   2600:387:f:5e17::b   → 2600:387:f:5e17:0:0:0:b
+ *   2601:246:4305:dcb0::1/128 → 2601:246:4305:dcb0:0:0:0:1/128
+ *
+ * IPv4 addresses pass through unchanged.
+ * Returns null for formats Google Ads won't accept (IPv4 masks other than /24 and /32).
+ */
+function expandForGoogleAds(cidr) {
+  if (!cidr) return null;
+
+  // IPv4 — pass through, but filter unsupported masks
+  if (!cidr.includes(':')) {
+    if (cidr.includes('/')) {
+      const bits = parseInt(cidr.split('/')[1], 10);
+      if (bits !== 24 && bits !== 32) return null;
+    }
+    return cidr;
+  }
+
+  // IPv6 — expand :: compression
+  let addr = cidr;
+  let mask = '';
+
+  // Separate mask if present
+  if (addr.includes('/')) {
+    const parts = addr.split('/');
+    addr = parts[0];
+    mask = '/' + parts[1];
+  }
+
+  // Expand :: into explicit :0 segments
+  if (addr.includes('::')) {
+    const sides = addr.split('::');
+    const left = sides[0] ? sides[0].split(':') : [];
+    const right = sides[1] ? sides[1].split(':').filter(s => s !== '') : [];
+    const missing = 8 - left.length - right.length;
+    const middle = [];
+    for (let i = 0; i < missing; i++) middle.push('0');
+    addr = [...left, ...middle, ...right].join(':');
+  }
+
+  // Ensure exactly 8 segments
+  const segments = addr.split(':');
+  while (segments.length < 8) segments.push('0');
+
+  return segments.slice(0, 8).join(':') + mask;
+}
+
 // ── Main optimization logic ──────────────────────────────────────────
 
 router.post('/optimize-exclusions', requireSyncKey, async (req, res) => {
@@ -224,29 +281,12 @@ router.post('/optimize-exclusions', requireSyncKey, async (req, res) => {
     toAdd = [...new Set(toAdd)];
     toRemove = [...new Set(toRemove)];
 
-    // Google Ads IP exclusion format restrictions:
-    //   - Individual IPv4/IPv6 addresses (e.g. 192.168.0.1)
-    //   - IPv4 /32 masks (e.g. 192.168.0.1/32)
-    //   - IPv4 /24 masks (e.g. 192.168.0.0/24)
-    //   - IPv6 individual addresses only — broad ranges like /32 are rejected
-    // Filter out anything Google Ads won't accept.
-    toAdd = toAdd.filter(cidr => {
-      if (cidr.includes(':')) {
-        // IPv6: Google Ads only accepts individual addresses, not ranges
-        // /128 is an individual address, anything broader is rejected
-        if (cidr.includes('/')) {
-          const bits = parseInt(cidr.split('/')[1], 10);
-          if (bits < 128) return false;  // skip broad IPv6 ranges
-        }
-        return true;  // individual IPv6 address (no slash) is OK
-      }
-      // IPv4: only /24 and /32 are accepted, plus bare IPs
-      if (cidr.includes('/')) {
-        const bits = parseInt(cidr.split('/')[1], 10);
-        return bits === 24 || bits === 32;
-      }
-      return true;  // bare IPv4 address is OK
-    });
+    // Google Ads IPv6 formatting requirement:
+    // Google's parser rejects zero-compressed (::) syntax but accepts
+    // fully expanded addresses. 2003:d8::/32 → 2003:d8:0:0:0:0:0:0/32
+    // IPv4 only supports individual IPs, /32 and /24 masks.
+    toAdd = toAdd.map(expandForGoogleAds).filter(Boolean);
+    toRemove = toRemove.map(expandForGoogleAds).filter(Boolean);
 
     // Final safety check: don't exceed limit
     const finalCount = existingExclusions.length - toRemove.length + toAdd.length;
