@@ -3,13 +3,13 @@
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
   <div>
     <h1 style="margin-bottom:4px;">Intelligence Settings</h1>
-    <p class="muted">Configure automatic export of flagged CIDRs to the Cloudflare edge firewall.</p>
+    <p class="muted">Configure automatic export of flagged CIDRs to Cloudflare and Google Ads.</p>
   </div>
   <a href="/admin/intelligence" class="btn">← Back to Intelligence</a>
 </div>
 
 <% if (flash) { %>
-<div style="background:var(--color-background-info,#E6F1FB); border:1px solid var(--color-border-info,#85B7EB); border-radius:var(--radius-md); padding:10px 14px; margin-bottom:16px; font-size:13px; color:var(--color-text-info,#185FA5);">
+<div style="background:var(--color-background-info,#1a2332); border:1px solid var(--color-border-info,#2a4a6b); border-radius:var(--radius-md); padding:10px 14px; margin-bottom:16px; font-size:13px; color:var(--text-primary);">
   <%= flash %>
 </div>
 <% } %>
@@ -18,20 +18,15 @@
 <section class="panel" style="margin-bottom:24px;">
   <h3>Auto-Export to Cloudflare</h3>
   <p class="muted" style="margin-bottom:16px;">
-    When enabled, CIDRs that meet the threshold criteria below will be automatically
-    added to the Cloudflare edge firewall rules. This runs after each intelligence
-    analysis cycle (every 60 seconds).
+    Automatically add qualifying CIDRs to the Cloudflare edge firewall. Runs after each analysis cycle (every 60 seconds).
   </p>
-
   <form method="POST" action="/admin/intelligence/settings" class="form" style="max-width:none;">
-
     <div class="form-row">
       <label style="display:flex; align-items:center; gap:10px;">
         <input type="checkbox" name="enabled" <%= autoCf.enabled ? 'checked' : '' %> style="width:auto;">
         <span>Enable auto-export to Cloudflare</span>
       </label>
     </div>
-
     <div class="grid-2" style="margin-top:12px;">
       <div>
         <div class="form-row">
@@ -42,104 +37,160 @@
             <option value="40" <%= autoCf.min_score === 40 ? 'selected' : '' %>>Medium+ (40+)</option>
             <option value="20" <%= autoCf.min_score === 20 ? 'selected' : '' %>>All scored (20+)</option>
           </select>
-          <small class="muted">Only export CIDRs with a score at or above this threshold.</small>
         </div>
-
         <div class="form-row">
           <label>Minimum days seen</label>
           <select name="min_days">
-            <option value="1" <%= autoCf.min_days === 1 ? 'selected' : '' %>>1 day (export immediately)</option>
+            <option value="1" <%= autoCf.min_days === 1 ? 'selected' : '' %>>1 day</option>
             <option value="2" <%= autoCf.min_days === 2 ? 'selected' : '' %>>2 days</option>
             <option value="3" <%= autoCf.min_days === 3 ? 'selected' : '' %>>3 days</option>
             <option value="5" <%= autoCf.min_days === 5 ? 'selected' : '' %>>5 days</option>
             <option value="7" <%= autoCf.min_days === 7 ? 'selected' : '' %>>7 days</option>
           </select>
-          <small class="muted">Block must be seen on at least this many days before auto-exporting.</small>
         </div>
       </div>
-
       <div>
         <div class="form-row">
           <label>Minimum hits</label>
           <select name="min_hits">
-            <option value="3"  <%= autoCf.min_hits === 3  ? 'selected' : '' %>>3+ hits</option>
-            <option value="5"  <%= autoCf.min_hits === 5  ? 'selected' : '' %>>5+ hits</option>
-            <option value="10" <%= autoCf.min_hits === 10 ? 'selected' : '' %>>10+ hits</option>
-            <option value="20" <%= autoCf.min_hits === 20 ? 'selected' : '' %>>20+ hits</option>
-            <option value="50" <%= autoCf.min_hits === 50 ? 'selected' : '' %>>50+ hits</option>
+            <option value="3"  <%= autoCf.min_hits === 3  ? 'selected' : '' %>>3+</option>
+            <option value="5"  <%= autoCf.min_hits === 5  ? 'selected' : '' %>>5+</option>
+            <option value="10" <%= autoCf.min_hits === 10 ? 'selected' : '' %>>10+</option>
+            <option value="20" <%= autoCf.min_hits === 20 ? 'selected' : '' %>>20+</option>
+            <option value="50" <%= autoCf.min_hits === 50 ? 'selected' : '' %>>50+</option>
           </select>
-          <small class="muted">Minimum total click count before auto-exporting.</small>
         </div>
-
         <div class="form-row">
           <label style="display:flex; align-items:center; gap:10px;">
             <input type="checkbox" name="auto_sync" <%= autoCf.auto_sync !== false ? 'checked' : '' %> style="width:auto;">
             <span>Auto-sync to Cloudflare KV after adding</span>
           </label>
-          <small class="muted">Push the updated blocklist to Cloudflare immediately after adding new rules.</small>
+        </div>
+      </div>
+    </div>
+    <div class="form-actions" style="margin-top:16px;">
+      <button type="submit" class="btn btn-primary">Save Cloudflare settings</button>
+    </div>
+  </form>
+</section>
+
+<%# ── Google Ads IP Exclusion Sync ───────────────────────────────── %>
+<% const gads = ws.settings?.gads_sync || { enabled: false, min_score: 50, reserve_slots: 50, exclusion_limit: 500 }; %>
+<section class="panel" style="margin-bottom:24px;">
+  <h3>Google Ads IP Exclusion Sync</h3>
+  <p class="muted" style="margin-bottom:16px;">
+    Sync BotGuard's intelligence with Google Ads campaign IP exclusions via a Google Ads Script.
+    The script runs hourly, sends current exclusions to BotGuard, and receives optimized add/remove instructions.
+    <strong>Disabled by default</strong> — enable when ready to deploy the Google Ads Script.
+  </p>
+
+  <form method="POST" action="/admin/intelligence/settings/gads" class="form" style="max-width:none;">
+    <div class="form-row">
+      <label style="display:flex; align-items:center; gap:10px;">
+        <input type="checkbox" name="gads_enabled" <%= gads.enabled ? 'checked' : '' %> style="width:auto;">
+        <span>Enable Google Ads exclusion sync</span>
+      </label>
+    </div>
+
+    <div class="grid-2" style="margin-top:12px;">
+      <div>
+        <div class="form-row">
+          <label>Minimum score to export</label>
+          <select name="gads_min_score">
+            <option value="80" <%= gads.min_score >= 80 ? 'selected' : '' %>>Critical only (80+)</option>
+            <option value="60" <%= gads.min_score === 60 ? 'selected' : '' %>>High+ (60+)</option>
+            <option value="50" <%= gads.min_score === 50 ? 'selected' : '' %>>Medium-high (50+)</option>
+            <option value="40" <%= gads.min_score === 40 ? 'selected' : '' %>>Medium+ (40+)</option>
+          </select>
+          <small class="muted">Only CIDRs scoring at or above this threshold get pushed to Google Ads.</small>
+        </div>
+        <div class="form-row">
+          <label>Exclusion limit (Google's max)</label>
+          <select name="gads_limit">
+            <option value="500" <%= gads.exclusion_limit === 500 ? 'selected' : '' %>>500 (Google default)</option>
+            <option value="250" <%= gads.exclusion_limit === 250 ? 'selected' : '' %>>250 (conservative)</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <div class="form-row">
+          <label>Reserved slots (for manual entries)</label>
+          <select name="gads_reserve">
+            <option value="0"   <%= gads.reserve_slots === 0   ? 'selected' : '' %>>0 (use all slots)</option>
+            <option value="25"  <%= gads.reserve_slots === 25  ? 'selected' : '' %>>25</option>
+            <option value="50"  <%= gads.reserve_slots === 50  ? 'selected' : '' %>>50 (recommended)</option>
+            <option value="100" <%= gads.reserve_slots === 100 ? 'selected' : '' %>>100</option>
+          </select>
+          <small class="muted">Keep this many slots free for manually added exclusions in Google Ads.</small>
         </div>
       </div>
     </div>
 
     <div class="form-actions" style="margin-top:16px;">
-      <button type="submit" class="btn btn-primary">Save settings</button>
+      <button type="submit" class="btn btn-primary">Save Google Ads settings</button>
     </div>
   </form>
-</section>
 
-<%# ── Current status ──────────────────────────────────────────────── %>
-<section class="panel" style="margin-bottom:24px;">
-  <h3>Status</h3>
-  <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px;">
-    <div class="stat-card" style="flex:1; min-width:120px;">
-      <div class="stat-label">Auto-export</div>
-      <div class="stat-value" style="color:<%= autoCf.enabled ? '#22c55e' : '#ef4444' %>;">
-        <%= autoCf.enabled ? 'ON' : 'OFF' %>
+  <%# Status panel %>
+  <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:20px; padding-top:16px; border-top:1px solid var(--border-default);">
+    <div class="stat-card" style="flex:1; min-width:100px;">
+      <div class="stat-label">Status</div>
+      <div class="stat-value" style="color:<%= gads.enabled ? '#22c55e' : '#ef4444' %>;">
+        <%= gads.enabled ? 'ON' : 'OFF' %>
       </div>
     </div>
-    <div class="stat-card" style="flex:1; min-width:120px;">
-      <div class="stat-label">Qualifying now</div>
+    <div class="stat-card" style="flex:1; min-width:100px;">
+      <div class="stat-label">API key</div>
+      <div class="stat-value" style="font-size:14px; color:<%= process.env.GADS_SYNC_KEY ? '#22c55e' : '#ef4444' %>;">
+        <%= process.env.GADS_SYNC_KEY ? '✓ Set' : '✗ Not set' %>
+      </div>
+      <% if (!process.env.GADS_SYNC_KEY) { %>
+        <div class="stat-sub">Add <code>GADS_SYNC_KEY</code> to .env</div>
+      <% } %>
+    </div>
+    <div class="stat-card" style="flex:1; min-width:100px;">
+      <div class="stat-label">Qualifying CIDRs</div>
       <div class="stat-value"><%= qualifyingCount %></div>
-      <div class="stat-sub">CIDRs meeting thresholds</div>
+      <div class="stat-sub">score ≥ <%= gads.min_score || 50 %></div>
     </div>
-    <div class="stat-card" style="flex:1; min-width:120px;">
-      <div class="stat-label">CF rules total</div>
-      <div class="stat-value"><%= cfRuleCount %></div>
-    </div>
-    <div class="stat-card" style="flex:1; min-width:120px;">
-      <div class="stat-label">Last auto-run</div>
+    <div class="stat-card" style="flex:1; min-width:100px;">
+      <div class="stat-label">Last sync</div>
       <div class="stat-value" style="font-size:14px;">
-        <%= autoCf.last_run_at ? new Date(autoCf.last_run_at).toLocaleString() : 'Never' %>
+        <% if (gads.last_sync_at) { %>
+          <%- localTime(gads.last_sync_at) %>
+        <% } else { %>
+          Never
+        <% } %>
       </div>
-      <% if (autoCf.last_exported_count > 0) { %>
-        <div class="stat-sub">Exported <%= autoCf.last_exported_count %> CIDRs</div>
+      <% if (gads.last_sync_added > 0 || gads.last_sync_removed > 0) { %>
+        <div class="stat-sub">+<%= gads.last_sync_added %> / -<%= gads.last_sync_removed %></div>
       <% } %>
     </div>
   </div>
 
-  <div style="display:flex; gap:8px;">
-    <form method="POST" action="/admin/intelligence/settings/run-auto-export">
-      <button type="submit" class="btn" <%= autoCf.enabled ? '' : 'disabled title="Enable auto-export first"' %>>
-        Run auto-export now
-      </button>
-    </form>
-    <a href="/admin/cloudflare" class="btn">View Cloudflare rules →</a>
-  </div>
+  <%# Setup instructions %>
+  <details style="margin-top:16px;">
+    <summary style="cursor:pointer; font-weight:600; font-size:13px;">Setup instructions</summary>
+    <div style="margin-top:12px; padding:14px 18px; background:var(--bg-code, #1a1a2e); border-radius:var(--radius-md); font-size:13px; line-height:1.8;">
+      <strong>1.</strong> Add <code>GADS_SYNC_KEY=your-random-secret</code> to your <code>.env</code> file<br>
+      <strong>2.</strong> Enable the toggle above and save<br>
+      <strong>3.</strong> In Google Ads → Tools → Scripts → create a new script<br>
+      <strong>4.</strong> Paste the script from <code>scripts/google-ads-sync.js</code><br>
+      <strong>5.</strong> Set <code>CAMPAIGN_NAME</code>, <code>SERVER_URL</code>, and <code>API_KEY</code> in the script<br>
+      <strong>6.</strong> Click "Preview" to test, then schedule hourly
+    </div>
+  </details>
 </section>
 
 <%# ── Threshold preview ──────────────────────────────────────────── %>
 <section class="panel">
-  <h3>Current thresholds</h3>
-  <p class="muted" style="margin-bottom:12px;">
-    With the current settings, a CIDR block will be auto-exported to Cloudflare when it meets
-    <strong>all</strong> of these conditions:
-  </p>
+  <h3>Current Cloudflare Thresholds</h3>
   <div style="background:var(--bg-code, #1a1a2e); padding:14px 18px; border-radius:var(--radius-md); font-family:var(--font-mono); font-size:13px; line-height:1.8; color:var(--text-primary);">
-    score >= <strong style="color:#f97316;"><%= autoCf.min_score %></strong><br>
-    AND days_seen >= <strong style="color:#f97316;"><%= autoCf.min_days %></strong><br>
-    AND hit_count >= <strong style="color:#f97316;"><%= autoCf.min_hits %></strong><br>
-    AND cf_exported == <strong style="color:#22c55e;">false</strong> (not already in Cloudflare)<br>
-    AND status IN <strong style="color:#3b82f6;">['new', 'reviewing', 'blocked', 'exported']</strong> (not dismissed)
+    score >= <strong style="color:#f97316;"><%= autoCf.min_score %></strong>
+    AND days_seen >= <strong style="color:#f97316;"><%= autoCf.min_days %></strong>
+    AND hit_count >= <strong style="color:#f97316;"><%= autoCf.min_hits %></strong>
+    AND cf_exported == <strong style="color:#22c55e;">false</strong>
+    AND status IN <strong style="color:#3b82f6;">['new', 'reviewing', 'blocked', 'exported']</strong>
   </div>
 </section>
 

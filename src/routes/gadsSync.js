@@ -108,9 +108,16 @@ router.post('/optimize-exclusions', requireSyncKey, async (req, res) => {
     const ws = await Workspace.findOne().lean();
     if (!ws) return res.status(404).json({ error: 'No workspace found' });
 
-    const maxLimit = parseInt(process.env.GADS_EXCLUSION_LIMIT, 10) || DEFAULT_LIMIT;
-    const minScore = parseInt(process.env.GADS_MIN_SCORE, 10) || DEFAULT_MIN_SCORE;
-    const reserveSlots = parseInt(process.env.GADS_RESERVE_SLOTS, 10) || DEFAULT_RESERVE;
+    // Check if Google Ads sync is enabled
+    const gadsSettings = ws.settings?.gads_sync || {};
+    if (!gadsSettings.enabled) {
+      return res.status(403).json({ error: 'Google Ads sync is disabled. Enable it in Intelligence → Settings.' });
+    }
+
+    // Use workspace settings, fall back to env vars, then defaults
+    const maxLimit = gadsSettings.exclusion_limit || parseInt(process.env.GADS_EXCLUSION_LIMIT, 10) || DEFAULT_LIMIT;
+    const minScore = gadsSettings.min_score || parseInt(process.env.GADS_MIN_SCORE, 10) || DEFAULT_MIN_SCORE;
+    const reserveSlots = gadsSettings.reserve_slots || parseInt(process.env.GADS_RESERVE_SLOTS, 10) || DEFAULT_RESERVE;
     const effectiveLimit = maxLimit - reserveSlots; // leave room for manual entries
 
     // Fetch all active threats from intelligence, sorted by score descending
@@ -223,6 +230,15 @@ router.post('/optimize-exclusions', requireSyncKey, async (req, res) => {
       toAdd = toAdd.slice(0, maxLimit - (existingExclusions.length - toRemove.length));
     }
 
+    // Update last sync stats on workspace
+    try {
+      await Workspace.updateOne({ _id: ws._id }, { $set: {
+        'settings.gads_sync.last_sync_at': new Date(),
+        'settings.gads_sync.last_sync_added': toAdd.length,
+        'settings.gads_sync.last_sync_removed': toRemove.length,
+      }});
+    } catch (e) {}
+
     res.json({
       add: toAdd,
       remove: toRemove,
@@ -252,7 +268,8 @@ router.get('/sync-status', requireSyncKey, async (req, res) => {
     const ws = await Workspace.findOne().lean();
     if (!ws) return res.status(404).json({ error: 'No workspace' });
 
-    const minScore = parseInt(process.env.GADS_MIN_SCORE, 10) || DEFAULT_MIN_SCORE;
+    const gadsSettings = ws.settings?.gads_sync || {};
+    const minScore = gadsSettings.min_score || parseInt(process.env.GADS_MIN_SCORE, 10) || DEFAULT_MIN_SCORE;
     const count = await CidrIntelligence.countDocuments({
       workspace_id: ws._id,
       score: { $gte: minScore },
@@ -260,11 +277,15 @@ router.get('/sync-status', requireSyncKey, async (req, res) => {
     });
 
     res.json({
+      enabled: !!gadsSettings.enabled,
       threats_eligible: count,
       min_score: minScore,
-      limit: parseInt(process.env.GADS_EXCLUSION_LIMIT, 10) || DEFAULT_LIMIT,
-      reserve: parseInt(process.env.GADS_RESERVE_SLOTS, 10) || DEFAULT_RESERVE,
-      configured: !!process.env.GADS_SYNC_KEY,
+      limit: gadsSettings.exclusion_limit || DEFAULT_LIMIT,
+      reserve: gadsSettings.reserve_slots || DEFAULT_RESERVE,
+      last_sync_at: gadsSettings.last_sync_at || null,
+      last_sync_added: gadsSettings.last_sync_added || 0,
+      last_sync_removed: gadsSettings.last_sync_removed || 0,
+      api_key_configured: !!process.env.GADS_SYNC_KEY,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
