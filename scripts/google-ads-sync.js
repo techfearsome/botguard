@@ -1,26 +1,14 @@
 /**
  * BotGuard – Google Ads IP Exclusion Sync Script
  *
- * This script syncs your Google Ads campaign's IP exclusions with BotGuard's
- * CIDR Intelligence database. Drop it into Google Ads Script editor and
- * schedule it to run hourly.
- *
- * How it works:
- *   1. Reads all current IP exclusions from your campaign
- *   2. POSTs them to your BotGuard server
- *   3. BotGuard compares against its intelligence, computes optimal add/remove
- *   4. Script applies the instructions (removals first, then additions)
+ * Syncs your campaign's IP exclusions with BotGuard's CIDR Intelligence.
+ * Uses GAQL to read existing exclusions, AdsApp.mutate() for removals,
+ * and campaign.excludeIpAddress() for additions.
  *
  * Setup:
- *   1. Set CAMPAIGN_NAME to your display campaign name (exact match)
- *   2. Set SERVER_URL to your BotGuard domain
- *   3. Set API_KEY to match GADS_SYNC_KEY in your BotGuard .env
- *   4. Paste into Google Ads > Tools > Scripts > New Script
- *   5. Schedule: Hourly
- *
- * Google Ads limit: 500 IP exclusions per campaign.
- * BotGuard handles FIFO rotation automatically — when at the limit, it
- * removes lowest-score/stale entries to make room for higher-priority threats.
+ *   1. Set CAMPAIGN_NAME, SERVER_URL, API_KEY below
+ *   2. Paste into Google Ads > Tools > Scripts > New Script
+ *   3. Click Preview to test, then schedule Hourly
  */
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -28,8 +16,8 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 var CAMPAIGN_NAME = "YOUR_DISPLAY_CAMPAIGN_NAME";
-var SERVER_URL    = "https://yourdomain.com";           // your BotGuard URL (no trailing slash)
-var API_KEY       = "your-gads-sync-key-here";          // matches GADS_SYNC_KEY in .env
+var SERVER_URL    = "https://yourdomain.com";
+var API_KEY       = "your-gads-sync-key-here";
 
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -40,19 +28,38 @@ function main() {
       .get();
 
   if (!campaignIterator.hasNext()) {
-    Logger.log("ERROR: Campaign '" + CAMPAIGN_NAME + "' not found. Check the name.");
+    Logger.log("ERROR: Campaign '" + CAMPAIGN_NAME + "' not found.");
     return;
   }
   var campaign = campaignIterator.next();
-  Logger.log("Campaign found: " + campaign.getName());
+  var campaignId = campaign.getId();
+  Logger.log("Campaign found: " + campaign.getName() + " (ID: " + campaignId + ")");
 
-  // 2. Collect current IP exclusions
+  // 2. Read current IP exclusions via GAQL
   var currentExclusions = [];
-  var exclusionsIterator = campaign.ipExclusions().get();
+  var criterionMap = {};  // ip → criterionId (needed for removal)
 
-  while (exclusionsIterator.hasNext()) {
-    var exclusion = exclusionsIterator.next();
-    currentExclusions.push(exclusion.getIpAddress());
+  try {
+    var query = "SELECT campaign_criterion.criterion_id, campaign_criterion.ip_block.ip_address " +
+                "FROM campaign_criterion " +
+                "WHERE campaign_criterion.type = 'IP_BLOCK' " +
+                "AND campaign_criterion.negative = TRUE " +
+                "AND campaign.id = " + campaignId;
+
+    var results = AdsApp.search(query);
+
+    while (results.hasNext()) {
+      var row = results.next();
+      var ip = row.campaignCriterion.ipBlock.ipAddress;
+      var criterionId = row.campaignCriterion.criterionId;
+      if (ip) {
+        currentExclusions.push(ip);
+        criterionMap[ip] = criterionId;
+      }
+    }
+  } catch (e) {
+    Logger.log("WARN: GAQL query failed: " + e.message);
+    Logger.log("Proceeding with empty exclusion list (first-time sync).");
   }
 
   Logger.log("Current exclusions: " + currentExclusions.length);
@@ -92,27 +99,43 @@ function main() {
 
   Logger.log("Server response — Add: " + toAdd.length + " | Remove: " + toRemove.length);
   if (stats.threats_in_database) {
-    Logger.log("Threats in database: " + stats.threats_in_database + " | Final count: " + stats.final_count + "/" + stats.limit);
+    Logger.log("Threats in DB: " + stats.threats_in_database +
+               " | Final count: " + stats.final_count + "/" + stats.limit);
   }
 
   // 5. Execute REMOVALS first (free up slots before adding)
+  //    Use AdsApp.mutate() with the criterion resource name
   if (toRemove.length > 0) {
-    var removalSet = {};
-    for (var r = 0; r < toRemove.length; r++) {
-      removalSet[toRemove[r]] = true;
-    }
+    var customerId = AdsApp.currentAccount().getCustomerId().replace(/-/g, "");
+    var removeOps = [];
 
-    // Re-fetch live exclusion objects for removal
-    var refreshIterator = campaign.ipExclusions().get();
-    var removed = 0;
-    while (refreshIterator.hasNext()) {
-      var liveExclusion = refreshIterator.next();
-      if (removalSet[liveExclusion.getIpAddress()]) {
-        liveExclusion.remove();
-        removed++;
+    for (var r = 0; r < toRemove.length; r++) {
+      var cid = criterionMap[toRemove[r]];
+      if (cid) {
+        removeOps.push({
+          "campaignCriterionOperation": {
+            "remove": "customers/" + customerId + "/campaignCriteria/" + campaignId + "~" + cid
+          }
+        });
       }
     }
-    Logger.log("Removed " + removed + " stale exclusions.");
+
+    if (removeOps.length > 0) {
+      // Process in batches of 50 (API limit)
+      var removed = 0;
+      for (var batch = 0; batch < removeOps.length; batch += 50) {
+        var chunk = removeOps.slice(batch, batch + 50);
+        try {
+          var mutateResult = AdsApp.mutate(chunk);
+          for (var mr = 0; mr < mutateResult.length; mr++) {
+            if (mutateResult[mr].isSuccessful()) removed++;
+          }
+        } catch (e) {
+          Logger.log("WARN: Batch removal failed: " + e.message);
+        }
+      }
+      Logger.log("Removed " + removed + " stale exclusions.");
+    }
   }
 
   // 6. Execute ADDITIONS
