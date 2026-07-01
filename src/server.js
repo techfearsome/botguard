@@ -84,7 +84,13 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
-app.use(compression());
+app.use(compression({
+  filter: function (req, res) {
+    if (req.path === '/admin/live/stream') return false;
+    if (res.getHeader('Content-Type')?.includes('text/event-stream')) return false;
+    return compression.filter(req, res);
+  },
+}));
 app.use(cookieParser());
 
 // Body parsing. We parse JSON for the standard content-type AND for text/plain,

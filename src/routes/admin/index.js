@@ -677,6 +677,7 @@ router.get('/live/stream', async (req, res) => {
   function send(eventName, data) {
     res.write(`event: ${eventName}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (typeof res.flush === 'function') res.flush();
   }
   send('snapshot', live.snapshot(wsId));
 
@@ -702,6 +703,7 @@ router.get('/live/stream', async (req, res) => {
   // is supposed to be long-lived.
   const keepalive = setInterval(() => {
     res.write(': keepalive\n\n');
+    if (typeof res.flush === 'function') res.flush();
   }, 25000);
 
   // Clean up when the client disconnects
