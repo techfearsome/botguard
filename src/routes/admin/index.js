@@ -2109,6 +2109,193 @@ router.post('/intelligence/settings/gads', async (req, res) => {
   res.redirect('/admin/intelligence/settings?flash=Google+Ads+sync+settings+saved');
 });
 
+// ── Intelligence settings ────────────────────────────────────────────
+
+router.get('/intelligence/settings', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const autoCf = ws.settings?.intelligence_auto_cf || {
+    enabled: false, min_score: 60, min_days: 2, min_hits: 5, auto_sync: true,
+  };
+  const gads = ws.settings?.gads_sync || {
+    enabled: false, min_score: 50, reserve_slots: 50, exclusion_limit: 500,
+  };
+  const qualifyingCount = await CidrIntelligence.countDocuments({
+    workspace_id: ws._id,
+    score: { $gte: gads.min_score || 50 },
+    status: { $nin: ['dismissed', 'archived'] },
+  });
+  res.render('admin/intelligence_settings', {
+    ws, page: 'intelligence', autoCf, qualifyingCount, flash: req.query.flash || '',
+  });
+});
+
+router.post('/intelligence/settings', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const body = req.body;
+  await ws.constructor.updateOne({ _id: ws._id }, { $set: {
+    'settings.intelligence_auto_cf.enabled':  body.enabled === 'on',
+    'settings.intelligence_auto_cf.min_score': parseInt(body.min_score, 10) || 60,
+    'settings.intelligence_auto_cf.min_days':  parseInt(body.min_days, 10) || 2,
+    'settings.intelligence_auto_cf.min_hits':  parseInt(body.min_hits, 10) || 5,
+    'settings.intelligence_auto_cf.auto_sync': body.auto_sync === 'on',
+  }});
+  res.redirect('/admin/intelligence/settings?flash=Cloudflare+settings+saved');
+});
+
+router.post('/intelligence/settings/gads', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const body = req.body;
+  await ws.constructor.updateOne({ _id: ws._id }, { $set: {
+    'settings.gads_sync.enabled':        body.gads_enabled === 'on',
+    'settings.gads_sync.min_score':       parseInt(body.gads_min_score, 10) || 50,
+    'settings.gads_sync.reserve_slots':   parseInt(body.gads_reserve, 10) || 50,
+    'settings.gads_sync.exclusion_limit':  parseInt(body.gads_limit, 10) || 500,
+  }});
+  res.redirect('/admin/intelligence/settings?flash=Google+Ads+settings+saved');
+});
+
+// ── CIDR drill-down view ─────────────────────────────────────────────
+
+router.get('/intelligence/:id/detail', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const entry = await CidrIntelligence.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!entry) return res.status(404).send('CIDR not found');
+
+  let ipPrefix = '';
+  if (entry.ip_version === 'v4') {
+    ipPrefix = entry.cidr.replace(/\.\d+\/\d+$/, '.');
+  } else {
+    ipPrefix = entry.cidr.replace(/::\/\d+$/, ':');
+  }
+
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const clicks = await Click.find({
+    workspace_id: ws._id,
+    ip: new RegExp('^' + ipPrefix.replace(/[.]/g, '\\.')),
+    ts: { $gte: since },
+  })
+    .select('click_id ip ts decision conversion_count user_agent ua_parsed asn_org country external_ids dwell_ms campaign_id utm scores')
+    .populate('campaign_id', 'name slug')
+    .sort({ ts: -1 })
+    .limit(500)
+    .lean();
+
+  const uaDistribution = {}, ipDistribution = {}, campaignDistribution = {};
+  const decisionCounts = { allow: 0, block: 0, would_block: 0 };
+  const hourlyTimeline = {};
+
+  for (const c of clicks) {
+    const ua = c.user_agent || '(none)';
+    uaDistribution[ua] = (uaDistribution[ua] || 0) + 1;
+    ipDistribution[c.ip] = (ipDistribution[c.ip] || 0) + 1;
+    const campName = c.campaign_id?.name || '(unknown)';
+    campaignDistribution[campName] = (campaignDistribution[campName] || 0) + 1;
+    if (c.decision) decisionCounts[c.decision] = (decisionCounts[c.decision] || 0) + 1;
+    const hourKey = new Date(c.ts).toISOString().slice(0, 13);
+    hourlyTimeline[hourKey] = (hourlyTimeline[hourKey] || 0) + 1;
+  }
+
+  const topUAs = Object.entries(uaDistribution).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const topIPs = Object.entries(ipDistribution).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  const campaigns = Object.entries(campaignDistribution).sort((a, b) => b[1] - a[1]);
+  const timeline = Object.entries(hourlyTimeline).sort((a, b) => a[0].localeCompare(b[0]));
+
+  res.render('admin/intelligence_detail', {
+    ws, page: 'intelligence', entry, clicks,
+    topUAs, topIPs, campaigns, decisionCounts, timeline,
+    totalClicks: clicks.length,
+  });
+});
+
+// ── CIDR drill-down CSV export ───────────────────────────────────────
+
+router.get('/intelligence/:id/detail/export.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const entry = await CidrIntelligence.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!entry) return res.status(404).send('CIDR not found');
+
+  let ipPrefix = '';
+  if (entry.ip_version === 'v4') ipPrefix = entry.cidr.replace(/\.\d+\/\d+$/, '.');
+  else ipPrefix = entry.cidr.replace(/::\/\d+$/, ':');
+
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const clicks = await Click.find({
+    workspace_id: ws._id,
+    ip: new RegExp('^' + ipPrefix.replace(/[.]/g, '\\.')),
+    ts: { $gte: since },
+  })
+    .select('click_id ip ts decision conversion_count user_agent asn_org country external_ids campaign_id')
+    .populate('campaign_id', 'name')
+    .sort({ ts: -1 }).limit(5000).lean();
+
+  const rows = [['timestamp','ip','campaign','click_id','gclid','wbraid','gbraid','decision','conversions','country','asn','user_agent']];
+  for (const c of clicks) {
+    const eid = c.external_ids || {};
+    rows.push([
+      new Date(c.ts).toISOString(), c.ip, (c.campaign_id?.name||'').replace(/,/g,';'),
+      c.click_id, eid.gclid||'', eid.wbraid||'', eid.gbraid||'',
+      c.decision||'allow', c.conversion_count||0, c.country||'',
+      (c.asn_org||'').replace(/,/g,';'), (c.user_agent||'').replace(/,/g,';').replace(/"/g,"'"),
+    ]);
+  }
+  const csv = rows.map(r => r.map(f => `"${String(f).replace(/"/g,'""')}"`).join(',')).join('\n');
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="cidr-${entry.cidr.replace(/[/:]/g,'_')}-evidence.csv"`);
+  res.send(csv);
+});
+
+// ── Account-level Google Ads evidence report ─────────────────────────
+
+router.get('/intelligence/evidence-report.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const minScore = parseInt(req.query.min_score, 10) || 60;
+  const days = parseInt(req.query.days, 10) || 30;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const cidrs = await CidrIntelligence.find({
+    workspace_id: ws._id, score: { $gte: minScore },
+    status: { $nin: ['dismissed', 'archived'] },
+  }).select('cidr score asn_org country signals hit_count campaign_count last_seen').lean();
+
+  if (cidrs.length === 0) {
+    res.set('Content-Type', 'text/csv');
+    return res.send('No flagged CIDRs above score ' + minScore);
+  }
+
+  const rows = [['cidr','cidr_score','asn','country','campaigns_hit','click_timestamp','ip','campaign','gclid','wbraid','gbraid','decision','conversions','top_signals']];
+
+  for (const ci of cidrs) {
+    let prefix;
+    if (ci.cidr.includes(':')) prefix = ci.cidr.replace(/::\/\d+$/, ':');
+    else prefix = ci.cidr.replace(/\.\d+\/\d+$/, '.');
+
+    const clicks = await Click.find({
+      workspace_id: ws._id,
+      ip: new RegExp('^' + prefix.replace(/[.]/g, '\\.')),
+      ts: { $gte: since },
+    }).select('ip ts decision conversion_count external_ids campaign_id')
+      .populate('campaign_id', 'name').sort({ ts: -1 }).limit(1000).lean();
+
+    const topSigs = Object.entries(ci.signals||{}).filter(([k,v])=>v>0).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k])=>k).join('; ');
+
+    for (const c of clicks) {
+      const eid = c.external_ids || {};
+      rows.push([
+        ci.cidr, ci.score, (ci.asn_org||'').replace(/,/g,';'), ci.country||'',
+        ci.campaign_count||'', new Date(c.ts).toISOString(), c.ip,
+        (c.campaign_id?.name||'').replace(/,/g,';'),
+        eid.gclid||'', eid.wbraid||'', eid.gbraid||'',
+        c.decision||'allow', c.conversion_count||0, topSigs,
+      ]);
+    }
+  }
+
+  const csv = rows.map(r => r.map(f => `"${String(f).replace(/"/g,'""')}"`).join(',')).join('\n');
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="botguard-invalid-traffic-evidence-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(csv);
+});
+
 router.get('/intelligence/history', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { CidrDailySnapshot } = require('../../models');
