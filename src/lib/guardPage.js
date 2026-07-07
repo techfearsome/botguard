@@ -52,15 +52,31 @@ function buildGuardPage({ token, verifyUrl = '/go/guard-verify', config = {}, mi
     background: #f7f8fa;
     display: flex; align-items: center; justify-content: center;
     min-height: 100vh; color: #444;
+    -webkit-tap-highlight-color: transparent;
   }
-  .loader-wrap { text-align: center; }
+  .loader-wrap { text-align: center; padding: 20px; }
   .spinner {
     width: 44px; height: 44px; margin: 0 auto 20px;
     border: 4px solid #e3e6ea; border-top-color: #3b82f6;
     border-radius: 50%; animation: spin 0.9s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .msg { font-size: 15px; color: #6b7280; }
+  .msg { font-size: 15px; color: #6b7280; margin-bottom: 8px; }
+  .prompt {
+    font-size: 13px; color: #9ca3af;
+    opacity: 0; transition: opacity 0.4s ease;
+    min-height: 18px;
+  }
+  .prompt.show { opacity: 1; }
+  .hand {
+    margin-top: 22px; font-size: 26px; color: #c3c8ce;
+    opacity: 0; transition: opacity 0.4s ease;
+  }
+  .hand.show { opacity: 1; animation: tap 1.3s ease-in-out infinite; }
+  @keyframes tap {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
   noscript { display:block; margin-top:16px; color:#9ca3af; font-size:13px; }
 </style>
 </head>
@@ -68,6 +84,8 @@ function buildGuardPage({ token, verifyUrl = '/go/guard-verify', config = {}, mi
   <div class="loader-wrap">
     <div class="spinner"></div>
     <div class="msg">Preparing your content…</div>
+    <div class="prompt" id="prompt"></div>
+    <div class="hand" id="hand">👆</div>
     <noscript>JavaScript is required to continue.</noscript>
   </div>
 
@@ -79,15 +97,27 @@ function buildGuardPage({ token, verifyUrl = '/go/guard-verify', config = {}, mi
   var CHECKS = ${JSON.stringify(checks)};
   var startTime = Date.now();
 
+  // ── Device detection ────────────────────────────────────────────────
+  var isTouch = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
+
   // ── Interaction detection ──────────────────────────────────────────
   var interacted = false;
   var moveCount = 0;
   var scrolled = false;
 
-  function onMove() { moveCount++; if (moveCount >= 2) interacted = true; }
-  function onScroll() { scrolled = true; interacted = true; }
-  function onTouch() { interacted = true; }
-  function onKey() { interacted = true; }
+  function markInteracted() {
+    interacted = true;
+    // Hide the prompt once they've interacted
+    var p = document.getElementById("prompt");
+    var h = document.getElementById("hand");
+    if (p) p.classList.remove("show");
+    if (h) h.classList.remove("show");
+  }
+
+  function onMove() { moveCount++; if (moveCount >= 2) markInteracted(); }
+  function onScroll() { scrolled = true; markInteracted(); }
+  function onTouch() { markInteracted(); }
+  function onKey() { markInteracted(); }
 
   window.addEventListener("mousemove", onMove, { passive: true });
   window.addEventListener("scroll", onScroll, { passive: true });
@@ -95,32 +125,36 @@ function buildGuardPage({ token, verifyUrl = '/go/guard-verify', config = {}, mi
   window.addEventListener("keydown", onKey, { passive: true });
   window.addEventListener("click", onTouch, { passive: true });
 
+  // ── Show the interaction prompt if they haven't moved yet ──────────
+  // Appears after 800ms — enough that users who already moved never see it,
+  // but nudges those staring at a spinner (especially on mobile).
+  setTimeout(function () {
+    if (interacted) return;
+    var p = document.getElementById("prompt");
+    var h = document.getElementById("hand");
+    if (p) {
+      p.textContent = isTouch
+        ? "Tap anywhere or scroll to continue"
+        : "Move your mouse to continue";
+      p.classList.add("show");
+    }
+    if (isTouch && h) h.classList.add("show");
+  }, 800);
+
   // ── Collect signals ─────────────────────────────────────────────────
   function collectSignals() {
     var signals = {
-      token: TOKEN,
-      timezone: null,
-      timezone_offset: null,
-      interacted: interacted,
-      move_count: moveCount,
-      scrolled: scrolled,
-      dwell_ms: Date.now() - startTime,
-      screen: null,
-      webgl_vendor: null,
-      webgl_renderer: null,
-      hardware_concurrency: null,
-      touch_support: false,
-      language: null,
-      platform: null,
+      token: TOKEN, timezone: null, timezone_offset: null,
+      interacted: interacted, move_count: moveCount, scrolled: scrolled,
+      dwell_ms: Date.now() - startTime, screen: null,
+      webgl_vendor: null, webgl_renderer: null,
+      hardware_concurrency: null, touch_support: isTouch,
+      language: null, platform: null,
     };
-
-    // Timezone (IANA format — matches ProxyCheck)
     try {
       signals.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       signals.timezone_offset = new Date().getTimezoneOffset();
     } catch (e) {}
-
-    // Screen resolution
     try {
       signals.screen = {
         w: window.screen.width, h: window.screen.height,
@@ -129,16 +163,11 @@ function buildGuardPage({ token, verifyUrl = '/go/guard-verify', config = {}, mi
         inner_w: window.innerWidth, inner_h: window.innerHeight,
       };
     } catch (e) {}
-
-    // Hardware / platform
     try {
       signals.hardware_concurrency = navigator.hardwareConcurrency || null;
-      signals.touch_support = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
       signals.language = navigator.language || null;
       signals.platform = navigator.platform || null;
     } catch (e) {}
-
-    // WebGL fingerprint (optional)
     if (CHECKS.webgl) {
       try {
         var canvas = document.createElement("canvas");
@@ -152,12 +181,14 @@ function buildGuardPage({ token, verifyUrl = '/go/guard-verify', config = {}, mi
         }
       } catch (e) {}
     }
-
     return signals;
   }
 
   // ── Submit and redirect ─────────────────────────────────────────────
+  var submitted = false;
   function submit() {
+    if (submitted) return;
+    submitted = true;
     var signals = collectSignals();
     var xhr = new XMLHttpRequest();
     xhr.open("POST", VERIFY_URL, true);
@@ -165,25 +196,35 @@ function buildGuardPage({ token, verifyUrl = '/go/guard-verify', config = {}, mi
     xhr.onreadystatechange = function () {
       if (xhr.readyState === 4) {
         var redirectUrl = null;
-        try {
-          var res = JSON.parse(xhr.responseText);
-          redirectUrl = res.redirect;
-        } catch (e) {}
-        if (redirectUrl) {
-          window.location.replace(redirectUrl);
-        } else {
-          // Fallback — reload to let server decide again
-          window.location.reload();
-        }
+        try { redirectUrl = JSON.parse(xhr.responseText).redirect; } catch (e) {}
+        if (redirectUrl) window.location.replace(redirectUrl);
+        else window.location.reload();
       }
     };
     xhr.send(JSON.stringify(signals));
   }
 
-  // Wait for the minimum dwell time, then submit.
-  // Real users spend time; headless bots that don't execute JS never reach here.
-  var wait = Math.max(CHECKS.minDwellMs || 2000, 1200);
-  setTimeout(submit, wait);
+  // ── Timing ──────────────────────────────────────────────────────────
+  // Wait for the minimum dwell. If interaction checks are on and the user
+  // hasn't interacted yet, give a short grace period for them to respond
+  // to the prompt before submitting anyway.
+  var minWait = Math.max(CHECKS.minDwellMs || 2000, 1200);
+
+  function tryFinish() {
+    var elapsed = Date.now() - startTime;
+    if (elapsed < minWait) {
+      setTimeout(tryFinish, minWait - elapsed);
+      return;
+    }
+    // Min dwell met. If we need interaction and don't have it, wait a bit
+    // more (up to a hard cap) to give the prompt a chance to work.
+    if (CHECKS.interaction && !interacted && elapsed < minWait + 4000) {
+      setTimeout(tryFinish, 500);
+      return;
+    }
+    submit();
+  }
+  setTimeout(tryFinish, minWait);
 })();
 </script>
 </body>
