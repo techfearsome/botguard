@@ -222,14 +222,36 @@ async function handleClick(req, res, opts) {
     // The interstitial runs client-side checks and POSTs to /go/guard-verify.
     if (!showSafePage && targetPage && targetPage.kind === 'offer' &&
         targetPage.bot_guard?.enabled) {
-      const { verifyPassCookie } = require('../lib/guardToken');
+      const { verifyPassCookie, readPassCookie } = require('../lib/guardToken');
       const passCookie = req.cookies?.[`bg_guard_${targetPage._id}`];
       const failCookie = req.cookies?.[`bg_guardfail_${targetPage._id}`];
       const alreadyPassed = passCookie && verifyPassCookie(passCookie, doc.ip);
       const alreadyFailed = failCookie && verifyPassCookie(failCookie, doc.ip);
 
+      // Helper: copy the guard verdict from the original guarded click onto
+      // this served click, so the log shows the Bot Guard panel on the click
+      // that actually rendered the page (not just the interstitial click).
+      async function carryGuardResult(cookieVal, stripPrefix) {
+        try {
+          const info = readPassCookie(cookieVal); // { c: clickId, ... }
+          if (!info || !info.c) return;
+          let origId = info.c;
+          if (stripPrefix && origId.startsWith('FAIL:')) origId = origId.slice(5);
+          const orig = await Click.findOne({ click_id: origId })
+            .select('guard_result guard_flags guard_detail guard_checked_at timezone').lean();
+          if (orig && orig.guard_result) {
+            doc.guard_result = orig.guard_result;
+            doc.guard_flags = orig.guard_flags;
+            doc.guard_detail = orig.guard_detail;
+            doc.guard_checked_at = orig.guard_checked_at;
+            if (orig.timezone && !doc.timezone) doc.timezone = orig.timezone;
+          }
+        } catch (e) {}
+      }
+
       if (alreadyFailed) {
         // Guard already ran and failed — serve the safe page for this device.
+        await carryGuardResult(failCookie, true);
         doc.decision = 'block';
         doc.decision_reason = 'guard_failed';
         doc.page_rendered = 'safe';
@@ -241,6 +263,12 @@ async function handleClick(req, res, opts) {
           return res.status(200).send(safePage.html_template || '');
         }
         return res.status(200).send('');
+      }
+
+      if (alreadyPassed) {
+        // Guard already passed — carry the verdict onto this served click
+        // so the log shows the Bot Guard panel. Then fall through to serve offer.
+        await carryGuardResult(passCookie, false);
       }
 
       if (!alreadyPassed) {

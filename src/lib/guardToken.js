@@ -107,4 +107,25 @@ function verifyPassCookie(cookie, ip) {
   } catch (e) { return false; }
 }
 
-module.exports = { signToken, verifyToken, signPassCookie, verifyPassCookie, TOKEN_TTL_MS };
+/**
+ * Read (decode) a pass/fail cookie's payload without IP verification.
+ * Used to recover the original click_id so the served click can inherit
+ * the guard verdict. Still verifies the signature and expiry.
+ */
+function readPassCookie(cookie) {
+  if (!cookie) return null;
+  const parts = cookie.split('.');
+  if (parts.length !== 2) return null;
+  const [b64, sig] = parts;
+  const expected = crypto.createHmac('sha256', getSecret()).update(b64).digest('base64url');
+  try {
+    const sigBuf = Buffer.from(sig), expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length) return null;
+    if (!crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+    const body = JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
+    if (!body.exp || Date.now() > body.exp) return null;
+    return body; // { c: clickId, ip, exp }
+  } catch (e) { return null; }
+}
+
+module.exports = { signToken, verifyToken, signPassCookie, verifyPassCookie, readPassCookie, TOKEN_TTL_MS };
