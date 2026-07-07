@@ -230,10 +230,11 @@ async function handleClick(req, res, opts) {
         const { signToken } = require('../lib/guardToken');
         const { buildGuardPage } = require('../lib/guardPage');
 
-        // Persist the click now so guard-verify can look it up
+        // Persist the click now so guard-verify can look it up.
+        // doc is a plain object (from buildClickDoc), written via writeClick.
         doc.page_rendered = 'guard';
         doc.landing_page_id = targetPage._id;
-        await doc.save().catch(() => {});
+        writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
 
         const token = signToken({
           click_id: doc.click_id,
