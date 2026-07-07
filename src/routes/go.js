@@ -159,6 +159,7 @@ async function handleClick(req, res, opts) {
       country_name: result.enrichment.country_name,
       region: result.enrichment.region,
       city: result.enrichment.city,
+      timezone: result.enrichment.timezone,
       ip_type: result.enrichment.ip_type,
       is_proxy: result.enrichment.is_proxy,
       proxy_type: result.enrichment.proxy_type,
@@ -223,7 +224,24 @@ async function handleClick(req, res, opts) {
         targetPage.bot_guard?.enabled) {
       const { verifyPassCookie } = require('../lib/guardToken');
       const passCookie = req.cookies?.[`bg_guard_${targetPage._id}`];
+      const failCookie = req.cookies?.[`bg_guardfail_${targetPage._id}`];
       const alreadyPassed = passCookie && verifyPassCookie(passCookie, doc.ip);
+      const alreadyFailed = failCookie && verifyPassCookie(failCookie, doc.ip);
+
+      if (alreadyFailed) {
+        // Guard already ran and failed — serve the safe page for this device.
+        doc.decision = 'block';
+        doc.decision_reason = 'guard_failed';
+        doc.page_rendered = 'safe';
+        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+        writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+        setGoCookies(req, res, doc);
+        if (safePage) {
+          res.set('Cache-Control', 'private, no-store');
+          return res.status(200).send(safePage.html_template || '');
+        }
+        return res.status(200).send('');
+      }
 
       if (!alreadyPassed) {
         // Serve the guard interstitial
@@ -240,6 +258,7 @@ async function handleClick(req, res, opts) {
           click_id: doc.click_id,
           offer_page_id: String(targetPage._id),
           ip: doc.ip,
+          return_url: req.originalUrl,   // where to send them back on pass
         });
 
         const guardHtml = buildGuardPage({
@@ -431,36 +450,34 @@ async function handleGuardVerify(req, res) {
       click.page_rendered = 'offer';
       await click.save().catch(() => {});
 
-      // Set a pass cookie so a normal re-request would also serve the offer,
-      // but we return the offer URL directly for immediate redirect.
+      // Set a pass cookie tied to this IP. On the return request the guard
+      // sees it and serves the real offer page.
       const passCookie = signPassCookie(click.click_id, click.ip);
       res.cookie(`bg_guard_${offerPage._id}`, passCookie, {
         maxAge: 30 * 60 * 1000, httpOnly: false, sameSite: 'lax', secure: true,
       });
-
-      // Return the offer page's public URL. The offer page is served at /p/:slug
-      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-      const offerUrl = offerPage.slug
-        ? `${baseUrl}/p/${offerPage.slug}?cid=${encodeURIComponent(click.click_id)}`
-        : `${baseUrl}/`;
-      return res.json({ redirect: offerUrl });
     } else {
-      // Failed — mark as safe, feed flags into intelligence
+      // Failed — mark as safe, feed flags into intelligence.
       click.page_rendered = 'safe';
       click.scores = click.scores || {};
       click.scores.flags = [...(click.scores.flags || []), ...verdict.flags.map(f => `guard_${f}`)];
       await click.save().catch(() => {});
 
-      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-      let safeUrl = `${baseUrl}/`;
-      try {
-        const safePage = await LandingPage.findOne({
-          workspace_id: click.workspace_id, kind: 'safe',
-        }).lean();
-        if (safePage && safePage.slug) safeUrl = `${baseUrl}/p/${safePage.slug}`;
-      } catch (e) {}
-      return res.json({ redirect: safeUrl });
+      // Set a FAIL cookie. On the return request the guard sees it and
+      // serves the safe page directly (no re-guarding, no loop).
+      const failCookie = signPassCookie('FAIL:' + click.click_id, click.ip);
+      res.cookie(`bg_guardfail_${offerPage._id}`, failCookie, {
+        maxAge: 30 * 60 * 1000, httpOnly: false, sameSite: 'lax', secure: true,
+      });
     }
+
+    // Both cases: redirect back to the ORIGINAL campaign URL. The /go flow
+    // renders the offer or safe page inline from html_template. We can't link
+    // to /p/:slug — that serves site pages, not campaign landing pages.
+    const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    let returnUrl = payload.return_url || '/';
+    if (!returnUrl.startsWith('/') || returnUrl.startsWith('//')) returnUrl = '/';
+    return res.json({ redirect: `${baseUrl}${returnUrl}` });
   } catch (err) {
     return res.status(500).json({ redirect: null, error: 'server_error' });
   }
