@@ -224,6 +224,7 @@ function normalize(ip, raw) {
     country_name: location.country_name || null,
     region: location.region_name || null,
     city: location.city_name || null,
+    timezone: location.timezone || null,   // IANA format, e.g. "Asia/Kolkata" — used by bot guard
     type: network.type ? String(network.type).toLowerCase() : null,
     is_proxy: isProxy,
     proxy_type: proxyType,

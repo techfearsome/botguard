@@ -58,6 +58,15 @@ const ClickSchema = new mongoose.Schema({
   // Mobile app placement enrichment (resolved from utm_content mobileapp::)
   app_placement: { type: mongoose.Schema.Types.Mixed, default: null },
 
+  // IP timezone from ProxyCheck (IANA format) — used by bot guard comparison
+  timezone: { type: String, default: null },
+
+  // Bot Guard (Level 2) result
+  guard_result:     { type: String, default: null },  // 'pass' | 'fail' | null (not run)
+  guard_flags:      { type: [String], default: [] },  // which checks failed
+  guard_detail:     { type: mongoose.Schema.Types.Mixed, default: null },
+  guard_checked_at: { type: Date, default: null },
+
   // Attribution
   utm: {
     source: String,

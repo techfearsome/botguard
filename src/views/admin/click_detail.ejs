@@ -223,6 +223,62 @@
 </section>
 <% } %>
 
+<%# ── Bot Guard (Level 2) result ─────────────────────────────────── %>
+<% if (click.guard_result) { %>
+<section class="panel">
+  <h3>🛡 Bot Guard (Level 2)
+    <span class="badge" style="font-size:11px; margin-left:6px;
+      background:<%= click.guard_result === 'pass' ? '#EAF3DE' : '#FCEBEB' %>;
+      color:<%= click.guard_result === 'pass' ? '#3B6D11' : '#A32D2D' %>;">
+      <%= click.guard_result === 'pass' ? 'PASSED' : 'FAILED' %>
+    </span>
+    <% if (click.guard_checked_at) { %><small class="muted" style="font-weight:normal; margin-left:8px;">checked <%- localTime(click.guard_checked_at) %></small><% } %>
+  </h3>
+  <% const gd = click.guard_detail || {}; %>
+  <div class="grid-2">
+    <table class="table table-dense">
+      <tr><td>Result</td><td><strong style="color:<%= click.guard_result === 'pass' ? '#22c55e' : '#ef4444' %>;"><%= click.guard_result.toUpperCase() %></strong></td></tr>
+      <tr><td>IP timezone</td><td><%= gd.ip_timezone || '–' %> <small class="muted">(from ProxyCheck)</small></td></tr>
+      <tr><td>Browser timezone</td><td><%= gd.browser_timezone || '–' %> <small class="muted">(from JS)</small></td></tr>
+      <tr><td>Timezone verdict</td>
+        <td>
+          <% if (gd.timezone_verdict === 'mismatch') { %><span class="badge badge-block">MISMATCH</span>
+          <% } else if (gd.timezone_verdict === 'match') { %><span class="badge badge-allow">match</span>
+          <% } else { %><span class="muted">unknown</span><% } %>
+        </td>
+      </tr>
+    </table>
+    <table class="table table-dense">
+      <tr><td>Interacted</td><td><%= gd.interacted ? '✓ yes' : '✗ no' %></td></tr>
+      <tr><td>Dwell time</td><td><%= gd.dwell_ms != null ? gd.dwell_ms + 'ms' : '–' %></td></tr>
+      <tr><td>Hard fail</td><td><%= gd.hard_fail ? 'yes' : 'no' %></td></tr>
+      <tr><td>Soft flags</td><td><%= gd.soft_flag_count || 0 %></td></tr>
+    </table>
+  </div>
+  <% if (click.guard_flags && click.guard_flags.length > 0) { %>
+    <div style="margin-top:12px;">
+      <strong style="font-size:13px;">Flags:</strong>
+      <div class="flag-cloud" style="margin-top:6px;">
+        <% const guardFlagLabels = {
+          timezone_mismatch: 'Timezone mismatch (IP vs browser)',
+          no_interaction: 'No mouse/touch/scroll',
+          insufficient_dwell: 'Too fast (low dwell)',
+          zero_screen: 'Zero screen dimensions (headless)',
+          no_screen_data: 'No screen data',
+          zero_cpu_cores: 'Zero CPU cores reported',
+          no_webgl: 'No WebGL',
+          software_webgl: 'Software WebGL (headless)',
+          no_browser_timezone: 'No browser timezone',
+        }; %>
+        <% click.guard_flags.forEach(f => { %>
+          <span class="flag" style="color:#ef4444; border-color:#ef4444;"><%= guardFlagLabels[f] || f.replace(/_/g,' ') %></span>
+        <% }) %>
+      </div>
+    </div>
+  <% } %>
+</section>
+<% } %>
+
 <section class="panel">
   <h3>Fingerprint</h3>
   <% if (click.fingerprint && Object.keys(click.fingerprint).length > 0) { %>

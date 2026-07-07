@@ -33,6 +33,19 @@ const LandingPageSchema = new mongoose.Schema({
     event_name: { type: String, default: 'auto_click' },
   },
 
+  // Bot Guard (Level 2) — only meaningful on offer pages.
+  // When enabled, visitors who pass Level 1 hit a loading interstitial that
+  // runs client-side checks (timezone, interaction, dwell) before the real
+  // offer page is served. Failing checks redirect to the safe page.
+  bot_guard: {
+    enabled:          { type: Boolean, default: false },
+    check_timezone:   { type: Boolean, default: true },  // ProxyCheck tz vs browser tz
+    check_interaction:{ type: Boolean, default: true },  // mouse/touch/scroll required
+    check_dwell:      { type: Boolean, default: true },  // minimum time on page
+    min_dwell_ms:     { type: Number,  default: 2000 },  // 2 seconds
+    check_webgl:      { type: Boolean, default: false }, // canvas/WebGL fingerprint
+  },
+
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
 });

@@ -171,11 +171,6 @@ async function handleClick(req, res, opts) {
       mode_at_decision: result.mode_at_decision,
     });
 
-    // Store ipgeolocation.io security data if the residential proxy filter ran
-    if (result.ipgeo_security) {
-      doc.ipgeo_security = result.ipgeo_security;
-    }
-
     // --- Country gate (post-network, has ProxyCheck country verdict) ---
     const countryResult = countryGateCheck({ country: doc.country, campaign });
     if (countryResult.blocked) {
@@ -218,6 +213,48 @@ async function handleClick(req, res, opts) {
     // Resolve which page to show (per-device override applies)
     const showSafePage = (doc.decision === 'block');
     const targetPage = await resolvePageForDevice(campaign, deviceClass, showSafePage ? 'safe' : 'offer');
+
+    // ── Bot Guard (Level 2) ─────────────────────────────────────────
+    // If we're about to serve an OFFER page that has bot_guard enabled,
+    // and the visitor hasn't already passed the guard (no valid pass
+    // cookie), serve the guard interstitial instead of the offer page.
+    // The interstitial runs client-side checks and POSTs to /go/guard-verify.
+    if (!showSafePage && targetPage && targetPage.kind === 'offer' &&
+        targetPage.bot_guard?.enabled) {
+      const { verifyPassCookie } = require('../lib/guardToken');
+      const passCookie = req.cookies?.[`bg_guard_${targetPage._id}`];
+      const alreadyPassed = passCookie && verifyPassCookie(passCookie, doc.ip);
+
+      if (!alreadyPassed) {
+        // Serve the guard interstitial
+        const { signToken } = require('../lib/guardToken');
+        const { buildGuardPage } = require('../lib/guardPage');
+
+        // Persist the click now so guard-verify can look it up
+        doc.page_rendered = 'guard';
+        doc.landing_page_id = targetPage._id;
+        await doc.save().catch(() => {});
+
+        const token = signToken({
+          click_id: doc.click_id,
+          offer_page_id: String(targetPage._id),
+          ip: doc.ip,
+        });
+
+        const guardHtml = buildGuardPage({
+          token,
+          verifyUrl: '/go/guard-verify',
+          config: targetPage.bot_guard,
+          minDwellMs: targetPage.bot_guard.min_dwell_ms || 2000,
+        });
+
+        setGoCookies(req, res, doc);
+        res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+        res.set('X-Robots-Tag', 'noindex, nofollow');
+        return res.status(200).send(guardHtml);
+      }
+      // else: passed guard already — fall through to serve offer normally
+    }
 
     let html, variantName;
     if (targetPage) {
@@ -348,6 +385,87 @@ async function handleFingerprint(req, res) {
     res.status(500).json({ ok: false });
   }
 }
+
+// ── Bot Guard Level 2 verification endpoint ──────────────────────────
+// The guard interstitial page POSTs its collected signals here. We verify
+// the token, run the checks, record the result, and tell the client where
+// to go: the real offer page (pass) or the safe page (fail).
+async function handleGuardVerify(req, res) {
+  try {
+    const { verifyToken, signPassCookie } = require('../lib/guardToken');
+    const { verifyGuard } = require('../lib/guardVerify');
+
+    const signals = req.body || {};
+    const payload = verifyToken(signals.token);
+    if (!payload) {
+      return res.status(400).json({ redirect: null, error: 'invalid_token' });
+    }
+
+    const { Click, LandingPage, Campaign } = require('../models');
+
+    const click = await Click.findOne({ click_id: payload.click_id });
+    if (!click) {
+      return res.status(404).json({ redirect: null, error: 'click_not_found' });
+    }
+
+    const offerPage = await LandingPage.findById(payload.offer_page_id).lean();
+    if (!offerPage) {
+      return res.status(404).json({ redirect: null, error: 'page_not_found' });
+    }
+
+    // Run verification
+    const verdict = verifyGuard({
+      signals,
+      click: click.toObject ? click.toObject() : click,
+      config: offerPage.bot_guard || {},
+    });
+
+    // Record result on the click
+    click.guard_result = verdict.pass ? 'pass' : 'fail';
+    click.guard_flags = verdict.flags;
+    click.guard_detail = verdict.detail;
+    click.guard_checked_at = new Date();
+
+    if (verdict.pass) {
+      click.page_rendered = 'offer';
+      await click.save().catch(() => {});
+
+      // Set a pass cookie so a normal re-request would also serve the offer,
+      // but we return the offer URL directly for immediate redirect.
+      const passCookie = signPassCookie(click.click_id, click.ip);
+      res.cookie(`bg_guard_${offerPage._id}`, passCookie, {
+        maxAge: 30 * 60 * 1000, httpOnly: false, sameSite: 'lax', secure: true,
+      });
+
+      // Return the offer page's public URL. The offer page is served at /p/:slug
+      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const offerUrl = offerPage.slug
+        ? `${baseUrl}/p/${offerPage.slug}?cid=${encodeURIComponent(click.click_id)}`
+        : `${baseUrl}/`;
+      return res.json({ redirect: offerUrl });
+    } else {
+      // Failed — mark as safe, feed flags into intelligence
+      click.page_rendered = 'safe';
+      click.scores = click.scores || {};
+      click.scores.flags = [...(click.scores.flags || []), ...verdict.flags.map(f => `guard_${f}`)];
+      await click.save().catch(() => {});
+
+      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+      let safeUrl = `${baseUrl}/`;
+      try {
+        const safePage = await LandingPage.findOne({
+          workspace_id: click.workspace_id, kind: 'safe',
+        }).lean();
+        if (safePage && safePage.slug) safeUrl = `${baseUrl}/p/${safePage.slug}`;
+      } catch (e) {}
+      return res.json({ redirect: safeUrl });
+    }
+  } catch (err) {
+    return res.status(500).json({ redirect: null, error: 'server_error' });
+  }
+}
+
+router.post('/guard-verify', express.json({ limit: '16kb' }), handleGuardVerify);
 
 router.post('/fp', express.json({ limit: '32kb' }), handleFingerprint);
 

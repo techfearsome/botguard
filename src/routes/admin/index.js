@@ -285,6 +285,18 @@ function parseAutoConversion(body) {
   return { enabled, terms, event_name: eventName };
 }
 
+// Parse Bot Guard (Level 2) settings from the page form.
+function parseBotGuard(body) {
+  return {
+    enabled:           body.bot_guard_enabled === 'on' || body.bot_guard_enabled === 'true',
+    check_timezone:    body.bot_guard_timezone === 'on' || body.bot_guard_timezone === 'true',
+    check_interaction: body.bot_guard_interaction === 'on' || body.bot_guard_interaction === 'true',
+    check_dwell:       body.bot_guard_dwell === 'on' || body.bot_guard_dwell === 'true',
+    min_dwell_ms:      Math.max(1000, Math.min(10000, parseInt(body.bot_guard_min_dwell, 10) || 2000)),
+    check_webgl:       body.bot_guard_webgl === 'on' || body.bot_guard_webgl === 'true',
+  };
+}
+
 router.get('/campaigns/:id/edit', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
@@ -536,6 +548,7 @@ router.post('/pages', async (req, res) => {
       kind: body.kind || 'offer',
       html_template: body.html_template || '',
       auto_conversion: parseAutoConversion(body),
+      bot_guard: parseBotGuard(body),
     });
     // Invalidate any campaigns whose render path might cache this page (cache is on campaign-by-slug)
     res.redirect('/admin/pages');
@@ -576,6 +589,7 @@ router.post('/pages/:id', async (req, res) => {
           kind: body.kind,
           html_template: body.html_template || '',
           auto_conversion: parseAutoConversion(body),
+          bot_guard: parseBotGuard(body),
         },
       }
     );

@@ -25,7 +25,7 @@
 
   <div class="form-row">
     <label>HTML Template</label>
-    <textarea name="html_template" rows="20" class="code"><%= lp?.html_template || '' %></textarea>
+    <textarea name="html_template" rows="20" class="code" data-code-editor="html"><%= lp?.html_template || '' %></textarea>
     <small class="muted">Available placeholders: <code>{{click_id}}</code>, <code>{{utm_source}}</code>, <code>{{utm_medium}}</code>, <code>{{utm_campaign}}</code></small>
   </div>
 
@@ -68,6 +68,61 @@
     </fieldset>
   <% } %>
 
+  <%# Bot Guard (Level 2) — only for offer pages %>
+  <% if ((lp?.kind || 'offer') !== 'safe') { %>
+    <fieldset style="border:1px solid var(--border-default); border-radius:var(--radius-md); padding:16px; margin-bottom:16px;">
+      <legend style="font-weight:600; padding:0 6px;">🛡 Bot Guard (Level 2)</legend>
+      <%
+        const bg = lp?.bot_guard || {};
+      %>
+      <div class="form-row">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
+          <input type="checkbox" name="bot_guard_enabled" <%= bg.enabled ? 'checked' : '' %> style="width:auto;">
+          Enable Bot Guard on this offer page
+        </label>
+        <small class="muted">
+          Visitors who pass Level 1 checks hit a loading interstitial that runs client-side
+          checks (timezone, interaction, dwell time) before this offer page is served.
+          Failing traffic is redirected to the safe page and logged. Disabled by default.
+        </small>
+      </div>
+
+      <div style="margin-top:12px; padding-left:8px; border-left:2px solid var(--border-default);">
+        <div class="form-row">
+          <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
+            <input type="checkbox" name="bot_guard_timezone" <%= bg.check_timezone !== false ? 'checked' : '' %> style="width:auto;">
+            Timezone check <span class="muted">— compare IP timezone (ProxyCheck) vs browser timezone</span>
+          </label>
+          <small class="muted">Catches bots using a proxy in one region but running from another. Strongest signal.</small>
+        </div>
+        <div class="form-row">
+          <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
+            <input type="checkbox" name="bot_guard_interaction" <%= bg.check_interaction !== false ? 'checked' : '' %> style="width:auto;">
+            Interaction check <span class="muted">— require mouse/touch/scroll movement</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
+            <input type="checkbox" name="bot_guard_dwell" <%= bg.check_dwell !== false ? 'checked' : '' %> style="width:auto;">
+            Dwell time check <span class="muted">— minimum time on page</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Minimum dwell (milliseconds)</label>
+          <input type="number" name="bot_guard_min_dwell" value="<%= bg.min_dwell_ms || 2000 %>" min="1000" max="10000" step="500" style="max-width:150px;">
+          <small class="muted">How long the loading screen shows before checks run. 2000ms recommended.</small>
+        </div>
+        <div class="form-row">
+          <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
+            <input type="checkbox" name="bot_guard_webgl" <%= bg.check_webgl === true ? 'checked' : '' %> style="width:auto;">
+            WebGL fingerprint check <span class="muted">— detect software rendering (headless)</span>
+          </label>
+          <small class="muted">Optional. Catches headless browsers using SwiftShader/llvmpipe. May cause false positives on some devices.</small>
+        </div>
+      </div>
+    </fieldset>
+  <% } %>
+
   <div class="form-actions">
     <button type="submit" class="btn btn-primary"><%= lp ? 'Save changes' : 'Create page' %></button>
     <% if (lp?._id) { %>
@@ -76,5 +131,11 @@
     <a href="/admin/pages" class="btn">Cancel</a>
   </div>
 </form>
+
+<!-- Code editor enhancement: upgrades the HTML Template textarea to a
+     CodeJar+Prism editor with syntax highlighting. Plain textarea remains
+     functional if scripts fail to load. -->
+<script src="<%= assetUrl('/static/js/vendor/prism.js') %>" defer></script>
+<script src="<%= assetUrl('/static/js/code-editor.js') %>" type="module"></script>
 
 <%- include('../partials/footer') %>
