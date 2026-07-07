@@ -151,11 +151,10 @@
   </section>
 </div>
 
-<%# ── Mobile App Placement (from utm_content mobileapp::) ──────────── %>
+<%# ── Mobile App Placement ────────────────────────────────────────── %>
 <% if (typeof appInfo !== 'undefined' && appInfo) { %>
 <section class="panel">
-  <h3>
-    App Placement
+  <h3>App Placement
     <span class="badge" style="font-size:11px; margin-left:6px;
       background:<%= appInfo.platform === 'ios' ? '#007AFF22' : '#34A85322' %>;
       color:<%= appInfo.platform === 'ios' ? '#007AFF' : '#34A853' %>;">
@@ -167,32 +166,16 @@
       <img src="<%= appInfo.icon_url %>" alt="" style="width:64px; height:64px; border-radius:14px; border:1px solid var(--border-default);">
     <% } %>
     <table class="table table-dense" style="flex:1;">
-      <% if (appInfo.name) { %>
-        <tr><td style="width:120px;">App name</td><td><strong><%= appInfo.name %></strong></td></tr>
-      <% } %>
-      <% if (appInfo.developer) { %>
-        <tr><td>Developer</td><td><%= appInfo.developer %></td></tr>
-      <% } %>
-      <% if (appInfo.category) { %>
-        <tr><td>Category</td><td><%= appInfo.category %></td></tr>
-      <% } %>
-      <% if (appInfo.price) { %>
-        <tr><td>Price</td><td><%= appInfo.price %></td></tr>
-      <% } %>
-      <% if (appInfo.rating != null) { %>
-        <tr><td>Rating</td><td><%= appInfo.rating.toFixed(1) %> ★ <small class="muted">(<%= (appInfo.rating_count || 0).toLocaleString() %> ratings)</small></td></tr>
-      <% } %>
+      <% if (appInfo.name) { %><tr><td style="width:120px;">App name</td><td><strong><%= appInfo.name %></strong></td></tr><% } %>
+      <% if (appInfo.developer) { %><tr><td>Developer</td><td><%= appInfo.developer %></td></tr><% } %>
+      <% if (appInfo.category) { %><tr><td>Category</td><td><%= appInfo.category %></td></tr><% } %>
+      <% if (appInfo.price) { %><tr><td>Price</td><td><%= appInfo.price %></td></tr><% } %>
+      <% if (appInfo.rating != null) { %><tr><td>Rating</td><td><%= appInfo.rating.toFixed(1) %> ★ <small class="muted">(<%= (appInfo.rating_count||0).toLocaleString() %> ratings)</small></td></tr><% } %>
       <tr><td>App ID</td><td class="mono"><%= appInfo.app_id || appInfo.package_name || '–' %></td></tr>
-      <% if (appInfo.bundle_id) { %>
-        <tr><td>Bundle ID</td><td class="mono"><%= appInfo.bundle_id %></td></tr>
-      <% } %>
+      <% if (appInfo.bundle_id) { %><tr><td>Bundle ID</td><td class="mono"><%= appInfo.bundle_id %></td></tr><% } %>
       <tr><td>Store link</td><td><a href="<%= appInfo.store_url %>" target="_blank" rel="noopener"><%= appInfo.store_url %></a></td></tr>
-      <% if (appInfo.description) { %>
-        <tr><td>Description</td><td><small class="muted"><%= appInfo.description %>…</small></td></tr>
-      <% } %>
-      <% if (appInfo.readable_name && !appInfo.name) { %>
-        <tr><td>Package</td><td><code><%= appInfo.package_name %></code> <small class="muted">(<%= appInfo.readable_name %>)</small></td></tr>
-      <% } %>
+      <% if (appInfo.description) { %><tr><td>Description</td><td><small class="muted"><%= appInfo.description %>…</small></td></tr><% } %>
+      <% if (appInfo.readable_name && !appInfo.name) { %><tr><td>Package</td><td><code><%= appInfo.package_name %></code> <small class="muted">(<%= appInfo.readable_name %>)</small></td></tr><% } %>
     </table>
   </div>
 </section>

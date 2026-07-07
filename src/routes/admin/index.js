@@ -2970,7 +2970,20 @@ router.get('/clicks/:id', async (req, res) => {
     .lean();
   if (!click) return res.status(404).send('Click not found');
   const conversions = await Conversion.find({ click_id: click.click_id }).sort({ ts: -1 }).lean();
-  res.render('admin/click_detail', { ws, click, conversions, page: 'clicks' });
+
+  // Enrich mobile app placement from utm_content (lazy — only on detail view)
+  let appInfo = click.app_placement || null;
+  if (!appInfo && click.utm?.content) {
+    try {
+      const { resolveAppPlacement } = require('../../lib/appLookup');
+      appInfo = await resolveAppPlacement(click.utm.content);
+      if (appInfo) {
+        Click.updateOne({ _id: click._id }, { $set: { app_placement: appInfo } }).catch(() => {});
+      }
+    } catch (e) {}
+  }
+
+  res.render('admin/click_detail', { ws, click, conversions, appInfo, page: 'clicks' });
 });
 
 // ---------- Decision replay ----------
