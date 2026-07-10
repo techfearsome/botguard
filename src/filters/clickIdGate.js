@@ -49,25 +49,51 @@ function clickIdGateCheck({ externalIds = {}, campaign }) {
   }
 
   // Which identifiers are accepted for this campaign.
-  // Default: any Google click ID (gclid/wbraid/gbraid). Bing optional.
   const accepted = Array.isArray(gate.accepted_ids) && gate.accepted_ids.length > 0
     ? gate.accepted_ids
     : ['gclid', 'wbraid', 'gbraid'];
 
+  // Format validation level: 'off' | 'loose' | 'strict' (default 'off' for
+  // backward compatibility — presence-only unless the campaign opts in).
+  const validateLevel = gate.validate_format || 'off';
+
+  const { validateClickId } = require('./clickIdValidate');
+
   // Check if the visitor has at least one accepted, non-empty identifier
   let foundId = null;
+  let foundValue = null;
+  let invalidFormat = null;
+
   for (const idName of accepted) {
     const field = ID_FIELDS[idName];
     if (!field) continue;
     const value = externalIds?.[field];
     if (value && typeof value === 'string' && value.trim()) {
+      // Present. If format validation is on, check it.
+      if (validateLevel !== 'off') {
+        const check = validateClickId(idName, value, validateLevel);
+        if (!check.valid) {
+          // ID present but malformed — remember it, keep looking for a valid one
+          invalidFormat = { id: idName, reason: check.reason };
+          continue;
+        }
+      }
       foundId = idName;
+      foundValue = value;
       break;
     }
   }
 
   if (foundId) {
     return { blocked: false, flags: ['clickid_gate_pass', `clickid_${foundId}`] };
+  }
+
+  // No valid ID found. Distinguish "missing entirely" from "present but fake".
+  if (invalidFormat) {
+    return {
+      blocked: true,
+      flags: ['clickid_gate_fail', 'clickid_invalid_format', `clickid_${invalidFormat.id}_${invalidFormat.reason}`],
+    };
   }
 
   return {

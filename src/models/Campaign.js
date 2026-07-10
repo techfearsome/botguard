@@ -79,6 +79,9 @@ const CampaignSchema = new mongoose.Schema({
         enum: ['gclid', 'wbraid', 'gbraid', 'msclkid', 'fbclid', 'ttclid', 'li_fat_id', 'twclid', 'rdt_cid'],
         default: ['gclid', 'wbraid', 'gbraid'],
       },
+      // Format validation: 'off' (presence only), 'loose' (length+charset),
+      // 'strict' (platform patterns + entropy). Catches lazy fakes like gclid=123.
+      validate_format: { type: String, enum: ['off', 'loose', 'strict'], default: 'off' },
     },
 
     // Country gate: cross-check ProxyCheck's country verdict against an allowlist or blocklist.

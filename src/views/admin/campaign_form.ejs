@@ -278,6 +278,22 @@
       <% }) %>
       <small class="muted">A visit needs AT LEAST ONE of the checked identifiers to reach the offer. Match these to the platform you're running: Google IDs for Google Ads, fbclid for Facebook, twclid for Twitter/X, rdt_cid for Reddit, etc.</small>
     </div>
+
+    <div class="form-row">
+      <label>Format validation</label>
+      <% const vf = campaign?.filter_config?.clickid_gate?.validate_format || 'off'; %>
+      <select name="clickid_validate_format" style="max-width:280px;">
+        <option value="off"    <%= vf === 'off'    ? 'selected' : '' %>>Off — presence only</option>
+        <option value="loose"  <%= vf === 'loose'  ? 'selected' : '' %>>Loose — length + charset checks</option>
+        <option value="strict" <%= vf === 'strict' ? 'selected' : '' %>>Strict — platform patterns + entropy</option>
+      </select>
+      <small class="muted">
+        Checks the click ID looks real, catching lazy fakes like <code>gclid=test</code> or <code>gclid=12345</code>.
+        <strong>Loose</strong> is safe for all traffic. <strong>Strict</strong> adds platform-specific pattern
+        and entropy checks (slightly higher false-positive risk). Note: only the ad platform can confirm a click ID is
+        genuinely theirs — this catches obvious fakes, not sophisticated ones.
+      </small>
+    </div>
   </fieldset>
 
   <fieldset>

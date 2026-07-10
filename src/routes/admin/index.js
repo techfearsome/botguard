@@ -179,6 +179,7 @@ router.post('/campaigns', async (req, res) => {
         clickid_gate: {
           enabled: body.clickid_gate_enabled === 'on' || body.clickid_gate_enabled === 'true',
           accepted_ids: parseAcceptedClickIds(body.clickid_accepted_ids),
+          validate_format: ['off', 'loose', 'strict'].includes(body.clickid_validate_format) ? body.clickid_validate_format : 'off',
         },
         country_gate: countryGate,
         proxy_gate: proxyGate,
@@ -386,6 +387,7 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.clickid_gate': {
             enabled: body.clickid_gate_enabled === 'on' || body.clickid_gate_enabled === 'true',
             accepted_ids: parseAcceptedClickIds(body.clickid_accepted_ids),
+            validate_format: ['off', 'loose', 'strict'].includes(body.clickid_validate_format) ? body.clickid_validate_format : 'off',
           },
           'filter_config.country_gate': countryGate,
           'filter_config.proxy_gate': proxyGate,
