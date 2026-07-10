@@ -349,42 +349,6 @@
     </div>
   </fieldset>
 
-  <fieldset style="border:1px solid var(--border-default); border-radius:var(--radius-md); padding:16px; margin-bottom:16px;">
-    <legend style="font-weight:600; padding:0 6px;">Residential Proxy Detection (Layer 2)</legend>
-    <%
-      const rp = campaign?.residential_proxy || {};
-      const rpEnabled = rp.enabled || campaign?.residential_proxy_detection || false;
-      const rpProvider = rp.provider || 'auto';
-    %>
-    <div class="form-row">
-      <label style="font-weight:normal; display:flex; align-items:center; gap:8px;">
-        <input type="checkbox" name="residential_proxy_enabled"
-          <%= rpEnabled ? 'checked' : '' %>
-          style="width:auto;">
-        Enable residential proxy detection
-      </label>
-      <small class="muted">
-        Second-layer detection for residential proxies that ProxyCheck misses.
-        Only runs when ProxyCheck doesn't catch the IP — no double API spending.
-      </small>
-    </div>
-    <div class="form-row" style="margin-top:8px;">
-      <label>Detection provider</label>
-      <select name="residential_proxy_provider">
-        <option value="auto" <%= rpProvider === 'auto' ? 'selected' : '' %>>Auto (use first configured)</option>
-        <option value="ipgeolocation" <%= rpProvider === 'ipgeolocation' ? 'selected' : '' %>>ipgeolocation.io (2 credits/lookup)</option>
-        <option value="spur" <%= rpProvider === 'spur' ? 'selected' : '' %>>Spur (Context API)</option>
-        <option value="ipinfo" <%= rpProvider === 'ipinfo' ? 'selected' : '' %>>ipinfo.io (Privacy + Residential Proxy)</option>
-      </select>
-      <small class="muted">
-        Set the API key in <code>.env</code>:
-        <code>IPGEO_API_KEY</code> for ipgeolocation.io,
-        <code>SPUR_API_TOKEN</code> for Spur,
-        <code>IPINFO_TOKEN</code> for ipinfo.io.
-      </small>
-    </div>
-  </fieldset>
-
   <div class="form-row">
     <label>S2S Postback URL <span class="muted">(optional)</span></label>
     <input type="text" name="postback_url" value="<%= campaign?.postback_url || '' %>" placeholder="https://your-tracker.example.com/postback?clickid={click_id}">
@@ -400,5 +364,93 @@
     <a href="/admin/campaigns" class="btn">Cancel</a>
   </div>
 </form>
+
+<% if (campaign && campaign._id) { %>
+<%
+  // Build the tracking URLs for this campaign
+  const base = (typeof baseUrl !== 'undefined' && baseUrl) ? baseUrl.replace(/\/$/, '') : '';
+  const landingUrl = campaign.root_path
+    ? `${base}/${campaign.root_path}`
+    : `${base}/go/${campaign.slug}`;
+
+  // The Final URL suffix — the full parameter string to paste into Google Ads.
+  // Uses the compact tracking template with ValueTrack macros.
+  const finalUrlSuffix = [
+    'utm_source=google',
+    'utm_medium=display_ads',
+    `utm_campaign=${campaign.slug}`,
+    'utm_content={placement}',
+    'tm=tt',
+    'ap=gads',
+    'cid={campaignid}',
+    'agid={adgroupid}',
+    'aid={creative}',
+    'kid={targetid}',
+    'kw={keyword}',
+    'nw={network}',
+    'dv={device}',
+    'mt={matchtype}',
+    'pl={placement}',
+  ].join('&');
+%>
+<section class="panel" style="margin-top:24px; border:1px solid var(--color-primary, #3b82f6);">
+  <h3>📋 Google Ads Setup</h3>
+  <p class="muted" style="margin-bottom:16px;">
+    Copy these into your Google Ads campaign's <strong>Campaign URL options</strong>.
+  </p>
+
+  <div class="form-row">
+    <label>Final URL <span class="muted">(the landing page URL for your ad)</span></label>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input type="text" id="final_url" readonly value="<%= landingUrl %>"
+        style="flex:1; font-family:var(--font-mono); font-size:13px;" onclick="this.select()">
+      <button type="button" class="btn btn-small" onclick="copyField('final_url', this)">Copy</button>
+    </div>
+  </div>
+
+  <div class="form-row" style="margin-top:16px;">
+    <label>Final URL suffix <span class="muted">(paste into "Final URL suffix" field)</span></label>
+    <div style="display:flex; gap:8px; align-items:flex-start;">
+      <textarea id="url_suffix" readonly rows="3"
+        style="flex:1; font-family:var(--font-mono); font-size:12px; resize:vertical;"
+        onclick="this.select()"><%= finalUrlSuffix %></textarea>
+      <button type="button" class="btn btn-small" onclick="copyField('url_suffix', this)">Copy</button>
+    </div>
+    <small class="muted" style="margin-top:6px; display:block;">
+      This captures campaign ID, ad group, creative, keyword, network, device, match type, and placement —
+      all visible per-click in the ValueTrack panel. Google fills the <code>{...}</code> macros automatically.
+    </small>
+  </div>
+
+  <details style="margin-top:12px;">
+    <summary style="cursor:pointer; font-weight:600; font-size:13px;">Setup steps</summary>
+    <div style="margin-top:10px; padding:12px 16px; background:var(--bg-code, #1a1a2e); border-radius:8px; font-size:13px; line-height:1.9;">
+      <strong>1.</strong> In Google Ads, open your campaign → Settings → <strong>Campaign URL options</strong><br>
+      <strong>2.</strong> Set your ad's <strong>Final URL</strong> to the landing URL above<br>
+      <strong>3.</strong> Paste the suffix into <strong>Final URL suffix</strong><br>
+      <strong>4.</strong> Click <strong>Test</strong> to verify, then Save<br>
+      <strong>5.</strong> For app campaigns, the <code>{placement}</code> in utm_content becomes <code>mobileapp::1-{app_id}</code> automatically
+    </div>
+  </details>
+</section>
+
+<script>
+function copyField(id, btn) {
+  var el = document.getElementById(id);
+  el.select();
+  el.setSelectionRange(0, 99999);
+  try {
+    navigator.clipboard.writeText(el.value).then(function() {
+      var orig = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(function(){ btn.textContent = orig; }, 1500);
+    });
+  } catch (e) {
+    document.execCommand('copy');
+    btn.textContent = '✓ Copied';
+  }
+}
+</script>
+<% } %>
 
 <%- include('../partials/footer') %>

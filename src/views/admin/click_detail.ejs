@@ -198,6 +198,24 @@
 <% const vtB = click.valuetrack?.bing || {}; %>
 <% const hasVtG = Object.keys(vtG).length > 0; %>
 <% const hasVtB = Object.keys(vtB).length > 0; %>
+<%
+  // Friendly labels for ValueTrack keys
+  const vtLabels = {
+    campaignid: 'Campaign ID', adgroupid: 'Ad Group ID', creative: 'Creative (Ad ID)',
+    keyword: 'Keyword', matchtype: 'Match Type', network: 'Network', device: 'Device',
+    devicemodel: 'Device Model', targetid: 'Target ID', placement: 'Placement',
+    adposition: 'Ad Position', loc_physical_ms: 'Physical Location', loc_interest_ms: 'Interest Location',
+    feeditemid: 'Feed Item ID', extensionid: 'Extension ID', product_id: 'Product ID',
+    merchant_id: 'Merchant ID', tm: 'Tracking Marker', ap: 'Ad Platform', aaid: 'Account/Affiliate ID',
+  };
+  // Decode short codes to human-readable values
+  function vtDecode(key, val) {
+    if (key === 'matchtype') return { e: 'Exact', p: 'Phrase', b: 'Broad', a: 'AI Max' }[val] || val;
+    if (key === 'network') return { g: 'Google Search', s: 'Search Partner', d: 'Display', ytv: 'YouTube', gtv: 'Google TV', x: 'Cross-network' }[val] || val;
+    if (key === 'device') return { m: 'Mobile', t: 'Tablet', c: 'Computer' }[val] || val;
+    return val;
+  }
+%>
 
 <% if (hasVtG || hasVtB) { %>
 <section class="panel">
@@ -207,7 +225,17 @@
     <h4 style="margin-top:0;">Google Ads</h4>
     <table class="table table-dense">
       <% Object.entries(vtG).forEach(([k, v]) => { %>
-        <tr><td><%= k %></td><td class="mono"><%= v %></td></tr>
+        <tr>
+          <td><%= vtLabels[k] || k %></td>
+          <td>
+            <% const decoded = vtDecode(k, v); %>
+            <% if (decoded !== v) { %>
+              <%= decoded %> <span class="mono muted" style="font-size:12px;">(<%= v %>)</span>
+            <% } else { %>
+              <span class="mono"><%= v %></span>
+            <% } %>
+          </td>
+        </tr>
       <% }) %>
     </table>
   <% } %>
@@ -216,7 +244,7 @@
     <h4 style="margin-top:<%= hasVtG ? '16px' : '0' %>;">Bing Ads</h4>
     <table class="table table-dense">
       <% Object.entries(vtB).forEach(([k, v]) => { %>
-        <tr><td><%= k %></td><td class="mono"><%= v %></td></tr>
+        <tr><td><%= vtLabels[k] || k %></td><td class="mono"><%= v %></td></tr>
       <% }) %>
     </table>
   <% } %>
