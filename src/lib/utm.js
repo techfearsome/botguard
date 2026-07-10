@@ -74,6 +74,42 @@ const GOOGLE_VALUETRACK_SHOPPING_TRAVEL = [
 ];
 const GOOGLE_VALUETRACK_KEYS = [...GOOGLE_VALUETRACK_CORE, ...GOOGLE_VALUETRACK_SHOPPING_TRAVEL];
 
+// Custom short-name aliases → canonical ValueTrack field.
+// Many advertisers use compact tracking templates like:
+//   cid={campaignid}&agid={adgroupid}&aid={creative}&kid={targetid}
+//   &kw={keyword}&nw={network}&dv={device}&mt={matchtype}&pl={placement}
+// This maps those short names to the standard fields so they're captured
+// regardless of which naming convention the tracking template uses.
+const GOOGLE_VALUETRACK_ALIASES = {
+  cid:  'campaignid',
+  agid: 'adgroupid',
+  aid:  'creative',
+  kid:  'targetid',
+  kw:   'keyword',
+  nw:   'network',
+  dv:   'device',
+  mt:   'matchtype',
+  pl:   'placement',
+  cr:   'creative',
+  plc:  'placement',
+  loc:  'loc_physical_ms',
+  dm:   'devicemodel',
+  adpos: 'adposition',
+};
+
+// Extra custom tracking parameters (not ValueTrack, but useful to capture).
+// These are advertiser-defined static or dynamic values.
+const GOOGLE_CUSTOM_KEYS = [
+  'tm',    // tracking method / traffic marker
+  'ap',    // ad platform (e.g. "gads")
+  'aaid',  // advertiser account ID or affiliate ID
+  'sub',   // sub-id
+  'sub_id',
+  's1', 's2', 's3', 's4', 's5',  // common sub-id slots
+  'clickid',
+  'source_id',
+];
+
 // Microsoft (Bing) Ads ValueTrack-style parameters. Bing uses CamelCase
 // placeholder names ({MatchType}, {QueryString}, etc.) but advertisers
 // typically use lowercase URL parameter names. We capture both common
@@ -94,45 +130,10 @@ const BING_VALUETRACK_KEYS = [
 function parseUtm(query) {
   const utm = {};
   if (!query || typeof query !== 'object') return utm;
-
-  // First pass: extract UTM values from the parsed query object
   for (const key of UTM_KEYS) {
     const v = query[`utm_${key}`];
     if (v && typeof v === 'string') utm[key] = v.slice(0, 256);
   }
-
-  // Fix: some tracking templates or redirect chains encode & as %26,
-  // causing the entire query string to be stuffed into one parameter.
-  // e.g. utm_source=google&utm_medium=display_ads&utm_campaign=...
-  // Express decodes %26 to & but treats it as part of the value.
-  //
-  // Detect: if any UTM value contains &utm_ or &gclid= or &wbraid=,
-  // the URL was malformed. Re-parse the embedded params.
-  for (const key of UTM_KEYS) {
-    const val = utm[key];
-    if (!val || !val.includes('&')) continue;
-
-    // This value has embedded query params — split and re-parse
-    const parts = val.split('&');
-    // First part is the real value for this key
-    utm[key] = parts[0].slice(0, 256);
-
-    // Remaining parts are the embedded params
-    for (let i = 1; i < parts.length; i++) {
-      const eqIdx = parts[i].indexOf('=');
-      if (eqIdx === -1) continue;
-      const pKey = parts[i].substring(0, eqIdx);
-      const pVal = parts[i].substring(eqIdx + 1);
-      // Only fill UTM keys that weren't already set from the real query
-      for (const uk of UTM_KEYS) {
-        if (pKey === `utm_${uk}` && !query[`utm_${uk}`]) {
-          utm[uk] = pVal.slice(0, 256);
-        }
-      }
-    }
-    break; // Only the first malformed key needs fixing
-  }
-
   return utm;
 }
 
@@ -182,7 +183,21 @@ function parseValueTrack(query) {
 
   if (isGoogle) {
     const google = {};
+    // Standard ValueTrack keys
     for (const key of GOOGLE_VALUETRACK_KEYS) {
+      const v = query[key];
+      if (v && typeof v === 'string') google[key] = v.slice(0, 512);
+    }
+    // Custom short-name aliases (cid, agid, aid, kw, etc.)
+    // Only fill a canonical field if it wasn't already set by the standard name.
+    for (const [alias, canonical] of Object.entries(GOOGLE_VALUETRACK_ALIASES)) {
+      const v = query[alias];
+      if (v && typeof v === 'string' && !google[canonical]) {
+        google[canonical] = v.slice(0, 512);
+      }
+    }
+    // Extra custom tracking parameters (tm, ap, aaid, sub-ids, etc.)
+    for (const key of GOOGLE_CUSTOM_KEYS) {
       const v = query[key];
       if (v && typeof v === 'string') google[key] = v.slice(0, 512);
     }
