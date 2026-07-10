@@ -215,7 +215,7 @@ function parseRequiredUtmKeys(input) {
 
 // Parse accepted click identifiers for the Click ID gate.
 function parseAcceptedClickIds(input) {
-  const valid = new Set(['gclid', 'wbraid', 'gbraid', 'msclkid']);
+  const valid = new Set(['gclid', 'wbraid', 'gbraid', 'msclkid', 'fbclid', 'ttclid', 'li_fat_id', 'twclid', 'rdt_cid']);
   let ids = [];
   if (Array.isArray(input)) {
     ids = input;

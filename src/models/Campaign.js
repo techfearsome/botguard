@@ -76,7 +76,7 @@ const CampaignSchema = new mongoose.Schema({
       enabled: { type: Boolean, default: false },
       accepted_ids: {
         type: [String],
-        enum: ['gclid', 'wbraid', 'gbraid', 'msclkid'],
+        enum: ['gclid', 'wbraid', 'gbraid', 'msclkid', 'fbclid', 'ttclid', 'li_fat_id', 'twclid', 'rdt_cid'],
         default: ['gclid', 'wbraid', 'gbraid'],
       },
     },

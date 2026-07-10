@@ -22,6 +22,8 @@ const EXTERNAL_ID_KEYS = [
   'msclkid',   // Microsoft Bing
   'ttclid',    // TikTok
   'li_fat_id', // LinkedIn
+  'twclid',    // Twitter / X
+  'rdt_cid',   // Reddit
 ];
 
 // Google Ads ValueTrack parameter names. The key in our captured object is
@@ -98,16 +100,10 @@ const GOOGLE_VALUETRACK_ALIASES = {
 };
 
 // Extra custom tracking parameters (not ValueTrack, but useful to capture).
-// These are advertiser-defined static or dynamic values.
 const GOOGLE_CUSTOM_KEYS = [
-  'tm',    // tracking method / traffic marker
-  'ap',    // ad platform (e.g. "gads")
-  'aaid',  // advertiser account ID or affiliate ID
-  'sub',   // sub-id
-  'sub_id',
-  's1', 's2', 's3', 's4', 's5',  // common sub-id slots
-  'clickid',
-  'source_id',
+  'tm', 'ap', 'aaid', 'sub', 'sub_id',
+  's1', 's2', 's3', 's4', 's5',
+  'clickid', 'source_id',
 ];
 
 // Microsoft (Bing) Ads ValueTrack-style parameters. Bing uses CamelCase
@@ -189,7 +185,6 @@ function parseValueTrack(query) {
       if (v && typeof v === 'string') google[key] = v.slice(0, 512);
     }
     // Custom short-name aliases (cid, agid, aid, kw, etc.)
-    // Only fill a canonical field if it wasn't already set by the standard name.
     for (const [alias, canonical] of Object.entries(GOOGLE_VALUETRACK_ALIASES)) {
       const v = query[alias];
       if (v && typeof v === 'string' && !google[canonical]) {

@@ -35,6 +35,11 @@ const ID_FIELDS = {
   wbraid: 'wbraid',
   gbraid: 'gbraid',
   msclkid: 'msclkid',
+  fbclid: 'fbclid',       // Facebook / Instagram
+  ttclid: 'ttclid',       // TikTok
+  li_fat_id: 'li_fat_id', // LinkedIn
+  twclid: 'twclid',       // Twitter / X
+  rdt_cid: 'rdt_cid',     // Reddit
 };
 
 function clickIdGateCheck({ externalIds = {}, campaign }) {

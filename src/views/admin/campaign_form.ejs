@@ -257,18 +257,26 @@
       <label>Accepted click identifiers</label>
       <%
         const acceptedIds = campaign?.filter_config?.clickid_gate?.accepted_ids || ['gclid','wbraid','gbraid'];
-        const idLabels = { gclid: 'gclid (standard)', wbraid: 'wbraid (iOS app→web)', gbraid: 'gbraid (iOS web→app)', msclkid: 'msclkid (Bing)' };
+        const idGroups = {
+          'Google Ads': [['gclid','gclid (standard)'], ['wbraid','wbraid (iOS app→web)'], ['gbraid','gbraid (iOS web→app)']],
+          'Other platforms': [['msclkid','msclkid (Bing)'], ['fbclid','fbclid (Facebook/IG)'], ['ttclid','ttclid (TikTok)'], ['li_fat_id','li_fat_id (LinkedIn)'], ['twclid','twclid (Twitter/X)'], ['rdt_cid','rdt_cid (Reddit)']],
+        };
       %>
-      <div style="display:flex; gap:14px; flex-wrap:wrap;">
-        <% ['gclid', 'wbraid', 'gbraid', 'msclkid'].forEach(id => { %>
-          <label style="font-weight:normal;">
-            <input type="checkbox" name="clickid_accepted_ids" value="<%= id %>"
-              <%= acceptedIds.includes(id) ? 'checked' : '' %>>
-            <%= idLabels[id] %>
-          </label>
-        <% }) %>
-      </div>
-      <small class="muted">A visit needs AT LEAST ONE of the checked identifiers to reach the offer. Keep all three Google IDs checked for Google Ads campaigns.</small>
+      <% Object.entries(idGroups).forEach(([groupName, ids]) => { %>
+        <div style="margin-bottom:10px;">
+          <div class="muted" style="font-size:12px; font-weight:600; margin-bottom:4px;"><%= groupName %></div>
+          <div style="display:flex; gap:14px; flex-wrap:wrap;">
+            <% ids.forEach(([id, label]) => { %>
+              <label style="font-weight:normal;">
+                <input type="checkbox" name="clickid_accepted_ids" value="<%= id %>"
+                  <%= acceptedIds.includes(id) ? 'checked' : '' %>>
+                <%= label %>
+              </label>
+            <% }) %>
+          </div>
+        </div>
+      <% }) %>
+      <small class="muted">A visit needs AT LEAST ONE of the checked identifiers to reach the offer. Match these to the platform you're running: Google IDs for Google Ads, fbclid for Facebook, twclid for Twitter/X, rdt_cid for Reddit, etc.</small>
     </div>
   </fieldset>
 
