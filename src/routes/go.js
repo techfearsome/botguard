@@ -8,6 +8,7 @@ const { runFilterChain } = require('../lib/filterChain');
 const { resolvePageForDevice } = require('../lib/pageResolver');
 const cache = require('../lib/cache');
 const { utmGateCheck } = require('../filters/utmGate');
+const { clickIdGateCheck } = require('../filters/clickIdGate');
 const { countryGateCheck } = require('../filters/countryGate');
 const { proxyGateCheck } = require('../filters/proxyGate');
 const { hashFingerprint, behaviorFilter } = require('../filters/behavior');
@@ -123,6 +124,29 @@ async function handleClick(req, res, opts) {
       doc.decision = 'block';
       doc.decision_reason = `utm_gate:missing_${gateResult.missing_keys.join('_')}`;
       doc.mode_at_decision = 'enforce';   // gate is always enforcing - it's not a score
+      doc.page_rendered = 'safe';
+
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
+
+      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+      registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res, campaign); return res.status(200).type('html').send(applyPageTracking(html, workspace));
+    }
+
+    // --- Click Identifier gate (also BEFORE the filter chain) ---
+    // Every real ad click carries gclid/wbraid/gbraid (Google) or msclkid (Bing).
+    // A visit with no click ID is likely a copy/paste, scraper, or URL replay.
+    const clickIdResult = clickIdGateCheck({ externalIds: doc.external_ids, campaign });
+    if (clickIdResult.blocked) {
+      doc.scores = {
+        network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
+        total: 0,
+        profile_used: campaign.source_profile,
+        flags: clickIdResult.flags,
+      };
+      doc.decision = 'block';
+      doc.decision_reason = 'clickid_gate:missing_click_id';
+      doc.mode_at_decision = 'enforce';
       doc.page_rendered = 'safe';
 
       const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');

@@ -69,6 +69,18 @@ const CampaignSchema = new mongoose.Schema({
       },
     },
 
+    // Click Identifier gate: require a platform click ID (gclid/wbraid/gbraid/msclkid).
+    // Every real ad click carries one via auto-tagging. A visit with valid UTMs
+    // but no click ID is likely a copy/paste, scraper, or bot replaying a URL.
+    clickid_gate: {
+      enabled: { type: Boolean, default: false },
+      accepted_ids: {
+        type: [String],
+        enum: ['gclid', 'wbraid', 'gbraid', 'msclkid'],
+        default: ['gclid', 'wbraid', 'gbraid'],
+      },
+    },
+
     // Country gate: cross-check ProxyCheck's country verdict against an allowlist or blocklist.
     // Stored as ISO 3166-1 alpha-2 codes (e.g. 'US', 'GB', 'IN').
     country_gate: {
@@ -94,16 +106,6 @@ const CampaignSchema = new mongoose.Schema({
       // Use ProxyCheck's own risk score (0-100) as a separate threshold
       max_risk_score: { type: Number, default: 100, min: 0, max: 100 },
     },
-  },
-
-  // Second-layer residential proxy detection
-  // Catches residential proxies that ProxyCheck misses (IPRoyal, 922Proxy, etc.)
-  // Provider configurable per campaign. Only runs when enabled AND API key set.
-  residential_proxy_detection: { type: Boolean, default: false }, // backward compat
-  residential_proxy: {
-    enabled:  { type: Boolean, default: false },
-    // 'auto' picks first configured, or pick a specific provider
-    provider: { type: String, enum: ['auto', 'ipgeolocation', 'spur', 'ipinfo'], default: 'auto' },
   },
 
   // Conversion tracking

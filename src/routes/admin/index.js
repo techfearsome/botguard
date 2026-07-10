@@ -176,6 +176,10 @@ router.post('/campaigns', async (req, res) => {
         threshold: Number(body.threshold) || 70,
         mode: body.mode || 'log_only',
         utm_gate: utmGate,
+        clickid_gate: {
+          enabled: body.clickid_gate_enabled === 'on' || body.clickid_gate_enabled === 'true',
+          accepted_ids: parseAcceptedClickIds(body.clickid_accepted_ids),
+        },
         country_gate: countryGate,
         proxy_gate: proxyGate,
       },
@@ -207,6 +211,21 @@ function parseRequiredUtmKeys(input) {
     keys = ['source', 'medium', 'campaign'];   // sensible default
   }
   return keys.filter((k) => valid.has(k));
+}
+
+// Parse accepted click identifiers for the Click ID gate.
+function parseAcceptedClickIds(input) {
+  const valid = new Set(['gclid', 'wbraid', 'gbraid', 'msclkid']);
+  let ids = [];
+  if (Array.isArray(input)) {
+    ids = input;
+  } else if (typeof input === 'string' && input.trim()) {
+    ids = input.split(',').map((s) => s.trim());
+  } else {
+    ids = ['gclid', 'wbraid', 'gbraid'];   // default: any Google click ID
+  }
+  const filtered = ids.filter((k) => valid.has(k));
+  return filtered.length > 0 ? filtered : ['gclid', 'wbraid', 'gbraid'];
 }
 
 // Parse country gate config from form body.
@@ -364,6 +383,10 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.threshold': Number(body.threshold) || 70,
           'filter_config.mode': body.mode,
           'filter_config.utm_gate': utmGate,
+          'filter_config.clickid_gate': {
+            enabled: body.clickid_gate_enabled === 'on' || body.clickid_gate_enabled === 'true',
+            accepted_ids: parseAcceptedClickIds(body.clickid_accepted_ids),
+          },
           'filter_config.country_gate': countryGate,
           'filter_config.proxy_gate': proxyGate,
           postback_url: body.postback_url || '',
