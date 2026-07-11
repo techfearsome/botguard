@@ -67,7 +67,8 @@ function deviceLabel(uaResult) {
   if (osName.includes('windows')) return 'Windows';
   if (osName.includes('mac') || osName === 'macos') return 'Mac';
   if (osName === 'chromium os' || osName === 'chrome os') return 'Chromebook';
-  if (osName.includes('linux')) return 'Linux';
+  if (osName.includes('linux') || osName.includes('ubuntu') || osName.includes('fedora') ||
+      osName.includes('debian') || osName.includes('arch')) return 'Linux';
 
   return 'desktop';
 }

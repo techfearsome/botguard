@@ -125,7 +125,7 @@ const BAD_SIGNALS = {
   hardware_concurrency: 0, touch_support: false,
 };
 
-function baseState({ devices, slug = 'demo', rootPath = '' }) {
+function baseState({ devices, slug = 'demo', rootPath = '', autoConv = false }) {
   const offerPageId = 'page-offer';
   const safePageId = 'page-safe';
   return {
@@ -140,7 +140,12 @@ function baseState({ devices, slug = 'demo', rootPath = '' }) {
       },
     },
     pages: {
-      [offerPageId]: { _id: offerPageId, kind: 'offer', html_template: '<html><body>OFFER_CONTENT</body></html>', variants: [] },
+      [offerPageId]: {
+        _id: offerPageId, kind: 'offer', html_template: '<html><body>OFFER_CONTENT</body></html>', variants: [],
+        auto_conversion: autoConv
+          ? { enabled: true, terms: ['thank you', 'success'], event_name: 'guarded_conv' }
+          : { enabled: false },
+      },
       [safePageId]:  { _id: safePageId,  kind: 'safe',  html_template: '<html><body>SAFE_CONTENT</body></html>',  variants: [] },
     },
     clicks: [],
@@ -278,6 +283,49 @@ async function test(name, fn) {
     const r = await request(server, { urlPath: '/promo?gclid=xyz', headers: { 'User-Agent': IPHONE_UA } });
     assert.ok(r.body.includes('OFFER_CONTENT'));
     assert.ok(!r.body.includes('var TOKEN'));
+  });
+
+  console.log('\nCompatibility: Level 1 fingerprint + auto-conversion on guarded offer:');
+
+  await test('Interstitial carries NEITHER the L1 challenge NOR auto-conv injection', async () => {
+    cache.clearAll();
+    stubState = baseState({ devices: ['windows'], autoConv: true });
+    const r = await request(server, { urlPath: '/go/demo', headers: { 'User-Agent': WIN_UA } });
+    assert.ok(r.body.includes('var TOKEN'), 'should be the interstitial');
+    assert.ok(!r.body.includes('/static/js/challenge.js'), 'L1 challenge must not run on the interstitial');
+    assert.ok(!r.body.includes('bg-auto-conv-config'), 'auto-conv must not fire on the interstitial');
+  });
+
+  await test('After guard PASS, served offer injects L1 challenge AND auto-conv', async () => {
+    cache.clearAll();
+    stubState = baseState({ devices: ['windows'], autoConv: true });
+    const r1 = await request(server, { urlPath: '/go/demo', headers: { 'User-Agent': WIN_UA } });
+    const token = extractToken(r1.body);
+    const verify = await request(server, {
+      method: 'POST', urlPath: '/go/guard-verify',
+      headers: { 'User-Agent': WIN_UA }, body: { token, ...GOOD_SIGNALS },
+    });
+    const passCookieName = Object.keys(verify.cookies).find((k) => k.startsWith('bg_guard_') && !k.startsWith('bg_guardfail_'));
+    const r2 = await request(server, {
+      urlPath: '/go/demo', headers: { 'User-Agent': WIN_UA },
+      cookies: { [passCookieName]: verify.cookies[passCookieName] },
+    });
+    assert.ok(r2.body.includes('OFFER_CONTENT'), 'offer renders after pass');
+    assert.ok(r2.body.includes('/static/js/challenge.js'), 'Level 1 fingerprint challenge should be injected on the offer');
+    assert.ok(r2.body.includes('bg-auto-conv-config'), 'auto-conversion injection should be present on the offer');
+    assert.ok(r2.body.includes('guarded_conv'), 'auto-conversion should carry the configured event_name');
+    const servedClick = stubState.clicks[stubState.clicks.length - 1];
+    assert.strictEqual(servedClick.page_rendered, 'offer');
+    assert.strictEqual(servedClick.auto_conv_injected, true, 'served click should record auto_conv_injected');
+  });
+
+  await test('Non-targeted device gets offer WITH L1 + auto-conv (no guard in the way)', async () => {
+    cache.clearAll();
+    stubState = baseState({ devices: ['windows'], autoConv: true });
+    const r = await request(server, { urlPath: '/go/demo', headers: { 'User-Agent': IPHONE_UA } });
+    assert.ok(r.body.includes('OFFER_CONTENT'));
+    assert.ok(r.body.includes('/static/js/challenge.js'), 'L1 still runs for skipped-device offer');
+    assert.ok(r.body.includes('bg-auto-conv-config'), 'auto-conv still runs for skipped-device offer');
   });
 
   server.close();
