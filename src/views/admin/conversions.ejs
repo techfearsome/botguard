@@ -80,6 +80,7 @@
         <th>Click ID</th>
         <th>IP</th>
         <th>Country</th>
+        <th>Region / City</th>
         <th>Provider</th>
         <th>Device</th>
         <th>Offer Page</th>
@@ -114,6 +115,13 @@
             <%= c.click?.country || '–' %>
             <% if (c.click?.country_name) { %>
               <small class="muted"><%= c.click.country_name %></small>
+            <% } %>
+          </td>
+          <td>
+            <% if (c.click?.region || c.click?.city) { %>
+              <%= c.click?.region || '–' %><% if (c.click?.city) { %> / <%= c.click.city %><% } %>
+            <% } else { %>
+              –
             <% } %>
           </td>
           <td title="<%= c.click?.organisation || '' %>">

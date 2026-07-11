@@ -983,7 +983,7 @@ router.get('/conversions', async (req, res) => {
   const clickIds = Array.from(new Set(conversions.map((c) => c.click_id)));
   const clicks = clickIds.length
     ? await Click.find({ workspace_id: ws._id, click_id: { $in: clickIds } })
-        .select('click_id ip country country_name asn_org organisation ua_parsed in_app_browser is_proxy proxy_type ip_type page_rendered landing_page_id ts utm')
+        .select('click_id ip country country_name region city asn_org organisation ua_parsed in_app_browser is_proxy proxy_type ip_type page_rendered landing_page_id ts utm')
         .populate('landing_page_id', 'name slug')
         .lean()
     : [];
@@ -1037,7 +1037,7 @@ router.get('/conversions.csv', async (req, res) => {
   const clickIds = Array.from(new Set(conversions.map((c) => c.click_id)));
   const clicks = clickIds.length
     ? await Click.find({ workspace_id: ws._id, click_id: { $in: clickIds } })
-        .select('click_id ip country asn_org page_rendered utm')
+        .select('click_id ip country region city asn_org page_rendered utm')
         .lean()
     : [];
   const clickMap = Object.fromEntries(clicks.map((c) => [c.click_id, c]));
@@ -1046,7 +1046,7 @@ router.get('/conversions.csv', async (req, res) => {
     'ts', 'click_id', 'campaign', 'campaign_slug',
     'event_name', 'source', 'auto_detected', 'value', 'currency',
     'matched_term', 'matched_text', 'matched_element', 'page_url',
-    'ip', 'country', 'provider',
+    'ip', 'country', 'region', 'city', 'provider',
     'utm_source', 'utm_medium', 'utm_campaign',
   ];
   const rows = [headers.join(',')];
@@ -1068,6 +1068,8 @@ router.get('/conversions.csv', async (req, res) => {
       c.page_url || '',
       click.ip || '',
       click.country || '',
+      click.region || '',
+      click.city || '',
       click.asn_org || '',
       click.utm?.source || '',
       click.utm?.medium || '',
