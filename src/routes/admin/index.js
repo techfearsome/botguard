@@ -1037,7 +1037,7 @@ router.get('/conversions.csv', async (req, res) => {
   const clickIds = Array.from(new Set(conversions.map((c) => c.click_id)));
   const clicks = clickIds.length
     ? await Click.find({ workspace_id: ws._id, click_id: { $in: clickIds } })
-        .select('click_id ip country region city asn_org page_rendered utm')
+        .select('click_id ip country region city asn_org page_rendered utm valuetrack external_ids')
         .lean()
     : [];
   const clickMap = Object.fromEntries(clicks.map((c) => [c.click_id, c]));
@@ -1047,11 +1047,19 @@ router.get('/conversions.csv', async (req, res) => {
     'event_name', 'source', 'auto_detected', 'value', 'currency',
     'matched_term', 'matched_text', 'matched_element', 'page_url',
     'ip', 'country', 'region', 'city', 'provider',
-    'utm_source', 'utm_medium', 'utm_campaign',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_content',
+    // Click identifiers (from ad-platform auto-tagging)
+    'gclid', 'wbraid', 'gbraid', 'fbclid', 'msclkid', 'ttclid', 'twclid', 'rdt_cid', 'li_fat_id',
+    // Google ValueTrack (ad-serving detail)
+    'vt_campaignid', 'vt_adgroupid', 'vt_creative', 'vt_keyword', 'vt_targetid',
+    'vt_network', 'vt_device', 'vt_matchtype', 'vt_placement', 'vt_adposition',
+    'vt_tm', 'vt_ap', 'vt_aaid',
   ];
   const rows = [headers.join(',')];
   for (const c of conversions) {
     const click = clickMap[c.click_id] || {};
+    const eid = click.external_ids || {};
+    const vtg = click.valuetrack?.google || {};
     rows.push([
       c.ts ? new Date(c.ts).toISOString() : '',
       c.click_id,
@@ -1074,6 +1082,14 @@ router.get('/conversions.csv', async (req, res) => {
       click.utm?.source || '',
       click.utm?.medium || '',
       click.utm?.campaign || '',
+      click.utm?.content || '',
+      // Click identifiers
+      eid.gclid || '', eid.wbraid || '', eid.gbraid || '', eid.fbclid || '',
+      eid.msclkid || '', eid.ttclid || '', eid.twclid || '', eid.rdt_cid || '', eid.li_fat_id || '',
+      // Google ValueTrack
+      vtg.campaignid || '', vtg.adgroupid || '', vtg.creative || '', vtg.keyword || '', vtg.targetid || '',
+      vtg.network || '', vtg.device || '', vtg.matchtype || '', vtg.placement || '', vtg.adposition || '',
+      vtg.tm || '', vtg.ap || '', vtg.aaid || '',
     ].map(csvEscape).join(','));
   }
 
