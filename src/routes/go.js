@@ -6,6 +6,7 @@ const { buildClickDoc, writeClick } = require('../lib/click');
 const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
 const { resolvePageForDevice } = require('../lib/pageResolver');
+const { resolveGuardConfig } = require('../lib/guardEligibility');
 const cache = require('../lib/cache');
 const { utmGateCheck } = require('../filters/utmGate');
 const { clickIdGateCheck } = require('../filters/clickIdGate');
@@ -240,12 +241,19 @@ async function handleClick(req, res, opts) {
     const targetPage = await resolvePageForDevice(campaign, deviceClass, showSafePage ? 'safe' : 'offer');
 
     // ── Bot Guard (Level 2) ─────────────────────────────────────────
-    // If we're about to serve an OFFER page that has bot_guard enabled,
-    // and the visitor hasn't already passed the guard (no valid pass
-    // cookie), serve the guard interstitial instead of the offer page.
-    // The interstitial runs client-side checks and POSTs to /go/guard-verify.
-    if (!showSafePage && targetPage && targetPage.kind === 'offer' &&
-        targetPage.bot_guard?.enabled) {
+    // Resolve whether THIS click (for THIS device class) should run through
+    // the Level 2 guard. Campaign-level bot_guard with per-device targeting
+    // takes precedence; falls back to legacy page-level bot_guard.
+    // Returns a normalized config, or null to skip the guard for this device.
+    const guardConfig = (!showSafePage && targetPage && targetPage.kind === 'offer')
+      ? resolveGuardConfig({ campaign, targetPage, deviceClass })
+      : null;
+
+    // If we're about to serve an OFFER page that should be guarded, and the
+    // visitor hasn't already passed (no valid pass cookie), serve the guard
+    // interstitial instead of the offer page. The interstitial runs
+    // client-side checks and POSTs to /go/guard-verify.
+    if (guardConfig) {
       const { verifyPassCookie, readPassCookie } = require('../lib/guardToken');
       const passCookie = req.cookies?.[`bg_guard_${targetPage._id}`];
       const failCookie = req.cookies?.[`bg_guardfail_${targetPage._id}`];
@@ -311,13 +319,14 @@ async function handleClick(req, res, opts) {
           offer_page_id: String(targetPage._id),
           ip: doc.ip,
           return_url: req.originalUrl,   // where to send them back on pass
+          guard_config: guardConfig,     // resolved config (campaign or page) — verify reuses it
         });
 
         const guardHtml = buildGuardPage({
           token,
           verifyUrl: '/go/guard-verify',
-          config: targetPage.bot_guard,
-          minDwellMs: targetPage.bot_guard.min_dwell_ms || 2000,
+          config: guardConfig,
+          minDwellMs: guardConfig.min_dwell_ms || 2000,
         });
 
         setGoCookies(req, res, doc);
@@ -485,11 +494,13 @@ async function handleGuardVerify(req, res) {
       return res.status(404).json({ redirect: null, error: 'page_not_found' });
     }
 
-    // Run verification
+    // Run verification. Prefer the config carried in the signed token (this is
+    // the campaign-or-page config that was resolved when the interstitial was
+    // served); fall back to the page's own bot_guard for older tokens.
     const verdict = verifyGuard({
       signals,
       click: click.toObject ? click.toObject() : click,
-      config: offerPage.bot_guard || {},
+      config: payload.guard_config || offerPage.bot_guard || {},
     });
 
     // Record result on the click

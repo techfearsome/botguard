@@ -183,6 +183,7 @@ router.post('/campaigns', async (req, res) => {
         },
         country_gate: countryGate,
         proxy_gate: proxyGate,
+        bot_guard: parseCampaignBotGuard(body),
       },
       postback_url: body.postback_url || '',
       notes: body.notes || '',
@@ -305,6 +306,30 @@ function parseAutoConversion(body) {
   return { enabled, terms, event_name: eventName };
 }
 
+// Parse campaign-level Bot Guard (Level 2) settings, including per-device
+// targeting. `bot_guard_devices` arrives as an array (multiple checked), a
+// string (one checked), or undefined (none checked) from the form parser.
+const GUARD_DEVICE_CLASSES = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
+function parseCampaignBotGuard(body) {
+  let devices = body.bot_guard_devices;
+  if (devices === undefined || devices === null) devices = [];
+  else if (!Array.isArray(devices)) devices = [devices];
+  devices = devices.filter((d) => GUARD_DEVICE_CLASSES.includes(d));
+  // Enabled but nothing ticked would silently guard nobody — default to all.
+  const enabled = body.bot_guard_enabled === 'on' || body.bot_guard_enabled === 'true';
+  if (enabled && devices.length === 0) devices = [...GUARD_DEVICE_CLASSES];
+
+  return {
+    enabled,
+    devices,
+    check_timezone:    body.bot_guard_timezone === 'on' || body.bot_guard_timezone === 'true',
+    check_interaction: body.bot_guard_interaction === 'on' || body.bot_guard_interaction === 'true',
+    check_dwell:       body.bot_guard_dwell === 'on' || body.bot_guard_dwell === 'true',
+    min_dwell_ms:      Math.max(1000, Math.min(10000, parseInt(body.bot_guard_min_dwell, 10) || 2000)),
+    check_webgl:       body.bot_guard_webgl === 'on' || body.bot_guard_webgl === 'true',
+  };
+}
+
 // Parse Bot Guard (Level 2) settings from the page form.
 function parseBotGuard(body) {
   return {
@@ -391,6 +416,7 @@ router.post('/campaigns/:id', async (req, res) => {
           },
           'filter_config.country_gate': countryGate,
           'filter_config.proxy_gate': proxyGate,
+          'filter_config.bot_guard': parseCampaignBotGuard(body),
           postback_url: body.postback_url || '',
           notes: body.notes || '',
         },

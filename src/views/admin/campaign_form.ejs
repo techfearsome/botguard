@@ -408,6 +408,79 @@
     </div>
   </fieldset>
 
+  <fieldset>
+    <legend style="font-weight:600; padding:0 6px;">Bot Guard (Level 2)</legend>
+    <p class="muted" style="margin-top:0;">
+      Serves a client-side interstitial that checks browser timezone vs the IP's
+      timezone, dwell time, interaction, and (optionally) WebGL before the offer
+      is shown. Choose which device classes are challenged — the rest skip
+      Level 2 and go straight through.
+    </p>
+
+    <%
+      const bg = campaign?.filter_config?.bot_guard || {};
+      const bgBool = (v, def) => v === undefined ? def : !!v;
+      const bgDevices = Array.isArray(bg.devices) ? bg.devices : ['iphone','android','windows','mac','linux','other'];
+      const deviceList = [
+        { key: 'iphone',  label: 'iPhone' },
+        { key: 'android', label: 'Android' },
+        { key: 'windows', label: 'Windows' },
+        { key: 'mac',     label: 'Mac' },
+        { key: 'linux',   label: 'Linux' },
+        { key: 'other',   label: 'Other' },
+      ];
+    %>
+
+    <div class="form-row">
+      <label style="font-weight:normal;">
+        <input type="checkbox" name="bot_guard_enabled" <%= bg.enabled ? 'checked' : '' %>>
+        Enable Bot Guard for this campaign
+      </label>
+    </div>
+
+    <div class="form-row">
+      <label>Challenge these devices:</label>
+      <div style="display:flex; gap:14px; flex-wrap:wrap;">
+        <% deviceList.forEach(function(d) { %>
+          <label style="font-weight:normal;">
+            <input type="checkbox" name="bot_guard_devices" value="<%= d.key %>"
+              <%= bgDevices.includes(d.key) ? 'checked' : '' %>>
+            <%= d.label %>
+          </label>
+        <% }); %>
+      </div>
+      <small class="muted">Device classes not ticked here bypass Level 2 entirely. If none are ticked while the guard is enabled, all devices are challenged.</small>
+    </div>
+
+    <div class="form-row">
+      <label>Checks to run:</label>
+      <div style="display:flex; gap:14px; flex-wrap:wrap;">
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="bot_guard_timezone" <%= bgBool(bg.check_timezone, true) ? 'checked' : '' %>>
+          Timezone (IP vs browser)
+        </label>
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="bot_guard_interaction" <%= bgBool(bg.check_interaction, true) ? 'checked' : '' %>>
+          Interaction
+        </label>
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="bot_guard_dwell" <%= bgBool(bg.check_dwell, true) ? 'checked' : '' %>>
+          Dwell time
+        </label>
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="bot_guard_webgl" <%= bgBool(bg.check_webgl, false) ? 'checked' : '' %>>
+          WebGL / canvas
+        </label>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Minimum dwell (ms)</label>
+      <input type="number" name="bot_guard_min_dwell" min="1000" max="10000" value="<%= bg.min_dwell_ms ?? 2000 %>">
+      <small class="muted">Time the visitor must stay on the interstitial. Clamped 1000–10000 ms.</small>
+    </div>
+  </fieldset>
+
   <div class="form-row">
     <label>S2S Postback URL <span class="muted">(optional)</span></label>
     <input type="text" name="postback_url" value="<%= campaign?.postback_url || '' %>" placeholder="https://your-tracker.example.com/postback?clickid={click_id}">

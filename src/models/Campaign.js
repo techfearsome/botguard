@@ -109,6 +109,29 @@ const CampaignSchema = new mongoose.Schema({
       // Use ProxyCheck's own risk score (0-100) as a separate threshold
       max_risk_score: { type: Number, default: 100, min: 0, max: 100 },
     },
+
+    // Bot Guard (Level 2): client-side interstitial that runs timezone/dwell/
+    // interaction/WebGL checks before serving the offer. Configured at the
+    // CAMPAIGN level with per-device targeting so only chosen device classes
+    // are challenged (e.g. run the guard on desktop but skip iPhone traffic).
+    //
+    // When enabled here, this takes precedence over any legacy page-level
+    // bot_guard. `devices` is an allowlist of device classes that MUST pass
+    // the guard; classes not listed skip Level 2 entirely. An empty list with
+    // enabled=true is treated as "all devices".
+    bot_guard: {
+      enabled:           { type: Boolean, default: false },
+      devices: {
+        type: [String],
+        enum: ['iphone', 'android', 'windows', 'mac', 'linux', 'other'],
+        default: ['iphone', 'android', 'windows', 'mac', 'linux', 'other'],
+      },
+      check_timezone:    { type: Boolean, default: true },  // ProxyCheck tz vs browser tz
+      check_interaction: { type: Boolean, default: true },  // mouse/touch/scroll required
+      check_dwell:       { type: Boolean, default: true },  // minimum time on page
+      min_dwell_ms:      { type: Number,  default: 2000 },
+      check_webgl:       { type: Boolean, default: false }, // canvas/WebGL fingerprint
+    },
   },
 
   // Conversion tracking
