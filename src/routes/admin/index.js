@@ -2732,6 +2732,107 @@ async function handleExportTxt(req, res) {
   res.send(lines.join('\n'));
 }
 
+// ── Custom Export ────────────────────────────────────────────────────────
+// A focused, Google-Ads-oriented export: pick a score threshold + frequency,
+// rank by score (worst-offenders-first) or by frequency/hit-count (most-active
+// -first), take the top N (100/200/300/400 or a manual number), preview the
+// eligible ranges, then download a plain .txt (one range per line) that pastes
+// straight into a Google Ads campaign's IP-exclusion box.
+//
+// Ranges are emitted in Google-Ads-safe form: IPv4 as CIDR (/24 or /32 only —
+// other masks are dropped), IPv6 fully expanded (no `::`, which Google rejects).
+// Shares buildExportFilter with the other exports so the score/frequency/
+// version semantics stay identical to the main list.
+
+const {
+  CUSTOM_EXPORT_PRESETS,
+  CUSTOM_EXPORT_MAX,
+  parseCustomExportParams,
+  shapeCustomExportRows,
+  rankSort,
+} = require('../../lib/customExport');
+
+// Resolve the ranked, limited, Google-Ads-safe set of ranges for the given
+// params. Returns { rows, totalEligible }.
+async function resolveCustomExport(ws, params) {
+  // Reuse buildExportFilter for score/frequency/version/status semantics, but
+  // force a sensible status set (actionable + already-blocked + watchlist) and
+  // always live-state (current CidrIntelligence) — this is what you push to
+  // Google Ads right now, not a historical snapshot.
+  const filter = buildExportFilter(ws, {
+    min_score: String(params.minScore),
+    frequency: params.frequency,
+    version: params.version,
+    status: 'all_flagged', // new/reviewing/watchlist/blocked/exported
+    include_exported: '1',
+  });
+
+  // Pull a bit more than the limit so we can drop Google-Ads-incompatible
+  // ranges (unsupported v4 masks) and still fill the requested count.
+  const fetchN = Math.min(params.limit * 2 + 50, CUSTOM_EXPORT_MAX * 2);
+  const docs = await CidrIntelligence.find(filter)
+    .sort(rankSort(params.rank))
+    .limit(fetchN)
+    .select('cidr score hit_count frequency_label ip_version asn_org country conversion_count')
+    .lean();
+
+  const rows = shapeCustomExportRows(docs, params.limit);
+
+  // totalEligible = how many pass the filter regardless of the N cap, so the UI
+  // can say "showing top 200 of 1,340 eligible".
+  const totalEligible = await CidrIntelligence.countDocuments(filter);
+
+  return { rows, totalEligible };
+}
+
+// Preview page
+router.get('/intelligence/custom-export', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const params = parseCustomExportParams(req.query);
+  // Only run the query once the user has actually submitted (any param present).
+  const submitted = ['min_score', 'frequency', 'version', 'rank', 'limit']
+    .some((k) => req.query[k] !== undefined);
+
+  let rows = [], totalEligible = 0;
+  if (submitted) {
+    ({ rows, totalEligible } = await resolveCustomExport(ws, params));
+  }
+
+  // Build the download querystring so the button downloads exactly the preview.
+  const dlQs = new URLSearchParams({
+    min_score: String(params.minScore),
+    frequency: params.frequency,
+    version: params.version,
+    rank: params.rank,
+    limit: String(params.limit),
+  }).toString();
+
+  res.render('admin/intelligence_custom_export', {
+    ws,
+    page: 'intelligence',
+    params,
+    presets: CUSTOM_EXPORT_PRESETS,
+    submitted,
+    rows,
+    totalEligible,
+    dlQs,
+  });
+});
+
+// Plain .txt download — one Google-Ads-safe range per line, no header.
+router.get('/intelligence/custom-export.txt', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const params = parseCustomExportParams(req.query);
+  const { rows } = await resolveCustomExport(ws, params);
+
+  const body = rows.map((r) => r.out).join('\r\n');
+  const today = new Date().toISOString().slice(0, 10);
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.set('Content-Disposition',
+    `attachment; filename="botguard-custom-${params.rank}-top${params.limit}-${today}.txt"`);
+  res.send(body + (body ? '\r\n' : ''));
+});
+
 router.get('/intelligence/export.txt', handleExportTxt);
 // Backwards-compat: the old route was `export.csv` but returned plain text.
 // Keep that path serving the same plain-text content so existing bookmarks/

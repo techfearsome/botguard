@@ -1,0 +1,133 @@
+<%- include('../partials/header', { ws, page, title: 'Custom Export - BotGuard' }) %>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px;">Custom Export</h1>
+    <p class="muted">Build a ranked list of CIDR ranges to paste into a Google Ads campaign's IP exclusions.</p>
+  </div>
+  <a href="/admin/intelligence" class="btn">← Back to Intelligence</a>
+</div>
+
+<section class="panel" style="margin-bottom:20px;">
+  <form method="GET" action="/admin/intelligence/custom-export"
+        style="display:flex; flex-wrap:wrap; gap:18px; align-items:flex-end;">
+
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Minimum score</label>
+      <input type="number" name="min_score" min="0" max="100" value="<%= params.minScore %>"
+             style="width:90px;">
+    </div>
+
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Frequency</label>
+      <select name="frequency">
+        <% ['all','high','medium','low','labelled','unlabelled'].forEach(function(f){ %>
+          <option value="<%= f %>" <%= params.frequency === f ? 'selected' : '' %>><%= f.charAt(0).toUpperCase()+f.slice(1) %></option>
+        <% }); %>
+      </select>
+    </div>
+
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">IP version</label>
+      <select name="version">
+        <% [['all','All'],['v4','IPv4'],['v6','IPv6']].forEach(function(v){ %>
+          <option value="<%= v[0] %>" <%= params.version === v[0] ? 'selected' : '' %>><%= v[1] %></option>
+        <% }); %>
+      </select>
+    </div>
+
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Rank by</label>
+      <select name="rank">
+        <option value="score"     <%= params.rank === 'score' ? 'selected' : '' %>>Score (worst offenders)</option>
+        <option value="frequency" <%= params.rank === 'frequency' ? 'selected' : '' %>>Frequency (most active)</option>
+      </select>
+    </div>
+
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">How many (top N)</label>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <select name="limit" id="limitPreset" onchange="document.getElementById('limitManual').value = (this.value==='manual' ? '' : this.value);">
+          <% presets.forEach(function(n){ %>
+            <option value="<%= n %>" <%= String(params.limit) === String(n) ? 'selected' : '' %>>Top <%= n %></option>
+          <% }); %>
+          <option value="manual" <%= presets.map(String).indexOf(String(params.limit)) === -1 ? 'selected' : '' %>>Manual…</option>
+        </select>
+        <input type="number" name="limit" id="limitManual" min="1" max="5000"
+               placeholder="e.g. 750"
+               value="<%= presets.map(String).indexOf(String(params.limit)) === -1 ? params.limit : '' %>"
+               oninput="if(this.value){document.getElementById('limitPreset').name='';this.name='limit';}"
+               style="width:100px;">
+      </div>
+      <small class="muted">Google Ads caps exclusions at 500 per campaign.</small>
+    </div>
+
+    <div>
+      <button type="submit" class="btn btn-primary">Preview</button>
+    </div>
+  </form>
+</section>
+
+<% if (submitted) { %>
+  <section class="panel">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+      <div>
+        <strong style="font-size:15px;">
+          <%= rows.length.toLocaleString() %> range<%= rows.length === 1 ? '' : 's' %>
+        </strong>
+        <span class="muted">
+          &nbsp;ready to export
+          <% if (totalEligible > rows.length) { %>
+            — top <%= rows.length %> of <%= totalEligible.toLocaleString() %> eligible (score ≥ <%= params.minScore %>)
+          <% } %>
+          , ranked by <%= params.rank === 'frequency' ? 'frequency' : 'score' %>.
+        </span>
+      </div>
+      <% if (rows.length > 0) { %>
+        <a href="/admin/intelligence/custom-export.txt?<%= dlQs %>" class="btn btn-primary">⬇ Download .txt</a>
+      <% } %>
+    </div>
+
+    <% if (rows.length === 0) { %>
+      <p class="muted">No ranges match these filters. Try lowering the minimum score or widening the frequency filter.</p>
+    <% } else { %>
+      <div style="overflow:auto; max-height:560px; border:1px solid var(--border-subtle,#22303f); border-radius:var(--radius-md);">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead style="position:sticky; top:0; background:var(--color-background-secondary,#0f1720);">
+            <tr style="text-align:left;">
+              <th style="padding:8px 12px;">#</th>
+              <th style="padding:8px 12px;">Range (Google-Ads form)</th>
+              <th style="padding:8px 12px;">Ver</th>
+              <th style="padding:8px 12px;">Score</th>
+              <th style="padding:8px 12px;">Hits</th>
+              <th style="padding:8px 12px;">Freq</th>
+              <th style="padding:8px 12px;">ASN / Org</th>
+              <th style="padding:8px 12px;">Country</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% rows.forEach(function(r, i){ %>
+              <tr style="border-top:1px solid var(--border-subtle,#1c2733);">
+                <td style="padding:6px 12px; color:var(--text-secondary);"><%= i+1 %></td>
+                <td style="padding:6px 12px; font-family:monospace;"><%= r.out %></td>
+                <td style="padding:6px 12px;"><%= r.ip_version %></td>
+                <td style="padding:6px 12px;"><strong><%= r.score %></strong></td>
+                <td style="padding:6px 12px;"><%= (r.hit_count || 0).toLocaleString() %></td>
+                <td style="padding:6px 12px;"><%= r.frequency_label || '—' %></td>
+                <td style="padding:6px 12px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><%= r.asn_org || '—' %></td>
+                <td style="padding:6px 12px;"><%= r.country || '—' %></td>
+              </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin-top:10px;">
+        IPv4 emitted as CIDR (/24 or /32); IPv6 fully expanded so Google Ads accepts it. Ranges with masks Google Ads can't accept are dropped automatically.
+      </p>
+    <% } %>
+  </section>
+<% } else { %>
+  <p class="muted">Set your filters above and hit <strong>Preview</strong> to see the eligible ranges.</p>
+<% } %>
+
+<%- include('../partials/footer') %>

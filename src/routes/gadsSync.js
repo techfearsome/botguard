@@ -112,46 +112,9 @@ function aggregateCidrs(cidrs) {
  * IPv4 addresses pass through unchanged.
  * Returns null for formats Google Ads won't accept (IPv4 masks other than /24 and /32).
  */
-function expandForGoogleAds(cidr) {
-  if (!cidr) return null;
-
-  // IPv4 — pass through, but filter unsupported masks
-  if (!cidr.includes(':')) {
-    if (cidr.includes('/')) {
-      const bits = parseInt(cidr.split('/')[1], 10);
-      if (bits !== 24 && bits !== 32) return null;
-    }
-    return cidr;
-  }
-
-  // IPv6 — expand :: compression
-  let addr = cidr;
-  let mask = '';
-
-  // Separate mask if present
-  if (addr.includes('/')) {
-    const parts = addr.split('/');
-    addr = parts[0];
-    mask = '/' + parts[1];
-  }
-
-  // Expand :: into explicit :0 segments
-  if (addr.includes('::')) {
-    const sides = addr.split('::');
-    const left = sides[0] ? sides[0].split(':') : [];
-    const right = sides[1] ? sides[1].split(':').filter(s => s !== '') : [];
-    const missing = 8 - left.length - right.length;
-    const middle = [];
-    for (let i = 0; i < missing; i++) middle.push('0');
-    addr = [...left, ...middle, ...right].join(':');
-  }
-
-  // Ensure exactly 8 segments
-  const segments = addr.split(':');
-  while (segments.length < 8) segments.push('0');
-
-  return segments.slice(0, 8).join(':') + mask;
-}
+// Google-Ads-safe CIDR formatting now lives in a shared lib so the Custom
+// Export and this sync path can't diverge. See src/lib/gadsFormat.js.
+const { expandForGoogleAds } = require('../lib/gadsFormat');
 
 // ── Main optimization logic ──────────────────────────────────────────
 
