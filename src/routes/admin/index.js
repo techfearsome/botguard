@@ -2973,6 +2973,191 @@ router.get('/settings', async (req, res) => {
   res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });
 });
 
+// ── Federated Sync (threat-intel sharing between installs) ───────────────
+const { pullPartner } = require('../../lib/syncImport');
+
+function genPasscode() {
+  return 'bgs_' + require('crypto').randomBytes(24).toString('base64url');
+}
+
+// Dashboard: export credentials, import sources, and staged review.
+router.get('/sync', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner, SyncStagedEntry } = require('../../models');
+
+  const [exporters, importers] = await Promise.all([
+    SyncPartner.find({ workspace_id: ws._id, direction: 'export' }).sort({ created_at: -1 }).lean(),
+    SyncPartner.find({ workspace_id: ws._id, direction: 'import' }).sort({ created_at: -1 }).lean(),
+  ]);
+
+  // Staged entries needing attention (not yet implemented/ignored), newest first.
+  const staged = await SyncStagedEntry.find({ workspace_id: ws._id, state: 'staged' })
+    .sort({ match_status: 1, remote_score: -1 }).limit(500).lean();
+
+  // Per-importer staged/implemented tallies for the dashboard.
+  const tallies = await SyncStagedEntry.aggregate([
+    { $match: { workspace_id: ws._id } },
+    { $group: { _id: { p: '$source_partner_id', s: '$state' }, n: { $sum: 1 } } },
+  ]);
+  const tallyMap = {};
+  for (const t of tallies) {
+    const pid = String(t._id.p);
+    tallyMap[pid] = tallyMap[pid] || { staged: 0, implemented: 0, ignored: 0 };
+    tallyMap[pid][t._id.s] = t.n;
+  }
+
+  // Build the absolute feed base for display (host from request).
+  const feedBase = `${req.protocol}://${req.get('host')}/sync/feed`;
+
+  res.render('admin/sync', {
+    ws, page: 'sync', exporters, importers, staged, tallyMap, feedBase,
+    flash: req.query.flash || '', generated: req.query.generated || '',
+  });
+});
+
+// Create an export credential.
+router.post('/sync/export/create', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const b = req.body || {};
+  const passcode = genPasscode();
+  await SyncPartner.create({
+    workspace_id: ws._id, direction: 'export',
+    name: String(b.name || 'Unnamed partner').slice(0, 100),
+    passcode,
+    share: {
+      cidr: b.share_cidr === 'on',
+      asn: b.share_asn === 'on',
+      sample_ips: b.share_sample_ips === 'on',
+      min_score: Math.min(Math.max(parseInt(b.share_min_score, 10) || 60, 0), 100),
+    },
+  });
+  res.redirect('/admin/sync?flash=Export+credential+created&generated=' + encodeURIComponent(passcode));
+});
+
+router.post('/sync/export/:id/toggle', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const p = await SyncPartner.findOne({ _id: req.params.id, workspace_id: ws._id, direction: 'export' });
+  if (p) { p.enabled = !p.enabled; await p.save(); }
+  res.redirect('/admin/sync?flash=Updated');
+});
+
+router.post('/sync/export/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  await SyncPartner.deleteOne({ _id: req.params.id, workspace_id: ws._id, direction: 'export' });
+  res.redirect('/admin/sync?flash=Export+credential+revoked');
+});
+
+// Add an import source.
+function parseImportBody(b) {
+  return {
+    name: String(b.name || 'Unnamed source').slice(0, 100),
+    feed_url: String(b.feed_url || '').trim().slice(0, 500),
+    passcode: String(b.passcode || '').trim(),
+    pull: { cidr: b.pull_cidr === 'on', asn: b.pull_asn === 'on' },
+    disposition: ['monitor', 'quarantine', 'implement'].includes(b.disposition) ? b.disposition : 'monitor',
+    promotion_mode: ['corroboration', 'percentage', 'full'].includes(b.promotion_mode) ? b.promotion_mode : 'corroboration',
+    thresholds: {
+      min_local_score: Math.min(Math.max(parseInt(b.min_local_score, 10) || 60, 0), 100),
+      min_local_hits: Math.max(parseInt(b.min_local_hits, 10) || 0, 0),
+      match_percentage: Math.min(Math.max(parseInt(b.match_percentage, 10) || 50, 0), 100),
+    },
+    implement_target: b.implement_target === 'direct' ? 'direct' : 'seed',
+    schedule: {
+      mode: b.schedule_mode === 'interval' ? 'interval' : 'manual',
+      interval_minutes: Math.max(parseInt(b.interval_minutes, 10) || 1440, 5),
+    },
+  };
+}
+
+router.post('/sync/import/create', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const cfg = parseImportBody(req.body || {});
+  if (!cfg.feed_url || !cfg.passcode) {
+    return res.redirect('/admin/sync?flash=Feed+URL+and+passcode+are+required');
+  }
+  await SyncPartner.create({ workspace_id: ws._id, direction: 'import', ...cfg });
+  res.redirect('/admin/sync?flash=Import+source+added');
+});
+
+router.post('/sync/import/:id/update', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const cfg = parseImportBody(req.body || {});
+  await SyncPartner.updateOne(
+    { _id: req.params.id, workspace_id: ws._id, direction: 'import' },
+    { $set: cfg }
+  );
+  res.redirect('/admin/sync?flash=Import+source+updated');
+});
+
+router.post('/sync/import/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner, SyncStagedEntry } = require('../../models');
+  await SyncPartner.deleteOne({ _id: req.params.id, workspace_id: ws._id, direction: 'import' });
+  await SyncStagedEntry.deleteMany({ workspace_id: ws._id, source_partner_id: req.params.id });
+  res.redirect('/admin/sync?flash=Import+source+removed');
+});
+
+// Pull now (manual trigger).
+router.post('/sync/import/:id/pull', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const models = require('../../models');
+  const partner = await SyncPartner.findOne({ _id: req.params.id, workspace_id: ws._id, direction: 'import' });
+  if (!partner) return res.redirect('/admin/sync?flash=Source+not+found');
+  const stats = await pullPartner({ models }, ws, partner);
+  const msg = stats.error
+    ? 'Pull failed: ' + stats.error
+    : `Pulled ${stats.pulled} (matched ${stats.matched}, implemented ${stats.implemented}, staged ${stats.staged}, skipped ${stats.skipped})`;
+  res.redirect('/admin/sync?flash=' + encodeURIComponent(msg));
+});
+
+// Manually promote a staged entry into live data.
+router.post('/sync/staged/:id/implement', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner, SyncStagedEntry } = require('../../models');
+  const models = require('../../models');
+  const entry = await SyncStagedEntry.findOne({ _id: req.params.id, workspace_id: ws._id });
+  if (entry && entry.state === 'staged') {
+    const partner = await SyncPartner.findById(entry.source_partner_id);
+    if (partner) {
+      const item = {
+        kind: entry.kind, value: entry.value,
+        raw: { asn_org: entry.asn_org, country: entry.country, category: 'other', severity: 'high' },
+      };
+      if (entry.kind === 'cidr') {
+        const cidrSeed = require('../../lib/cidrSeed');
+        await cidrSeed.importSeeds(ws._id, [entry.value], { seedSource: `sync:${partner.name}`.slice(0, 100) });
+      } else {
+        const { AsnBlacklist } = models;
+        const asn = Number(entry.value);
+        if (Number.isFinite(asn)) {
+          await AsnBlacklist.updateOne(
+            { workspace_id: ws._id, asn },
+            { $setOnInsert: { workspace_id: ws._id, asn, asn_org: entry.asn_org || '', category: 'other', severity: 'high', override: 'mark_proxy', active: true, source: `sync:${partner.name}`.slice(0, 100) } },
+            { upsert: true }
+          );
+        }
+      }
+    }
+    entry.state = 'implemented';
+    entry.implemented_at = new Date();
+    await entry.save();
+  }
+  res.redirect('/admin/sync?flash=Entry+implemented');
+});
+
+router.post('/sync/staged/:id/ignore', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncStagedEntry } = require('../../models');
+  await SyncStagedEntry.updateOne({ _id: req.params.id, workspace_id: ws._id }, { $set: { state: 'ignored' } });
+  res.redirect('/admin/sync?flash=Entry+ignored');
+});
+
 router.post('/settings/tracking', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { isValidClarityId } = require('../../lib/tracking');

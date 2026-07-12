@@ -11,6 +11,8 @@ module.exports = {
   CidrIntelligence: require('./CidrIntelligence'),
   AsnReputation: require('./AsnReputation'),
   CidrDailySnapshot: require('./CidrDailySnapshot'),
+  SyncPartner: require('./SyncPartner'),
+  SyncStagedEntry: require('./SyncStagedEntry'),
   CloudflareRule: require('./CloudflareRule'),
   CloudflareLog: require('./CloudflareLog'),
 };

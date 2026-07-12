@@ -1112,6 +1112,21 @@ function startCidrAnalyser() {
   // Run once shortly after startup (not immediately — let the first analysis complete)
   setTimeout(runMaintenanceCycle, 5 * 60 * 1000);
 
+  // Federated sync: pull import partners whose interval schedule is due.
+  const syncIntervalMin = parseInt(process.env.SYNC_PULL_INTERVAL_MINUTES || '15', 10);
+  const runSyncCycle = async () => {
+    try {
+      const { runDuePulls } = require('./syncImport');
+      const models = require('../models');
+      await runDuePulls(models);
+    } catch (e) {
+      logger.warn('sync_pull_cycle_error', { err: e.message });
+    }
+  };
+  const syncTimer = setInterval(runSyncCycle, syncIntervalMin * 60 * 1000);
+  if (syncTimer.unref) syncTimer.unref();
+  setTimeout(runSyncCycle, 6 * 60 * 1000);
+
   return timer;
 }
 

@@ -129,6 +129,10 @@ app.use('/lv', liveRoutes);
 const gadsSyncRoutes = require('./routes/gadsSync');
 app.use('/api', gadsSyncRoutes);
 
+// Federated threat-intel export feed (partner-authenticated, read-only).
+const syncRoutes = require('./routes/sync');
+app.use('/sync', syncRoutes);
+
 // --- Admin panel (scoped per workspace, multi-tenant ready) ---
 app.use('/admin', adminRoutes);
 

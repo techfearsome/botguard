@@ -1,0 +1,177 @@
+<%- include('../partials/header', { ws, page, title: 'Federated Sync - BotGuard' }) %>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px;">Federated Sync</h1>
+    <p class="muted">Share threat intelligence (CIDR ranges + ASN rules) with other BotGuard installs, and import theirs under your own rules.</p>
+  </div>
+</div>
+
+<% if (flash) { %>
+<div style="background:var(--color-background-info,#1a2332); border:1px solid var(--color-border-info,#2a4a6b); border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:13px;"><%= flash %></div>
+<% } %>
+
+<% if (generated) { %>
+<div style="background:#12241a; border:1px solid #2f6b46; border-radius:8px; padding:12px 14px; margin-bottom:16px;">
+  <strong>New passcode — copy it now:</strong>
+  <code style="display:inline-block; margin-left:8px; padding:3px 8px; background:#0b1510; border-radius:4px; user-select:all;"><%= generated %></code>
+  <div class="muted" style="margin-top:6px; font-size:12px;">Hand this to your partner along with the feed URL below. You can view it again on the row, but treat it like a password.</div>
+</div>
+<% } %>
+
+<%# ── EXPORT: credentials we issue ─────────────────────────────────── %>
+<section class="panel" style="margin-bottom:24px;">
+  <h3 style="margin-top:0;">Exporting — data you share out</h3>
+  <p class="muted" style="margin-bottom:14px;">Each partner gets their own feed URL + passcode. Revoke one without affecting the others.</p>
+
+  <% if (exporters.length) { %>
+    <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
+      <thead><tr style="text-align:left; color:var(--text-secondary);">
+        <th style="padding:6px 8px;">Partner</th><th style="padding:6px 8px;">Shares</th>
+        <th style="padding:6px 8px;">Feed URL + passcode</th><th style="padding:6px 8px;">Exports</th>
+        <th style="padding:6px 8px;">Last</th><th style="padding:6px 8px;"></th>
+      </tr></thead>
+      <tbody>
+      <% exporters.forEach(function(p){ %>
+        <tr style="border-top:1px solid var(--border-subtle,#1c2733);">
+          <td style="padding:6px 8px;"><strong><%= p.name %></strong><%= p.enabled ? '' : ' (disabled)' %></td>
+          <td style="padding:6px 8px;">
+            <%= p.share.cidr ? 'CIDR ' : '' %><%= p.share.asn ? 'ASN ' : '' %>
+            <%= p.share.sample_ips ? '+IPs ' : '' %>(≥<%= p.share.min_score %>)
+          </td>
+          <td style="padding:6px 8px; font-family:monospace; font-size:11px; max-width:340px; word-break:break-all;">
+            <%= feedBase %>?key=<%= p.passcode %>
+          </td>
+          <td style="padding:6px 8px;"><%= p.export_count || 0 %></td>
+          <td style="padding:6px 8px;"><%= p.last_exported_at ? new Date(p.last_exported_at).toLocaleString() : '—' %></td>
+          <td style="padding:6px 8px; white-space:nowrap;">
+            <form method="POST" action="/admin/sync/export/<%= p._id %>/toggle" style="display:inline;"><button class="btn btn-small"><%= p.enabled ? 'Disable' : 'Enable' %></button></form>
+            <form method="POST" action="/admin/sync/export/<%= p._id %>/delete" style="display:inline;" onsubmit="return confirm('Revoke this credential? The partner will lose access.');"><button class="btn btn-small" style="color:#f87171;">Revoke</button></form>
+          </td>
+        </tr>
+      <% }); %>
+      </tbody>
+    </table>
+  <% } else { %>
+    <p class="muted" style="margin-bottom:14px;">No export credentials yet.</p>
+  <% } %>
+
+  <details>
+    <summary style="cursor:pointer; font-weight:600;">+ New export credential</summary>
+    <form method="POST" action="/admin/sync/export/create" style="margin-top:12px; display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end;">
+      <div><label style="display:block; font-size:12px; color:var(--text-secondary);">Partner name</label><input name="name" required placeholder="e.g. Partner Site A"></div>
+      <label style="font-weight:normal;"><input type="checkbox" name="share_cidr" checked> Share CIDR</label>
+      <label style="font-weight:normal;"><input type="checkbox" name="share_asn" checked> Share ASN</label>
+      <label style="font-weight:normal;" title="Your visitors' IP addresses. Off by default."><input type="checkbox" name="share_sample_ips"> Include sample IPs</label>
+      <div><label style="display:block; font-size:12px; color:var(--text-secondary);">Min score</label><input type="number" name="share_min_score" value="60" min="0" max="100" style="width:80px;"></div>
+      <button class="btn btn-primary" type="submit">Create</button>
+    </form>
+  </details>
+</section>
+
+<%# ── IMPORT: sources we pull ──────────────────────────────────────── %>
+<section class="panel" style="margin-bottom:24px;">
+  <h3 style="margin-top:0;">Importing — data you pull in</h3>
+  <p class="muted" style="margin-bottom:14px;">You decide what happens to imported data: monitor it, quarantine it, or implement it. Nothing touches your firewall unless you configure it to.</p>
+
+  <% if (importers.length) { %>
+    <% importers.forEach(function(p){ var t = tallyMap[String(p._id)] || {}; %>
+      <div style="border:1px solid var(--border-subtle,#22303f); border-radius:8px; padding:12px 14px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <div>
+            <strong><%= p.name %></strong>
+            <span class="muted" style="font-size:12px;">— <%= p.disposition %><% if (p.disposition==='implement'){ %> / <%= p.promotion_mode %><% } %> · <%= p.schedule.mode === 'interval' ? ('every ' + p.schedule.interval_minutes + ' min') : 'manual' %></span>
+          </div>
+          <div style="font-size:12px; color:var(--text-secondary);">
+            imports: <%= p.import_count || 0 %> · staged: <%= t.staged || 0 %> · implemented: <%= t.implemented || 0 %>
+            <% if (p.last_pull && p.last_pull.at) { %> · last: <%= new Date(p.last_pull.at).toLocaleString() %><% if (p.last_pull.error) { %> <span style="color:#f87171;">(<%= p.last_pull.error %>)</span><% } %><% } %>
+          </div>
+        </div>
+        <div style="margin-top:8px; display:flex; gap:8px;">
+          <form method="POST" action="/admin/sync/import/<%= p._id %>/pull" style="display:inline;"><button class="btn btn-small btn-primary">Pull now</button></form>
+          <form method="POST" action="/admin/sync/import/<%= p._id %>/delete" style="display:inline;" onsubmit="return confirm('Remove this source and its staged entries?');"><button class="btn btn-small" style="color:#f87171;">Remove</button></form>
+        </div>
+      </div>
+    <% }); %>
+  <% } else { %>
+    <p class="muted" style="margin-bottom:14px;">No import sources yet.</p>
+  <% } %>
+
+  <details>
+    <summary style="cursor:pointer; font-weight:600;">+ Add import source</summary>
+    <form method="POST" action="/admin/sync/import/create" style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:14px; max-width:760px;">
+      <div style="grid-column:1/3;"><label style="display:block; font-size:12px; color:var(--text-secondary);">Name</label><input name="name" required placeholder="e.g. Partner Site B" style="width:100%;"></div>
+      <div style="grid-column:1/3;"><label style="display:block; font-size:12px; color:var(--text-secondary);">Feed URL</label><input name="feed_url" required placeholder="https://theirsite.com/sync/feed" style="width:100%;"></div>
+      <div style="grid-column:1/3;"><label style="display:block; font-size:12px; color:var(--text-secondary);">Passcode (they gave you)</label><input name="passcode" required style="width:100%;"></div>
+
+      <div><label style="font-weight:normal;"><input type="checkbox" name="pull_cidr" checked> Pull CIDR</label> &nbsp; <label style="font-weight:normal;"><input type="checkbox" name="pull_asn" checked> Pull ASN</label></div>
+      <div>
+        <label style="display:block; font-size:12px; color:var(--text-secondary);">Disposition</label>
+        <select name="disposition"><option value="monitor">Monitor (observe only)</option><option value="quarantine">Quarantine (hold for review)</option><option value="implement">Implement (subject to rules)</option></select>
+      </div>
+
+      <div>
+        <label style="display:block; font-size:12px; color:var(--text-secondary);">Promotion mode (if implementing)</label>
+        <select name="promotion_mode"><option value="corroboration">Corroboration-gated (safest)</option><option value="percentage">Percentage-trust</option><option value="full">Full trust</option></select>
+      </div>
+      <div>
+        <label style="display:block; font-size:12px; color:var(--text-secondary);">Implement target</label>
+        <select name="implement_target"><option value="seed">Seed (into intelligence, inactive)</option><option value="direct">Direct (activate blocks)</option></select>
+      </div>
+
+      <div><label style="display:block; font-size:12px; color:var(--text-secondary);">Min local score (corroboration)</label><input type="number" name="min_local_score" value="60" min="0" max="100" style="width:90px;"></div>
+      <div><label style="display:block; font-size:12px; color:var(--text-secondary);">Min local hits</label><input type="number" name="min_local_hits" value="5" min="0" style="width:90px;"></div>
+      <div><label style="display:block; font-size:12px; color:var(--text-secondary);">Match % (percentage mode)</label><input type="number" name="match_percentage" value="50" min="0" max="100" style="width:90px;"></div>
+
+      <div>
+        <label style="display:block; font-size:12px; color:var(--text-secondary);">Schedule</label>
+        <select name="schedule_mode"><option value="manual">Manual only</option><option value="interval">Every N minutes</option></select>
+        <input type="number" name="interval_minutes" value="1440" min="5" style="width:90px;" title="Interval in minutes">
+      </div>
+      <div style="grid-column:1/3;"><button class="btn btn-primary" type="submit">Add source</button></div>
+    </form>
+  </details>
+</section>
+
+<%# ── STAGED review ────────────────────────────────────────────────── %>
+<section class="panel">
+  <h3 style="margin-top:0;">Staged for review <span class="muted" style="font-size:13px;">(<%= staged.length %>)</span></h3>
+  <p class="muted" style="margin-bottom:14px;">Imported entries not yet implemented. <strong>Match</strong> means you've independently seen it — that's your evidence for whether the source is worth trusting. Anything already in your active data is skipped automatically.</p>
+
+  <% if (staged.length) { %>
+    <div style="overflow:auto; max-height:500px; border:1px solid var(--border-subtle,#22303f); border-radius:8px;">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead style="position:sticky; top:0; background:var(--color-background-secondary,#0f1720);">
+          <tr style="text-align:left;">
+            <th style="padding:8px 10px;">Source</th><th style="padding:8px 10px;">Kind</th>
+            <th style="padding:8px 10px;">Value</th><th style="padding:8px 10px;">Their score</th>
+            <th style="padding:8px 10px;">Match?</th><th style="padding:8px 10px;">Your evidence</th>
+            <th style="padding:8px 10px;"></th>
+          </tr>
+        </thead>
+        <tbody>
+        <% staged.forEach(function(e){ %>
+          <tr style="border-top:1px solid var(--border-subtle,#1c2733);">
+            <td style="padding:6px 10px;"><%= e.source_name %></td>
+            <td style="padding:6px 10px;"><%= e.kind %></td>
+            <td style="padding:6px 10px; font-family:monospace;"><%= e.value %></td>
+            <td style="padding:6px 10px;"><%= e.remote_score %> <%= e.remote_label ? '('+e.remote_label+')' : '' %></td>
+            <td style="padding:6px 10px;">
+              <% if (e.match_status === 'match') { %><span style="color:#f59e0b; font-weight:600;">MATCH</span><% } else { %><span class="muted">new</span><% } %>
+            </td>
+            <td style="padding:6px 10px;"><%= e.match_status === 'match' ? ('score ' + e.local_score + ', ' + e.local_hits + ' hits') : '—' %></td>
+            <td style="padding:6px 10px; white-space:nowrap;">
+              <form method="POST" action="/admin/sync/staged/<%= e._id %>/implement" style="display:inline;"><button class="btn btn-small btn-primary">Implement</button></form>
+              <form method="POST" action="/admin/sync/staged/<%= e._id %>/ignore" style="display:inline;"><button class="btn btn-small">Ignore</button></form>
+            </td>
+          </tr>
+        <% }); %>
+        </tbody>
+      </table>
+    </div>
+  <% } else { %>
+    <p class="muted">Nothing staged. Pull a source or set one to monitor/quarantine.</p>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

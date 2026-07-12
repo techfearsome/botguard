@@ -33,6 +33,7 @@
       <a href="/admin/firewall" class="<%= page === 'firewall' ? 'active' : '' %>">Firewall</a>
       <a href="/admin/cloudflare" class="<%= page === 'cloudflare' ? 'active' : '' %>">Cloudflare</a>
       <a href="/admin/intelligence" class="<%= page === 'intelligence' ? 'active' : '' %>">Intelligence<% if (typeof intelNewCount !== 'undefined' && intelNewCount > 0) { %><span class="nav-badge"><%= intelNewCount %></span><% } %></a>
+      <a href="/admin/sync" class="<%= page === 'sync' ? 'active' : '' %>">Sync</a>
       <a href="/admin/site" class="<%= page === 'site' ? 'active' : '' %>">Site</a>
       <a href="/admin/settings" class="<%= page === 'settings' ? 'active' : '' %>">Settings</a>
       <a href="/admin/logout" style="margin-left:24px; opacity:0.7;">Logout</a>
