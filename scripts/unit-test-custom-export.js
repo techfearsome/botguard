@@ -10,6 +10,8 @@ const {
   parseCustomExportParams,
   shapeCustomExportRows,
   rankSort,
+  parseCountryCodes,
+  applyCountryFilter,
 } = require(path.resolve(__dirname, '../src/lib/customExport'));
 
 let pass = 0, fail = 0;
@@ -22,7 +24,7 @@ console.log('parseCustomExportParams:');
 
 test('defaults when nothing provided', () => {
   const p = parseCustomExportParams({});
-  assert.deepStrictEqual(p, { minScore: 60, frequency: 'all', version: 'all', rank: 'score', limit: 200 });
+  assert.deepStrictEqual(p, { minScore: 60, frequency: 'all', version: 'all', rank: 'score', limit: 200, countryMode: 'off', countries: [] });
 });
 
 test('score is clamped to 0..100', () => {
@@ -96,6 +98,38 @@ test('caps at the requested limit (after drops)', () => {
 test('empty / null input → empty array', () => {
   assert.deepStrictEqual(shapeCustomExportRows([], 100), []);
   assert.deepStrictEqual(shapeCustomExportRows(null, 100), []);
+});
+
+console.log('\ncountry (ISO include/exclude):');
+
+test('parseCountryCodes normalizes, dedupes, validates', () => {
+  assert.deepStrictEqual(parseCountryCodes('us, DE  fr\nGB, us, xxx, 1'), ['US', 'DE', 'FR', 'GB']);
+  assert.deepStrictEqual(parseCountryCodes(''), []);
+  assert.deepStrictEqual(parseCountryCodes(null), []);
+});
+test('params parse include mode + codes', () => {
+  const p = parseCustomExportParams({ country_mode: 'include', countries: 'us,de' });
+  assert.strictEqual(p.countryMode, 'include');
+  assert.deepStrictEqual(p.countries, ['US', 'DE']);
+});
+test('invalid country mode → off', () => {
+  assert.strictEqual(parseCustomExportParams({ country_mode: 'nope' }).countryMode, 'off');
+});
+test('include applies $in', () => {
+  const f = {};
+  applyCountryFilter(f, { countryMode: 'include', countries: ['US', 'DE'] });
+  assert.deepStrictEqual(f.country, { $in: ['US', 'DE'] });
+});
+test('exclude applies $nin', () => {
+  const f = {};
+  applyCountryFilter(f, { countryMode: 'exclude', countries: ['RU'] });
+  assert.deepStrictEqual(f.country, { $nin: ['RU'] });
+});
+test('off, or empty code list → no clause', () => {
+  const f1 = {}; applyCountryFilter(f1, { countryMode: 'off', countries: ['US'] });
+  assert.strictEqual(f1.country, undefined);
+  const f2 = {}; applyCountryFilter(f2, { countryMode: 'include', countries: [] });
+  assert.strictEqual(f2.country, undefined);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

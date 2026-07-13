@@ -2750,6 +2750,7 @@ const {
   parseCustomExportParams,
   shapeCustomExportRows,
   rankSort,
+  applyCountryFilter,
 } = require('../../lib/customExport');
 
 // Resolve the ranked, limited, Google-Ads-safe set of ranges for the given
@@ -2766,6 +2767,10 @@ async function resolveCustomExport(ws, params) {
     status: 'all_flagged', // new/reviewing/watchlist/blocked/exported
     include_exported: '1',
   });
+
+  // ISO country include/exclude. Applied to the same filter used for both the
+  // docs query and the totalEligible count so "top N of M" stays consistent.
+  applyCountryFilter(filter, params);
 
   // Pull a bit more than the limit so we can drop Google-Ads-incompatible
   // ranges (unsupported v4 masks) and still fill the requested count.

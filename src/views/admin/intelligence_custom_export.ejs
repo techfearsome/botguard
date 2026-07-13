@@ -1,5 +1,18 @@
 <%- include('../partials/header', { ws, page, title: 'Custom Export - BotGuard' }) %>
 
+<%
+  // Build the download querystring from params here in the view, so the route
+  // doesn't need to hand us a prebuilt one (keeps route changes minimal).
+  var dl = '/admin/intelligence/custom-export.txt'
+    + '?min_score=' + encodeURIComponent(params.minScore)
+    + '&frequency=' + encodeURIComponent(params.frequency)
+    + '&version='   + encodeURIComponent(params.version)
+    + '&rank='      + encodeURIComponent(params.rank)
+    + '&limit='     + encodeURIComponent(params.limit)
+    + '&country_mode=' + encodeURIComponent(params.countryMode)
+    + '&countries=' + encodeURIComponent((params.countries || []).join(','));
+%>
+
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
   <div>
     <h1 style="margin-bottom:4px;">Custom Export</h1>
@@ -14,8 +27,7 @@
 
     <div>
       <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Minimum score</label>
-      <input type="number" name="min_score" min="0" max="100" value="<%= params.minScore %>"
-             style="width:90px;">
+      <input type="number" name="min_score" min="0" max="100" value="<%= params.minScore %>" style="width:90px;">
     </div>
 
     <div>
@@ -65,6 +77,23 @@
     <div>
       <button type="submit" class="btn btn-primary">Preview</button>
     </div>
+
+    <%# ── Country include / exclude (ISO alpha-2) ───────────────────── %>
+    <div style="flex-basis:100%; height:0;"></div>
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Country filter</label>
+      <select name="country_mode">
+        <option value="off"     <%= params.countryMode === 'off'     ? 'selected' : '' %>>Off (all countries)</option>
+        <option value="include" <%= params.countryMode === 'include' ? 'selected' : '' %>>Include only these</option>
+        <option value="exclude" <%= params.countryMode === 'exclude' ? 'selected' : '' %>>Exclude these</option>
+      </select>
+    </div>
+    <div style="flex:1; min-width:260px;">
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Country codes (ISO alpha-2, comma-separated)</label>
+      <input type="text" name="countries" value="<%= (params.countries || []).join(', ') %>"
+             placeholder="e.g. US, DE, FR, GB" style="width:100%; text-transform:uppercase;">
+      <small class="muted">Include drops entries with no country; Exclude keeps them. Codes match ProxyCheck's country_code (e.g. US, IN, DE).</small>
+    </div>
   </form>
 </section>
 
@@ -80,16 +109,19 @@
           <% if (totalEligible > rows.length) { %>
             — top <%= rows.length %> of <%= totalEligible.toLocaleString() %> eligible (score ≥ <%= params.minScore %>)
           <% } %>
-          , ranked by <%= params.rank === 'frequency' ? 'frequency' : 'score' %>.
+          , ranked by <%= params.rank === 'frequency' ? 'frequency' : 'score' %>
+          <% if (params.countryMode !== 'off' && (params.countries || []).length) { %>
+            , <%= params.countryMode %> <%= params.countries.join('/') %>
+          <% } %>.
         </span>
       </div>
       <% if (rows.length > 0) { %>
-        <a href="/admin/intelligence/custom-export.txt?<%= dlQs %>" class="btn btn-primary">⬇ Download .txt</a>
+        <a href="<%= dl %>" class="btn btn-primary">⬇ Download .txt</a>
       <% } %>
     </div>
 
     <% if (rows.length === 0) { %>
-      <p class="muted">No ranges match these filters. Try lowering the minimum score or widening the frequency filter.</p>
+      <p class="muted">No ranges match these filters. Try lowering the minimum score, widening the frequency filter, or relaxing the country filter.</p>
     <% } else { %>
       <div style="overflow:auto; max-height:560px; border:1px solid var(--border-subtle,#22303f); border-radius:var(--radius-md);">
         <table style="width:100%; border-collapse:collapse; font-size:13px;">

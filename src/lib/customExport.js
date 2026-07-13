@@ -13,9 +13,20 @@ const { expandForGoogleAds } = require('./gadsFormat');
 const CUSTOM_EXPORT_PRESETS = [100, 200, 300, 400, 500];
 const CUSTOM_EXPORT_MAX = 5000;
 
+// Parse a free-form list of ISO alpha-2 country codes ("us, de  fr\nGB") into a
+// clean, upper-cased, de-duped array of valid 2-letter codes.
+function parseCountryCodes(raw) {
+  if (!raw) return [];
+  const seen = new Set();
+  return String(raw)
+    .split(/[\s,;]+/)
+    .map((s) => s.trim().toUpperCase())
+    .filter((s) => /^[A-Z]{2}$/.test(s) && !seen.has(s) && seen.add(s));
+}
+
 /**
  * Normalize/clamp query params from the Custom Export form.
- * @returns {{minScore:number, frequency:string, version:string, rank:string, limit:number}}
+ * @returns {{minScore, frequency, version, rank, limit, countryMode, countries}}
  */
 function parseCustomExportParams(query = {}) {
   const minScore = Math.min(Math.max(parseInt(query.min_score, 10) || 60, 0), 100);
@@ -26,7 +37,33 @@ function parseCustomExportParams(query = {}) {
   let limit = parseInt(query.limit, 10);
   if (!Number.isFinite(limit) || limit < 1) limit = 200;
   limit = Math.min(limit, CUSTOM_EXPORT_MAX);
-  return { minScore, frequency, version, rank, limit };
+
+  // Country include/exclude (ISO alpha-2, matches stored country_code).
+  const countryMode = ['include', 'exclude'].includes(query.country_mode) ? query.country_mode : 'off';
+  const countries = parseCountryCodes(query.countries);
+
+  return { minScore, frequency, version, rank, limit, countryMode, countries };
+}
+
+/**
+ * Mutate a Mongo filter object to apply the ISO country include/exclude.
+ * - include: keep only listed countries ($in) — entries with no country are dropped.
+ * - exclude: drop listed countries ($nin) — entries with no country are KEPT.
+ * A mode of 'off' or an empty code list is a no-op (no filtering).
+ *
+ * Applied to the same filter used for both the docs query and the
+ * totalEligible count, so the "top N of M" numbers stay consistent.
+ *
+ * @returns {object} the same filter (for chaining/clarity)
+ */
+function applyCountryFilter(filter, params) {
+  if (!filter || !params) return filter;
+  if (params.countryMode === 'include' && params.countries.length) {
+    filter.country = { $in: params.countries };
+  } else if (params.countryMode === 'exclude' && params.countries.length) {
+    filter.country = { $nin: params.countries };
+  }
+  return filter;
 }
 
 /**
@@ -69,7 +106,9 @@ function rankSort(rank) {
 module.exports = {
   CUSTOM_EXPORT_PRESETS,
   CUSTOM_EXPORT_MAX,
+  parseCountryCodes,
   parseCustomExportParams,
+  applyCountryFilter,
   shapeCustomExportRows,
   rankSort,
 };
