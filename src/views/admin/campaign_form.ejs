@@ -97,6 +97,36 @@
   </div>
 
   <fieldset>
+    <legend style="font-weight:600; padding:0 6px;">Campaign Type</legend>
+    <%
+      var campType = (campaign && campaign.campaign_type) ? campaign.campaign_type : 'offer';
+      var redirUrl = (campaign && campaign.redirect_url) ? campaign.redirect_url : '';
+      var redirDelay = (campaign && campaign.redirect_delay_ms != null) ? campaign.redirect_delay_ms : 1500;
+    %>
+    <div class="form-row">
+      <label>Type</label>
+      <select name="campaign_type" id="campaignType" onchange="document.getElementById('redirectFields').style.display = (this.value==='redirect'?'block':'none');">
+        <option value="offer"    <%= campType === 'offer'    ? 'selected' : '' %>>Offer (render landing page)</option>
+        <option value="redirect" <%= campType === 'redirect' ? 'selected' : '' %>>Redirect (send clean traffic to a URL)</option>
+      </select>
+      <small class="muted">Redirect campaigns run the exact same filtering. Filtered traffic still sees the Safe page; only clean traffic is redirected instead of shown an offer page.</small>
+    </div>
+
+    <div id="redirectFields" style="display:<%= campType === 'redirect' ? 'block' : 'none' %>;">
+      <div class="form-row">
+        <label>Redirect URL</label>
+        <input type="url" name="redirect_url" value="<%= redirUrl %>" placeholder="https://destination.example/landing">
+        <small class="muted">Where clean, passing traffic is sent. Must be http(s).</small>
+      </div>
+      <div class="form-row">
+        <label>Redirect delay (ms)</label>
+        <input type="number" name="redirect_delay_ms" value="<%= redirDelay %>" min="0" max="15000" step="100" style="width:120px;">
+        <small class="muted">Short "redirecting…" screen before the jump. 0 = instant 302 (no interstitial). Max 15000.</small>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
     <legend style="font-weight:600; padding:0 6px;">Default Pages</legend>
     <p class="muted" style="margin-top:0;">
       Used when no per-device override is set below. The Offer page is shown to allowed visitors;

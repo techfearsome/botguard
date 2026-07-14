@@ -13,6 +13,7 @@ module.exports = {
   CidrDailySnapshot: require('./CidrDailySnapshot'),
   SyncPartner: require('./SyncPartner'),
   SyncStagedEntry: require('./SyncStagedEntry'),
+  RedirectLog: require('./RedirectLog'),
   CloudflareRule: require('./CloudflareRule'),
   CloudflareLog: require('./CloudflareLog'),
 };

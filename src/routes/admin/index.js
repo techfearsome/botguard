@@ -187,6 +187,9 @@ router.post('/campaigns', async (req, res) => {
       },
       postback_url: body.postback_url || '',
       notes: body.notes || '',
+      campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
+      redirect_url: (body.redirect_url || '').trim(),
+      redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
     });
     // New campaigns may have added a custom root_path - the next /robots.txt
     // request must include the new Disallow rule. Invalidating the cache here
@@ -419,6 +422,9 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.bot_guard': parseCampaignBotGuard(body),
           postback_url: body.postback_url || '',
           notes: body.notes || '',
+          campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
+          redirect_url: (body.redirect_url || '').trim(),
+          redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
         },
       }
     );
@@ -2973,6 +2979,36 @@ router.post('/intelligence/mark-exported', async (req, res) => {
 });
 
 // ---------- Settings (API keys, password info) ----------
+// ── Redirect Logs (redirect campaigns) ───────────────────────────────────
+router.get('/redirect-logs', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { RedirectLog, Campaign } = require('../../models');
+
+  const page = Math.max(parseInt(req.query.p, 10) || 1, 1);
+  const perPage = 100;
+  const campaignId = req.query.campaign || '';
+
+  const filter = { workspace_id: ws._id };
+  if (campaignId) filter.campaign_id = campaignId;
+
+  const [logs, total, campaigns] = await Promise.all([
+    RedirectLog.find(filter).sort({ ts: -1 }).skip((page - 1) * perPage).limit(perPage).lean(),
+    RedirectLog.countDocuments(filter),
+    Campaign.find({ workspace_id: ws._id, campaign_type: 'redirect' }).select('name _id').sort({ name: 1 }).lean(),
+  ]);
+
+  // Map campaign ids → names for display.
+  const campMap = {};
+  for (const c of campaigns) campMap[String(c._id)] = c.name;
+  const allNamed = await Campaign.find({ workspace_id: ws._id }).select('name _id').lean();
+  for (const c of allNamed) campMap[String(c._id)] = c.name;
+
+  res.render('admin/redirect_logs', {
+    ws, page: 'redirect-logs', logs, total, campaigns, campMap,
+    currentPage: page, perPage, campaignId,
+  });
+});
+
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);
   res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });

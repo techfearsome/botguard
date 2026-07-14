@@ -1,0 +1,69 @@
+<%- include('../partials/header', { ws, page, title: 'Redirect Logs - BotGuard' }) %>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px;">Redirect Logs</h1>
+    <p class="muted">Clean traffic that passed all checks and was redirected out by a redirect campaign. <%= total.toLocaleString() %> total.</p>
+  </div>
+</div>
+
+<section class="panel" style="margin-bottom:16px;">
+  <form method="GET" action="/admin/redirect-logs" style="display:flex; gap:12px; align-items:flex-end;">
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Campaign</label>
+      <select name="campaign" onchange="this.form.submit()">
+        <option value="">All redirect campaigns</option>
+        <% campaigns.forEach(function(c){ %>
+          <option value="<%= c._id %>" <%= String(campaignId) === String(c._id) ? 'selected' : '' %>><%= c.name %></option>
+        <% }); %>
+      </select>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <% if (logs.length === 0) { %>
+    <p class="muted">No redirects logged yet. Once a redirect campaign sends clean traffic to its destination, entries appear here.</p>
+  <% } else { %>
+    <div style="overflow:auto; border:1px solid var(--border-subtle,#22303f); border-radius:8px;">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead style="position:sticky; top:0; background:var(--color-background-secondary,#0f1720);">
+          <tr style="text-align:left;">
+            <th style="padding:8px 10px;">Time</th>
+            <th style="padding:8px 10px;">Campaign</th>
+            <th style="padding:8px 10px;">Destination</th>
+            <th style="padding:8px 10px;">IP</th>
+            <th style="padding:8px 10px;">ASN / Org</th>
+            <th style="padding:8px 10px;">Country</th>
+            <th style="padding:8px 10px;">Device</th>
+            <th style="padding:8px 10px;">Click ID</th>
+          </tr>
+        </thead>
+        <tbody>
+        <% logs.forEach(function(l){ %>
+          <tr style="border-top:1px solid var(--border-subtle,#1c2733);">
+            <td style="padding:6px 10px; white-space:nowrap;"><%= new Date(l.ts).toLocaleString() %></td>
+            <td style="padding:6px 10px;"><%= campMap[String(l.campaign_id)] || '—' %></td>
+            <td style="padding:6px 10px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= l.destination_url %>"><%= l.destination_url %></td>
+            <td style="padding:6px 10px; font-family:monospace;"><%= l.ip || '—' %></td>
+            <td style="padding:6px 10px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><%= l.asn ? ('AS'+l.asn+' ') : '' %><%= l.asn_org || '' %></td>
+            <td style="padding:6px 10px;"><%= l.country || '—' %></td>
+            <td style="padding:6px 10px;"><%= l.device_class || '—' %></td>
+            <td style="padding:6px 10px; font-family:monospace; font-size:11px;"><%= l.click_id || '—' %></td>
+          </tr>
+        <% }); %>
+        </tbody>
+      </table>
+    </div>
+
+    <% var pages = Math.ceil(total / perPage); if (pages > 1) { %>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:14px;">
+        <% if (currentPage > 1) { %><a class="btn btn-small" href="/admin/redirect-logs?p=<%= currentPage-1 %><%= campaignId ? '&campaign='+campaignId : '' %>">‹ Prev</a><% } %>
+        <span class="muted" style="font-size:13px;">Page <%= currentPage %> of <%= pages %></span>
+        <% if (currentPage < pages) { %><a class="btn btn-small" href="/admin/redirect-logs?p=<%= currentPage+1 %><%= campaignId ? '&campaign='+campaignId : '' %>">Next ›</a><% } %>
+      </div>
+    <% } %>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

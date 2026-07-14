@@ -138,6 +138,18 @@ const CampaignSchema = new mongoose.Schema({
   postback_url: String,
   conversion_pixel: String,
 
+  // ── Campaign type ──────────────────────────────────────────────────
+  // 'offer'    — default. Clean traffic sees the offer page (existing behavior).
+  // 'redirect' — clean traffic that passes ALL configured checks (L1 gates +
+  //              L2 guard) is redirected to redirect_url instead of seeing an
+  //              offer page. Filtered traffic still gets the safe page, exactly
+  //              like a normal campaign. Redirect campaigns log to RedirectLog
+  //              and do not record conversions.
+  campaign_type: { type: String, enum: ['offer', 'redirect'], default: 'offer', index: true },
+  redirect_url: { type: String, default: '' },
+  // Delay before the client-side redirect fires. 0 = instant 302 (no interstitial).
+  redirect_delay_ms: { type: Number, default: 1500 },
+
   // Optional cost & metadata
   notes: String,
   tags: [String],

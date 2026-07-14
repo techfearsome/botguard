@@ -7,6 +7,7 @@ const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
 const { resolvePageForDevice } = require('../lib/pageResolver');
 const { resolveGuardConfig } = require('../lib/guardEligibility');
+const { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl } = require('../lib/redirect');
 const cache = require('../lib/cache');
 const { utmGateCheck } = require('../filters/utmGate');
 const { clickIdGateCheck } = require('../filters/clickIdGate');
@@ -335,6 +336,45 @@ async function handleClick(req, res, opts) {
         return res.status(200).send(guardHtml);
       }
       // else: passed guard already — fall through to serve offer normally
+    }
+
+    // ── Redirect campaign ────────────────────────────────────────────
+    // Reaching here with !showSafePage means the visitor passed every
+    // configured check (all L1 gates returned the safe page on failure above,
+    // and a failed L2 guard already returned the safe page too). For a redirect
+    // campaign, clean traffic is sent to the declared URL instead of an offer
+    // page. Filtered traffic is unaffected — it already got the safe page.
+    if (!showSafePage && campaign.campaign_type === 'redirect') {
+      const destUrl = campaign.redirect_url;
+      if (!isSafeRedirectUrl(destUrl)) {
+        // Misconfigured redirect campaign — fail safe rather than send nowhere.
+        logger.error('redirect_url_invalid', { campaign: String(campaign._id), url: destUrl });
+        doc.page_rendered = 'safe';
+        doc.decision_reason = 'redirect_url_invalid';
+        setGoCookies(req, res, doc);
+        setNoCacheHeaders(req, res, campaign);
+        writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+        return res.status(200).type('html').send(applyPageTracking(renderSafeFallback(), workspace));
+      }
+
+      doc.page_rendered = 'redirect';
+      if (targetPage) doc.landing_page_id = targetPage._id;
+      doc.variant_shown = 'redirect';
+
+      setGoCookies(req, res, doc);
+      setNoCacheHeaders(req, res, campaign);
+
+      // Click still recorded (keeps filtering/live/intelligence uniform); no
+      // conversion injection. Plus the dedicated RedirectLog entry.
+      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message, click_id: doc.click_id }));
+      writeRedirectLog(doc, campaign, workspace, destUrl).catch(() => { /* logged inside */ });
+      registerLiveVisitor(doc, campaign, workspace);
+
+      const delay = Number.isFinite(campaign.redirect_delay_ms) ? campaign.redirect_delay_ms : 1500;
+      if (delay <= 0) {
+        return res.redirect(302, destUrl);
+      }
+      return res.status(200).type('html').send(buildRedirectPage({ url: destUrl, delayMs: delay }));
     }
 
     let html, variantName;
