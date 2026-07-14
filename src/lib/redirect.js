@@ -96,4 +96,25 @@ async function writeRedirectLog(doc, campaign, workspace, destinationUrl) {
   }
 }
 
-module.exports = { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl };
+/**
+ * Resolve the redirect destination for a click, mirroring resolvePageForDevice.
+ * Resolution order:
+ *   1. campaign.redirect_urls[deviceClass] — per-device override
+ *   2. campaign.redirect_urls.default      — campaign default
+ *   3. campaign.redirect_url               — legacy single URL (back-compat)
+ * Returns '' if none configured.
+ *
+ * @param {object} campaign
+ * @param {string} deviceClass  'iphone'|'android'|'windows'|'mac'|'linux'|'other'
+ * @returns {string}
+ */
+function resolveRedirectUrl(campaign, deviceClass) {
+  if (!campaign) return '';
+  const map = campaign.redirect_urls || {};
+  const perDevice = deviceClass && map[deviceClass];
+  if (perDevice && String(perDevice).trim()) return String(perDevice).trim();
+  if (map.default && String(map.default).trim()) return String(map.default).trim();
+  return campaign.redirect_url ? String(campaign.redirect_url).trim() : '';
+}
+
+module.exports = { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl, resolveRedirectUrl };

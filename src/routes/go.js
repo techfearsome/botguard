@@ -7,7 +7,7 @@ const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
 const { resolvePageForDevice } = require('../lib/pageResolver');
 const { resolveGuardConfig } = require('../lib/guardEligibility');
-const { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl } = require('../lib/redirect');
+const { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl, resolveRedirectUrl } = require('../lib/redirect');
 const cache = require('../lib/cache');
 const { utmGateCheck } = require('../filters/utmGate');
 const { clickIdGateCheck } = require('../filters/clickIdGate');
@@ -345,7 +345,7 @@ async function handleClick(req, res, opts) {
     // campaign, clean traffic is sent to the declared URL instead of an offer
     // page. Filtered traffic is unaffected — it already got the safe page.
     if (!showSafePage && campaign.campaign_type === 'redirect') {
-      const destUrl = campaign.redirect_url;
+      const destUrl = resolveRedirectUrl(campaign, deviceClass);
       if (!isSafeRedirectUrl(destUrl)) {
         // Misconfigured redirect campaign — fail safe rather than send nowhere.
         logger.error('redirect_url_invalid', { campaign: String(campaign._id), url: destUrl });

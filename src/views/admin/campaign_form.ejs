@@ -99,9 +99,12 @@
   <fieldset>
     <legend style="font-weight:600; padding:0 6px;">Campaign Type</legend>
     <%
-      var campType = (campaign && campaign.campaign_type) ? campaign.campaign_type : 'offer';
-      var redirUrl = (campaign && campaign.redirect_url) ? campaign.redirect_url : '';
+      var campType = (campaign && campaign.campaign_type) ? campaign.campaign_type : (typeof presetType !== 'undefined' ? presetType : 'offer');
       var redirDelay = (campaign && campaign.redirect_delay_ms != null) ? campaign.redirect_delay_ms : 1500;
+      var ru = (campaign && campaign.redirect_urls) ? campaign.redirect_urls : {};
+      // Back-compat: if only the legacy single URL exists, show it as the default.
+      var ruDefault = ru.default || (campaign && campaign.redirect_url) || '';
+      var devClasses = [['iphone','iPhone'],['android','Android'],['windows','Windows'],['mac','Mac'],['linux','Linux'],['other','Other']];
     %>
     <div class="form-row">
       <label>Type</label>
@@ -114,10 +117,24 @@
 
     <div id="redirectFields" style="display:<%= campType === 'redirect' ? 'block' : 'none' %>;">
       <div class="form-row">
-        <label>Redirect URL</label>
-        <input type="url" name="redirect_url" value="<%= redirUrl %>" placeholder="https://destination.example/landing">
-        <small class="muted">Where clean, passing traffic is sent. Must be http(s).</small>
+        <label>Default redirect URL</label>
+        <input type="url" name="redirect_url_default" value="<%= ruDefault %>" placeholder="https://destination.example/landing" style="width:100%;">
+        <small class="muted">Where clean traffic goes when no device-specific URL is set. Must be http(s).</small>
       </div>
+
+      <div class="form-row">
+        <label>Device-specific redirect URLs (optional)</label>
+        <small class="muted" style="display:block; margin-bottom:8px;">Overrides the default for that device class, exactly like per-device offer/safe pages. Leave blank to use the default.</small>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <% devClasses.forEach(function(d){ %>
+            <div>
+              <label style="font-size:12px; color:var(--text-secondary);"><%= d[1] %></label>
+              <input type="url" name="redirect_url_<%= d[0] %>" value="<%= ru[d[0]] || '' %>" placeholder="(use default)" style="width:100%;">
+            </div>
+          <% }); %>
+        </div>
+      </div>
+
       <div class="form-row">
         <label>Redirect delay (ms)</label>
         <input type="number" name="redirect_delay_ms" value="<%= redirDelay %>" min="0" max="15000" step="100" style="width:120px;">
@@ -125,6 +142,7 @@
       </div>
     </div>
   </fieldset>
+
 
   <fieldset>
     <legend style="font-weight:600; padding:0 6px;">Default Pages</legend>

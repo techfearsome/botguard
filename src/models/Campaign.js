@@ -146,7 +146,19 @@ const CampaignSchema = new mongoose.Schema({
   //              like a normal campaign. Redirect campaigns log to RedirectLog
   //              and do not record conversions.
   campaign_type: { type: String, enum: ['offer', 'redirect'], default: 'offer', index: true },
-  redirect_url: { type: String, default: '' },
+  redirect_url: { type: String, default: '' },   // legacy single URL (fallback)
+  // Device-specific redirect destinations, mirroring device_pages. Resolution:
+  // per-device URL → default → legacy redirect_url. Device classes:
+  // iphone | android | windows | mac | linux | other.
+  redirect_urls: {
+    default: { type: String, default: '' },
+    iphone:  { type: String, default: '' },
+    android: { type: String, default: '' },
+    windows: { type: String, default: '' },
+    mac:     { type: String, default: '' },
+    linux:   { type: String, default: '' },
+    other:   { type: String, default: '' },
+  },
   // Delay before the client-side redirect fires. 0 = instant 302 (no interstitial).
   redirect_delay_ms: { type: Number, default: 1500 },
 

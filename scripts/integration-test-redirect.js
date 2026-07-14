@@ -65,10 +65,8 @@ function request(server, { urlPath, headers = {} }) {
   });
 }
 
-function baseState({ type = 'redirect', redirectUrl = 'https://dest.example/landing', delay = 1500, utmGate = false }) {
-  return {
-    workspace: { _id: 'ws1', slug: 'techfirio' },
-    campaign: {
+function baseState({ type = 'redirect', redirectUrl = 'https://dest.example/landing', delay = 1500, utmGate = false, redirectUrls = null }) {
+  const campaign = {
       _id: 'c1', workspace_id: 'ws1', slug: 'demo', root_path: '', name: 'Redir',
       status: 'active', source_profile: 'mixed',
       campaign_type: type, redirect_url: redirectUrl, redirect_delay_ms: delay,
@@ -77,7 +75,11 @@ function baseState({ type = 'redirect', redirectUrl = 'https://dest.example/land
         threshold: 70, mode: 'log_only',
         utm_gate: utmGate ? { enabled: true, required_keys: ['utm_source'], safe_page_id: 'page-safe' } : { enabled: false },
       },
-    },
+  };
+  if (redirectUrls) campaign.redirect_urls = redirectUrls;
+  return {
+    workspace: { _id: 'ws1', slug: 'techfirio' },
+    campaign,
     pages: {
       'page-offer': { _id: 'page-offer', kind: 'offer', html_template: '<html><body>OFFER_CONTENT</body></html>', variants: [] },
       'page-safe':  { _id: 'page-safe',  kind: 'safe',  html_template: '<html><body>SAFE_CONTENT</body></html>',  variants: [] },
@@ -139,6 +141,30 @@ async function test(name, fn) {
     assert.ok(!r.body.includes('Redirecting'), 'must not redirect on an invalid URL');
     assert.ok(r.body.includes('Page not available') || r.body.includes('SAFE_CONTENT'), 'should fail safe');
     assert.strictEqual(stubState.redirectLogs.length, 0, 'no RedirectLog on invalid URL');
+  });
+
+  console.log('\nDevice-specific redirect destinations:');
+
+  await test('Windows visitor → windows-specific URL (not default)', async () => {
+    cache.clearAll();
+    stubState = baseState({
+      delay: 0,
+      redirectUrls: { default: 'https://default.example/', windows: 'https://windows.example/win' },
+    });
+    const r = await request(server, { urlPath: '/go/demo' }); // WIN_UA
+    assert.strictEqual(r.status, 302);
+    assert.strictEqual(r.headers.location, 'https://windows.example/win', 'should use the windows override');
+    assert.strictEqual(stubState.redirectLogs[0].destination_url, 'https://windows.example/win');
+  });
+
+  await test('Device with no override → falls back to default', async () => {
+    cache.clearAll();
+    stubState = baseState({
+      delay: 0,
+      redirectUrls: { default: 'https://default.example/', iphone: 'https://iphone.example/' },
+    });
+    const r = await request(server, { urlPath: '/go/demo' }); // WIN_UA, no windows override
+    assert.strictEqual(r.headers.location, 'https://default.example/', 'windows falls back to default');
   });
 
   console.log('\nRegression — offer campaign unaffected:');

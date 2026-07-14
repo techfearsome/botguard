@@ -117,7 +117,7 @@ router.get('/campaigns', async (req, res) => {
 router.get('/campaigns/new', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign: null, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns' });
+  res.render('admin/campaign_form', { ws, campaign: null, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: req.query.type === 'redirect' ? 'redirect' : 'offer' });
 });
 
 router.post('/campaigns', async (req, res) => {
@@ -189,6 +189,7 @@ router.post('/campaigns', async (req, res) => {
       notes: body.notes || '',
       campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
       redirect_url: (body.redirect_url || '').trim(),
+      redirect_urls: parseRedirectUrls(body),
       redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
     });
     // New campaigns may have added a custom root_path - the next /robots.txt
@@ -350,7 +351,7 @@ router.get('/campaigns/:id/edit', async (req, res) => {
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
   if (!campaign) return res.status(404).send('Campaign not found');
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns' });
+  res.render('admin/campaign_form', { ws, campaign, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: 'offer' });
 });
 
 router.post('/campaigns/:id', async (req, res) => {
@@ -424,6 +425,7 @@ router.post('/campaigns/:id', async (req, res) => {
           notes: body.notes || '',
           campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
           redirect_url: (body.redirect_url || '').trim(),
+          redirect_urls: parseRedirectUrls(body),
           redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
         },
       }
@@ -2980,6 +2982,55 @@ router.post('/intelligence/mark-exported', async (req, res) => {
 
 // ---------- Settings (API keys, password info) ----------
 // ── Redirect Logs (redirect campaigns) ───────────────────────────────────
+const REDIRECT_DEVICE_CLASSES = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
+
+// Parse default + per-device redirect URLs from the campaign form. Mirrors the
+// device_pages shape. Empty strings are kept (means "no override for this device").
+function parseRedirectUrls(body) {
+  const out = { default: (body.redirect_url_default || body.redirect_url || '').trim() };
+  for (const dc of REDIRECT_DEVICE_CLASSES) {
+    out[dc] = (body[`redirect_url_${dc}`] || '').trim();
+  }
+  return out;
+}
+
+// Redirect hub: list redirect campaigns + logs, at /admin/redirect.
+router.get('/redirect', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Campaign, RedirectLog } = require('../../models');
+  const tab = req.query.tab === 'logs' ? 'logs' : 'campaigns';
+
+  const campaigns = await Campaign.find({ workspace_id: ws._id, campaign_type: 'redirect' })
+    .sort({ created_at: -1 }).lean();
+
+  // Per-campaign redirect counts for the list.
+  const counts = await RedirectLog.aggregate([
+    { $match: { workspace_id: ws._id } },
+    { $group: { _id: '$campaign_id', n: { $sum: 1 } } },
+  ]);
+  const countMap = {};
+  for (const c of counts) countMap[String(c._id)] = c.n;
+
+  let logs = [], total = 0, logCampaigns = campaigns, campMap = {}, currentPage = 1, perPage = 100, campaignId = '';
+  if (tab === 'logs') {
+    currentPage = Math.max(parseInt(req.query.p, 10) || 1, 1);
+    campaignId = req.query.campaign || '';
+    const filter = { workspace_id: ws._id };
+    if (campaignId) filter.campaign_id = campaignId;
+    [logs, total] = await Promise.all([
+      RedirectLog.find(filter).sort({ ts: -1 }).skip((currentPage - 1) * perPage).limit(perPage).lean(),
+      RedirectLog.countDocuments(filter),
+    ]);
+    const allNamed = await Campaign.find({ workspace_id: ws._id }).select('name _id').lean();
+    for (const c of allNamed) campMap[String(c._id)] = c.name;
+  }
+
+  res.render('admin/redirect', {
+    ws, page: 'redirect', tab, campaigns, countMap,
+    logs, total, logCampaigns, campMap, currentPage, perPage, campaignId,
+  });
+});
+
 router.get('/redirect-logs', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { RedirectLog, Campaign } = require('../../models');
