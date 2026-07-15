@@ -167,6 +167,27 @@ async function test(name, fn) {
     assert.strictEqual(r.headers.location, 'https://default.example/', 'windows falls back to default');
   });
 
+  console.log('\nBug fixes — scheme-less URL + invalid fallback:');
+
+  await test('scheme-less stored URL → normalized absolute 302 (no relative/duplicated domain)', async () => {
+    cache.clearAll();
+    stubState = baseState({ delay: 0, redirectUrls: { default: 'cookingshow.space/indian-cooking' } });
+    const r = await request(server, { urlPath: '/go/demo' });
+    assert.strictEqual(r.status, 302);
+    assert.strictEqual(r.headers.location, 'https://cookingshow.space/indian-cooking', 'must be absolute, not relative');
+    assert.strictEqual(stubState.redirectLogs[0].destination_url, 'https://cookingshow.space/indian-cooking');
+  });
+
+  await test('truly invalid URL → CONFIGURED safe page (not built-in fallback)', async () => {
+    cache.clearAll();
+    // '/relative' has no host → normalization leaves it → validation rejects → safe page.
+    stubState = baseState({ redirectUrl: '', redirectUrls: { default: '/relative-only' }, delay: 1500 });
+    const r = await request(server, { urlPath: '/go/demo' });
+    assert.ok(r.body.includes('SAFE_CONTENT'), 'should show the configured safe page, not the generic fallback');
+    assert.ok(!r.body.includes('not available in your region'), 'must NOT show the built-in fallback when a safe page exists');
+    assert.strictEqual(stubState.redirectLogs.length, 0);
+  });
+
   console.log('\nRegression — offer campaign unaffected:');
 
   await test('offer campaign still renders the offer', async () => {

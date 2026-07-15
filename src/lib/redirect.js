@@ -96,13 +96,28 @@ async function writeRedirectLog(doc, campaign, workspace, destinationUrl) {
   }
 }
 
+// Normalize a user-entered redirect URL. The #1 real-world mistake is omitting
+// the scheme ("cookingshow.space/indian-cooking"), which the browser then
+// resolves RELATIVE to the current page — duplicating the domain into the path
+// (…/cookingshow.space/cookingshow.space/…). Prepending https:// fixes it.
+function normalizeRedirectUrl(url) {
+  if (!url) return '';
+  let u = String(url).trim();
+  if (!u) return '';
+  if (/^https?:\/\//i.test(u)) return u;          // already absolute
+  if (u.startsWith('//')) return 'https:' + u;    // protocol-relative
+  const firstSeg = u.split('/')[0];
+  if (firstSeg.includes('.')) return 'https://' + u; // looks like a bare host → add scheme
+  return u; // genuine relative path (no host) — validation will reject it
+}
+
 /**
  * Resolve the redirect destination for a click, mirroring resolvePageForDevice.
  * Resolution order:
  *   1. campaign.redirect_urls[deviceClass] — per-device override
  *   2. campaign.redirect_urls.default      — campaign default
  *   3. campaign.redirect_url               — legacy single URL (back-compat)
- * Returns '' if none configured.
+ * The result is normalized (scheme added if missing). Returns '' if none.
  *
  * @param {object} campaign
  * @param {string} deviceClass  'iphone'|'android'|'windows'|'mac'|'linux'|'other'
@@ -112,9 +127,11 @@ function resolveRedirectUrl(campaign, deviceClass) {
   if (!campaign) return '';
   const map = campaign.redirect_urls || {};
   const perDevice = deviceClass && map[deviceClass];
-  if (perDevice && String(perDevice).trim()) return String(perDevice).trim();
-  if (map.default && String(map.default).trim()) return String(map.default).trim();
-  return campaign.redirect_url ? String(campaign.redirect_url).trim() : '';
+  let picked = '';
+  if (perDevice && String(perDevice).trim()) picked = String(perDevice).trim();
+  else if (map.default && String(map.default).trim()) picked = String(map.default).trim();
+  else if (campaign.redirect_url) picked = String(campaign.redirect_url).trim();
+  return normalizeRedirectUrl(picked);
 }
 
-module.exports = { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl, resolveRedirectUrl };
+module.exports = { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl, resolveRedirectUrl, normalizeRedirectUrl };

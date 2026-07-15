@@ -3,7 +3,7 @@
 
 const assert = require('assert');
 const path = require('path');
-const { resolveRedirectUrl } = require(path.resolve(__dirname, '../src/lib/redirect'));
+const { resolveRedirectUrl, normalizeRedirectUrl } = require(path.resolve(__dirname, '../src/lib/redirect'));
 
 let pass = 0, fail = 0;
 function test(name, fn) {
@@ -48,6 +48,26 @@ test('each device class resolves independently', () => {
   assert.strictEqual(resolveRedirectUrl(c, 'android'), 'https://a.com');
   assert.strictEqual(resolveRedirectUrl(c, 'mac'), 'https://m.com');
   assert.strictEqual(resolveRedirectUrl(c, 'linux'), 'https://d.com'); // no override → default
+});
+
+console.log('\nnormalizeRedirectUrl (scheme-less → https, fixes duplicated-domain bug):');
+
+test('bare host/path gets https:// prepended', () => {
+  assert.strictEqual(normalizeRedirectUrl('cookingshow.space/indian-cooking'), 'https://cookingshow.space/indian-cooking');
+  assert.strictEqual(normalizeRedirectUrl('example.com'), 'https://example.com');
+});
+test('already-absolute URLs are left alone', () => {
+  assert.strictEqual(normalizeRedirectUrl('https://x.com/a'), 'https://x.com/a');
+  assert.strictEqual(normalizeRedirectUrl('http://x.com'), 'http://x.com');
+});
+test('protocol-relative gets https:', () => {
+  assert.strictEqual(normalizeRedirectUrl('//host/p'), 'https://host/p');
+});
+test('genuine relative path (no host) is left as-is (validation rejects later)', () => {
+  assert.strictEqual(normalizeRedirectUrl('/relative-path'), '/relative-path');
+});
+test('resolveRedirectUrl normalizes its result', () => {
+  assert.strictEqual(resolveRedirectUrl({ redirect_urls: { default: 'cookingshow.space/x' } }, 'windows'), 'https://cookingshow.space/x');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

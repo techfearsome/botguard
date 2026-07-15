@@ -347,14 +347,19 @@ async function handleClick(req, res, opts) {
     if (!showSafePage && campaign.campaign_type === 'redirect') {
       const destUrl = resolveRedirectUrl(campaign, deviceClass);
       if (!isSafeRedirectUrl(destUrl)) {
-        // Misconfigured redirect campaign — fail safe rather than send nowhere.
+        // Misconfigured redirect campaign — fail safe. Show the campaign's
+        // configured safe page (device-resolved), not the generic built-in
+        // fallback, so behavior matches every other blocked path.
         logger.error('redirect_url_invalid', { campaign: String(campaign._id), url: destUrl });
         doc.page_rendered = 'safe';
         doc.decision_reason = 'redirect_url_invalid';
+        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+        const safeHtml = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
+        if (safePage) doc.landing_page_id = safePage._id;
         setGoCookies(req, res, doc);
         setNoCacheHeaders(req, res, campaign);
         writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-        return res.status(200).type('html').send(applyPageTracking(renderSafeFallback(), workspace));
+        return res.status(200).type('html').send(applyPageTracking(safeHtml, workspace));
       }
 
       doc.page_rendered = 'redirect';

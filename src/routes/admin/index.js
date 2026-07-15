@@ -2985,11 +2985,15 @@ router.post('/intelligence/mark-exported', async (req, res) => {
 const REDIRECT_DEVICE_CLASSES = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
 
 // Parse default + per-device redirect URLs from the campaign form. Mirrors the
-// device_pages shape. Empty strings are kept (means "no override for this device").
+// device_pages shape. URLs are normalized (scheme added if missing) so a user
+// entering "example.com/x" doesn't cause a relative-redirect / duplicated-domain
+// bug. Empty strings are kept (means "no override for this device").
+const { normalizeRedirectUrl } = require('../../lib/redirect');
 function parseRedirectUrls(body) {
-  const out = { default: (body.redirect_url_default || body.redirect_url || '').trim() };
+  const norm = (v) => normalizeRedirectUrl((v || '').trim());
+  const out = { default: norm(body.redirect_url_default || body.redirect_url) };
   for (const dc of REDIRECT_DEVICE_CLASSES) {
-    out[dc] = (body[`redirect_url_${dc}`] || '').trim();
+    out[dc] = norm(body[`redirect_url_${dc}`]);
   }
   return out;
 }
