@@ -143,6 +143,7 @@ const ClickSchema = new mongoose.Schema({
   // What happened
   variant_shown: String,
   page_rendered: String,     // 'offer' | 'safe' | 'redirect'
+  redirect_destination: String, // for redirect campaigns: the URL clean traffic was sent to
   landing_page_id: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
   // Diagnostic: was auto-conversion injection actually applied to the response HTML?
   // Useful for confirming the script is reaching the visitor's browser.

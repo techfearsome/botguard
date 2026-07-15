@@ -51,25 +51,43 @@
     <% } %>
   </section>
 <% } else { %>
-  <section class="panel" style="margin-bottom:16px;">
-    <form method="GET" action="/admin/redirect" style="display:flex; gap:12px; align-items:flex-end;">
-      <input type="hidden" name="tab" value="logs">
-      <div>
-        <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Campaign</label>
-        <select name="campaign" onchange="this.form.submit()">
-          <option value="">All redirect campaigns</option>
-          <% logCampaigns.forEach(function(c){ %>
-            <option value="<%= c._id %>" <%= String(campaignId) === String(c._id) ? 'selected' : '' %>><%= c.name %></option>
-          <% }); %>
-        </select>
-      </div>
-      <span class="muted" style="font-size:13px;"><%= total.toLocaleString() %> total</span>
-    </form>
-  </section>
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <span class="muted" style="font-size:13px;"><%= totalCount.toLocaleString() %> total<% if (totalCount > 0) { %> — showing <%= showingFrom %>–<%= showingTo %><% } %> (passed + failed)</span>
+    <a href="/admin/redirect/logs.csv?<%= new URLSearchParams(query).toString() %>" class="btn btn-small" title="Download up to 10,000 rows matching the current filters">Export CSV</a>
+  </div>
+
+  <form method="GET" class="filter-bar" style="margin-bottom:14px;">
+    <input type="hidden" name="tab" value="logs">
+    <select name="range" onchange="document.getElementById('rl-custom').style.display = this.value === 'custom' ? '' : 'none';">
+      <% rangeOptions.forEach(opt => { %>
+        <option value="<%= opt.value %>" <%= range && range.range === opt.value ? 'selected' : '' %>><%= opt.label %></option>
+      <% }) %>
+    </select>
+    <span id="rl-custom" style="<%= range && range.range === 'custom' ? '' : 'display:none' %>; display:inline-flex; gap:6px; align-items:center;">
+      <input type="date" name="date_from" value="<%= query.date_from || '' %>">
+      <input type="date" name="date_to" value="<%= query.date_to || '' %>">
+    </span>
+    <select name="campaign">
+      <option value="">All redirect campaigns</option>
+      <% campaigns.forEach(c => { %>
+        <option value="<%= c._id %>" <%= query.campaign === c._id.toString() ? 'selected' : '' %>><%= c.name %></option>
+      <% }) %>
+    </select>
+    <select name="decision">
+      <option value="">All decisions</option>
+      <% ['allow', 'block', 'would_block'].forEach(d => { %>
+        <option value="<%= d %>" <%= query.decision === d ? 'selected' : '' %>><%= d %></option>
+      <% }) %>
+    </select>
+    <input type="text" name="source" placeholder="utm_source" value="<%= query.source || '' %>">
+    <input type="text" name="click_id" placeholder="gclid/wbraid/gbraid/fbclid/msclkid" value="<%= query.click_id || '' %>">
+    <button type="submit" class="btn">Filter</button>
+    <a href="/admin/redirect?tab=logs" class="btn">Reset</a>
+  </form>
 
   <section class="panel">
     <% if (logs.length === 0) { %>
-      <p class="muted">No redirects logged yet.</p>
+      <p class="muted">No redirect traffic in this range. Both passed redirects and filtered (safe-page) traffic appear here.</p>
     <% } else { %>
       <div style="overflow:auto; border:1px solid var(--border-subtle,#22303f); border-radius:8px;">
         <table style="width:100%; border-collapse:collapse; font-size:13px;">
@@ -77,36 +95,67 @@
             <tr style="text-align:left;">
               <th style="padding:8px 10px;">Time</th>
               <th style="padding:8px 10px;">Campaign</th>
+              <th style="padding:8px 10px;">Result</th>
               <th style="padding:8px 10px;">Destination</th>
               <th style="padding:8px 10px;">IP</th>
               <th style="padding:8px 10px;">ASN / Org</th>
               <th style="padding:8px 10px;">Country</th>
               <th style="padding:8px 10px;">Device</th>
+              <th style="padding:8px 10px;">Source</th>
               <th style="padding:8px 10px;">Click ID</th>
             </tr>
           </thead>
           <tbody>
-          <% logs.forEach(function(l){ %>
+          <% logs.forEach(function(c){
+               var passed = c.page_rendered === 'redirect';
+          %>
             <tr style="border-top:1px solid var(--border-subtle,#1c2733);">
-              <td style="padding:6px 10px; white-space:nowrap;"><%= new Date(l.ts).toLocaleString() %></td>
-              <td style="padding:6px 10px;"><%= campMap[String(l.campaign_id)] || '—' %></td>
-              <td style="padding:6px 10px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= l.destination_url %>"><%= l.destination_url %></td>
-              <td style="padding:6px 10px; font-family:monospace;"><%= l.ip || '—' %></td>
-              <td style="padding:6px 10px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><%= l.asn ? ('AS'+l.asn+' ') : '' %><%= l.asn_org || '' %></td>
-              <td style="padding:6px 10px;"><%= l.country || '—' %></td>
-              <td style="padding:6px 10px;"><%= l.device_class || '—' %></td>
-              <td style="padding:6px 10px; font-family:monospace; font-size:11px;"><%= l.click_id || '—' %></td>
+              <td style="padding:6px 10px; white-space:nowrap;"><%= new Date(c.ts).toLocaleString() %></td>
+              <td style="padding:6px 10px;"><%= c.campaign_id?.name || '—' %></td>
+              <td style="padding:6px 10px;">
+                <% if (passed) { %>
+                  <span style="color:#34d399; font-weight:600;">redirected</span>
+                <% } else { %>
+                  <span style="color:#f87171; font-weight:600;">safe</span>
+                  <% if (c.decision_reason) { %><br><span class="muted" style="font-size:11px;"><%= c.decision_reason %></span><% } %>
+                <% } %>
+              </td>
+              <td style="padding:6px 10px; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= c.redirect_destination || '' %>"><%= passed ? (c.redirect_destination || '—') : '—' %></td>
+              <td style="padding:6px 10px; font-family:monospace;"><%= c.ip || '—' %></td>
+              <td style="padding:6px 10px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><%= c.asn ? ('AS'+c.asn+' ') : '' %><%= c.asn_org || '' %></td>
+              <td style="padding:6px 10px;"><%= c.country || '—' %></td>
+              <td style="padding:6px 10px;"><%= c.ua_parsed?.device_class || '—' %></td>
+              <td style="padding:6px 10px;"><%= c.utm?.source || '—' %></td>
+              <td style="padding:6px 10px; font-family:monospace; font-size:11px;">
+                <% if (c.click_id) { %><a href="/admin/clicks/<%= c.click_id %>" title="Full click detail"><%= c.click_id.slice(0,12) %>…</a><% } else { %>—<% } %>
+              </td>
             </tr>
           <% }); %>
           </tbody>
         </table>
       </div>
 
-      <% var pages = Math.ceil(total / perPage); if (pages > 1) { %>
-        <div style="display:flex; gap:8px; align-items:center; margin-top:14px;">
-          <% if (currentPage > 1) { %><a class="btn btn-small" href="/admin/redirect?tab=logs&p=<%= currentPage-1 %><%= campaignId ? '&campaign='+campaignId : '' %>">‹ Prev</a><% } %>
-          <span class="muted" style="font-size:13px;">Page <%= currentPage %> of <%= pages %></span>
-          <% if (currentPage < pages) { %><a class="btn btn-small" href="/admin/redirect?tab=logs&p=<%= currentPage+1 %><%= campaignId ? '&campaign='+campaignId : '' %>">Next ›</a><% } %>
+      <% if (totalPages > 1) { %>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:14px; flex-wrap:wrap;">
+          <%
+            function pageUrl(n){
+              var p = new URLSearchParams(query); p.set('tab','logs'); p.set('page_n', String(n)); p.set('per', String(perPage)); return '/admin/redirect?' + p.toString();
+            }
+          %>
+          <% if (currentPage > 1) { %><a class="btn btn-small" href="<%= pageUrl(currentPage-1) %>">‹ Prev</a><% } %>
+          <span class="muted" style="font-size:13px;">Page <%= currentPage %> of <%= totalPages %></span>
+          <% if (currentPage < totalPages) { %><a class="btn btn-small" href="<%= pageUrl(currentPage+1) %>">Next ›</a><% } %>
+          <span style="margin-left:auto;"></span>
+          <form method="GET" style="display:inline-flex; gap:6px; align-items:center;">
+            <% Object.entries(query).forEach(function(kv){ if (kv[0] !== 'per' && kv[0] !== 'page_n' && kv[1] !== '' && kv[1] != null) { %>
+              <input type="hidden" name="<%= kv[0] %>" value="<%= kv[1] %>">
+            <% } }); %>
+            <input type="hidden" name="tab" value="logs">
+            <label class="muted" style="font-size:12px;">Per page</label>
+            <select name="per" onchange="this.form.submit()">
+              <% perPageOptions.forEach(function(n){ %><option value="<%= n %>" <%= perPage === n ? 'selected' : '' %>><%= n %></option><% }); %>
+            </select>
+          </form>
         </div>
       <% } %>
     <% } %>

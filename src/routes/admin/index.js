@@ -2998,7 +2998,9 @@ function parseRedirectUrls(body) {
   return out;
 }
 
-// Redirect hub: list redirect campaigns + logs, at /admin/redirect.
+// Redirect hub: list redirect campaigns + rich logs (backed by the Click
+// collection, so they carry full UTM/ValueTrack/IP/decision detail and both
+// passed AND failed traffic), at /admin/redirect.
 router.get('/redirect', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { Campaign, RedirectLog } = require('../../models');
@@ -3006,8 +3008,9 @@ router.get('/redirect', async (req, res) => {
 
   const campaigns = await Campaign.find({ workspace_id: ws._id, campaign_type: 'redirect' })
     .sort({ created_at: -1 }).lean();
+  const redirectCampaignIds = campaigns.map((c) => c._id);
 
-  // Per-campaign redirect counts for the list.
+  // Per-campaign redirect counts for the list (passed redirects only).
   const counts = await RedirectLog.aggregate([
     { $match: { workspace_id: ws._id } },
     { $group: { _id: '$campaign_id', n: { $sum: 1 } } },
@@ -3015,24 +3018,97 @@ router.get('/redirect', async (req, res) => {
   const countMap = {};
   for (const c of counts) countMap[String(c._id)] = c.n;
 
-  let logs = [], total = 0, logCampaigns = campaigns, campMap = {}, currentPage = 1, perPage = 100, campaignId = '';
+  let logs = [], totalCount = 0, currentPage = 1, perPage = 100, totalPages = 1,
+      showingFrom = 0, showingTo = 0, range = null;
+  const PAGE_SIZE_OPTIONS = [50, 100, 250, 500];
+
   if (tab === 'logs') {
-    currentPage = Math.max(parseInt(req.query.p, 10) || 1, 1);
-    campaignId = req.query.campaign || '';
-    const filter = { workspace_id: ws._id };
-    if (campaignId) filter.campaign_id = campaignId;
-    [logs, total] = await Promise.all([
-      RedirectLog.find(filter).sort({ ts: -1 }).skip((currentPage - 1) * perPage).limit(perPage).lean(),
-      RedirectLog.countDocuments(filter),
+    // Reuse the clicks filter (decision / utm source / click-id / campaign) but
+    // constrain to redirect campaigns. A specific campaign selection narrows
+    // further; otherwise show all redirect campaigns.
+    const filter = buildClicksFilter(req, ws);
+    if (req.query.campaign) {
+      filter.campaign_id = req.query.campaign; // buildClicksFilter already set this
+    } else {
+      filter.campaign_id = { $in: redirectCampaignIds };
+    }
+    range = parseRange(req.query);
+    applyRangeToFilter(filter, range);
+
+    const requestedPerPage = parseInt(req.query.per, 10);
+    perPage = PAGE_SIZE_OPTIONS.includes(requestedPerPage) ? requestedPerPage : 100;
+    const requestedPage = parseInt(req.query.page_n, 10);
+    currentPage = (Number.isFinite(requestedPage) && requestedPage >= 1) ? requestedPage : 1;
+    const skip = (currentPage - 1) * perPage;
+
+    [logs, totalCount] = await Promise.all([
+      Click.find(filter).sort({ ts: -1 }).skip(skip).limit(perPage)
+        .populate('campaign_id', 'name slug').lean(),
+      Click.countDocuments(filter),
     ]);
-    const allNamed = await Campaign.find({ workspace_id: ws._id }).select('name _id').lean();
-    for (const c of allNamed) campMap[String(c._id)] = c.name;
+    totalPages = Math.max(1, Math.ceil(totalCount / perPage));
+    showingFrom = totalCount === 0 ? 0 : skip + 1;
+    showingTo = Math.min(skip + perPage, totalCount);
   }
 
   res.render('admin/redirect', {
     ws, page: 'redirect', tab, campaigns, countMap,
-    logs, total, logCampaigns, campMap, currentPage, perPage, campaignId,
+    logs, totalCount, currentPage, perPage, totalPages, showingFrom, showingTo,
+    perPageOptions: PAGE_SIZE_OPTIONS,
+    range, rangeOptions: RANGE_OPTIONS, query: req.query,
+    campaignId: req.query.campaign || '',
   });
+});
+
+// CSV export of redirect logs — reuses the clicks filter constrained to
+// redirect campaigns, so it matches the on-screen Logs view exactly.
+router.get('/redirect/logs.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Campaign } = require('../../models');
+  const filter = buildClicksFilter(req, ws);
+  if (!req.query.campaign) {
+    const ids = await Campaign.find({ workspace_id: ws._id, campaign_type: 'redirect' }).distinct('_id');
+    filter.campaign_id = { $in: ids };
+  }
+  const range = parseRange(req.query);
+  applyRangeToFilter(filter, range);
+
+  const rows = await Click.find(filter).sort({ ts: -1 }).limit(10000)
+    .populate('campaign_id', 'name slug').lean();
+
+  const cols = [
+    'ts', 'campaign', 'page_rendered', 'decision', 'decision_reason',
+    'redirect_destination', 'ip', 'country', 'asn', 'asn_org', 'device_class',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+    'gclid', 'wbraid', 'gbraid', 'fbclid', 'msclkid', 'click_id',
+  ];
+  const esc = (v) => {
+    const s = (v == null ? '' : String(v));
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [cols.join(',')];
+  for (const c of rows) {
+    const eid = c.external_ids || {};
+    lines.push([
+      c.ts ? new Date(c.ts).toISOString() : '',
+      c.campaign_id?.name || '',
+      c.page_rendered || '',
+      c.decision || '',
+      c.decision_reason || '',
+      c.redirect_destination || '',
+      c.ip || '',
+      c.country || '',
+      c.asn || '',
+      c.asn_org || '',
+      c.ua_parsed?.device_class || '',
+      c.utm?.source || '', c.utm?.medium || '', c.utm?.campaign || '', c.utm?.term || '', c.utm?.content || '',
+      eid.gclid || '', eid.wbraid || '', eid.gbraid || '', eid.fbclid || '', eid.msclkid || '',
+      c.click_id || '',
+    ].map(esc).join(','));
+  }
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="redirect-logs-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(lines.join('\r\n'));
 });
 
 router.get('/redirect-logs', async (req, res) => {

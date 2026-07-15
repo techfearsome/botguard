@@ -363,6 +363,7 @@ async function handleClick(req, res, opts) {
       }
 
       doc.page_rendered = 'redirect';
+      doc.redirect_destination = destUrl;
       if (targetPage) doc.landing_page_id = targetPage._id;
       doc.variant_shown = 'redirect';
 

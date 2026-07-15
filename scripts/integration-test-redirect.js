@@ -110,6 +110,7 @@ async function test(name, fn) {
     assert.ok(!r.body.includes('OFFER_CONTENT'), 'must NOT render the offer page');
     const click = stubState.clicks[stubState.clicks.length - 1];
     assert.strictEqual(click.page_rendered, 'redirect');
+    assert.strictEqual(click.redirect_destination, 'https://dest.example/landing', 'click should carry the destination for the logs view');
     assert.strictEqual(stubState.redirectLogs.length, 1, 'a RedirectLog should be written');
     assert.strictEqual(stubState.redirectLogs[0].destination_url, 'https://dest.example/landing');
   });
