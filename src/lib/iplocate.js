@@ -75,6 +75,7 @@ function normalize(ip, raw) {
     ip,
     asn,
     asn_org: asnObj.name || null,
+    asn_domain: asnObj.domain || null,   // e.g. "iproyal.com" — extra term-rule signal
     organisation: company.name || null,
     country: raw.country_code || null,
     country_name: raw.country || null,

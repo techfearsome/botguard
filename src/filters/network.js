@@ -37,6 +37,7 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
     if (pcVerdict) {
       enrichment.asn = pcVerdict.asn;
       enrichment.asn_org = pcVerdict.asn_org;
+      enrichment.asn_domain = pcVerdict.asn_domain || null;
       enrichment.organisation = pcVerdict.organisation;
       enrichment.country = pcVerdict.country;
       enrichment.country_name = pcVerdict.country_name;
@@ -118,11 +119,12 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
   // even when ProxyCheck didn't return an ASN (some lookups give us provider but no ASN).
   // Combine provider + organisation into the haystack since they're often complementary
   // (provider="OVH SAS", organisation="Smtp.fr - Emailing Services" - the term might be in either).
-  if (enrichment.asn || enrichment.asn_org || enrichment.organisation) {
+  if (enrichment.asn || enrichment.asn_org || enrichment.organisation || enrichment.asn_domain) {
     const haystack = [enrichment.asn_org, enrichment.organisation].filter(Boolean).join(' | ');
     const asnHit = await lookupAsn(enrichment.asn || null, workspaceId, {
       provider: haystack,
       asnOrg: enrichment.asn_org,
+      domain: enrichment.asn_domain || '',
     });
     if (asnHit.match) {
       flags.push(...asnHit.flags);

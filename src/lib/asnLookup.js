@@ -133,11 +133,12 @@ async function ensureCache() {
  * Multi-rule policy: if both an ASN rule and a term rule match, the ASN rule wins
  * (more specific). The term rule still gets a flag so you can see it would have hit.
  */
-async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '', ip = '' } = {}) {
+async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '', ip = '', domain = '' } = {}) {
   await ensureCache();
 
   const providerStr = String(provider || '').toLowerCase();
   const orgStr = String(asnOrg || '').toLowerCase();
+  const domainStr = String(domain || '').toLowerCase();
 
   // --- 1. ASN exact match (fast path) ---
   let asnHit = null;
@@ -174,10 +175,14 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '', 
     if (rule._term_field === 'provider') {
       matched = providerStr && providerStr.includes(t);
     } else if (rule._term_field === 'asn_org') {
-      matched = orgStr && orgStr.includes(t);
+      // org name OR the ASN's domain (e.g. "iproyal.com") — the domain is an
+      // org-level signal, and providers like IPLocate expose it reliably.
+      matched = (orgStr && orgStr.includes(t)) || (domainStr && domainStr.includes(t));
     } else {
-      // 'any' - match against either
-      matched = (providerStr && providerStr.includes(t)) || (orgStr && orgStr.includes(t));
+      // 'any' - match against provider, org, or domain
+      matched = (providerStr && providerStr.includes(t)) ||
+                (orgStr && orgStr.includes(t)) ||
+                (domainStr && domainStr.includes(t));
     }
     if (matched) termHits.push(rule);
   }
