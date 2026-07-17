@@ -3512,12 +3512,16 @@ router.get('/clicks/:id', async (req, res) => {
   if (!click) return res.status(404).send('Click not found');
   const conversions = await Conversion.find({ click_id: click.click_id }).sort({ ts: -1 }).lean();
 
-  // Enrich mobile app placement from utm_content (lazy — only on detail view)
+  // Enrich mobile app placement. Google Ads normally puts the placement in
+  // utm_content (mobileapp::1-<id>), but sometimes leaves utm_content as the
+  // literal "{placement}" token while the real value lands in the ValueTrack
+  // placement field — so we try both, in order.
   let appInfo = click.app_placement || null;
-  if (!appInfo && click.utm?.content) {
+  const placementSources = [click.utm?.content, click.valuetrack?.google?.placement];
+  if (!appInfo && placementSources.some((s) => s && String(s).trim())) {
     try {
       const { resolveAppPlacement } = require('../../lib/appLookup');
-      appInfo = await resolveAppPlacement(click.utm.content);
+      appInfo = await resolveAppPlacement(placementSources);
       if (appInfo) {
         Click.updateOne({ _id: click._id }, { $set: { app_placement: appInfo } }).catch(() => {});
       }

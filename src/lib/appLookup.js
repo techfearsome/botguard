@@ -90,11 +90,20 @@ function buildAndroidAppInfo(packageName) {
   };
 }
 
-async function resolveAppPlacement(utmContent) {
-  const parsed = parseAppPlacement(utmContent);
-  if (!parsed.platform || !parsed.appId) return null;
-  if (parsed.platform === 'ios') return lookupIosApp(parsed.appId);
-  if (parsed.platform === 'android') return buildAndroidAppInfo(parsed.appId);
+async function resolveAppPlacement(source) {
+  // Accept a single string or an ordered list of candidate strings, e.g.
+  // [utm_content, valuetrack.google.placement]. Use the first that parses to a
+  // real mobileapp:: placement. Google sometimes leaves utm_content as the
+  // literal "{placement}" token while the actual app placement lands in the
+  // ValueTrack placement field — so we fall back to it.
+  const candidates = Array.isArray(source) ? source : [source];
+  for (const c of candidates) {
+    const parsed = parseAppPlacement(c);
+    if (parsed.platform && parsed.appId) {
+      if (parsed.platform === 'ios') return lookupIosApp(parsed.appId);
+      if (parsed.platform === 'android') return buildAndroidAppInfo(parsed.appId);
+    }
+  }
   return null;
 }
 
