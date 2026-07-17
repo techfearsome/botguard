@@ -1,4 +1,4 @@
-const proxycheck = require('../lib/proxycheck');
+const ipEnrich = require('../lib/ipEnrich');
 const { lookupAsn } = require('../lib/asnLookup');
 const { detectPrefetcher } = require('../lib/prefetchers');
 
@@ -31,9 +31,9 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
   const enrichment = {};
   let pcVerdict = null;
 
-  // --- 1. ProxyCheck ---
+  // --- 1. IP enrichment (ProxyCheck primary → IPLocate fallback) ---
   if (ip) {
-    pcVerdict = await proxycheck.lookup(ip);
+    pcVerdict = await ipEnrich.lookup(ip);
     if (pcVerdict) {
       enrichment.asn = pcVerdict.asn;
       enrichment.asn_org = pcVerdict.asn_org;
