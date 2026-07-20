@@ -16,7 +16,13 @@ const UploadSchema = new mongoose.Schema({
   filename: { type: String, required: true },   // sanitized original name, used in the URL
   mimetype: { type: String, required: true },   // image/png, image/jpeg, ...
   size: { type: Number, required: true },        // bytes
-  data: { type: Buffer, required: true },        // the file bytes
+
+  // Which backend holds the bytes. Defaults to 'mongo' so uploads created
+  // before this change (which have `data` and no `storage`) keep working.
+  storage: { type: String, enum: ['mongo', 'local', 's3'], default: 'mongo' },
+  data: { type: Buffer },            // bytes — ONLY for storage:'mongo'
+  storage_key: { type: String },     // filesystem path (local) or object key (s3)
+
   created_at: { type: Date, default: Date.now, index: true },
 });
 

@@ -140,16 +140,12 @@ app.use('/sync', syncRoutes);
 app.get('/wp-content/uploads/:id/:filename', async (req, res) => {
   try {
     const { Upload } = require('./models');
+    const storage = require('./lib/storage');
     const doc = await Upload.findById(req.params.id).lean();
-    if (!doc || !doc.data) return res.status(404).end();
-    const buf = Buffer.isBuffer(doc.data)
-      ? doc.data
-      : Buffer.from(doc.data.buffer || doc.data);
-    res.set('Content-Type', doc.mimetype || 'application/octet-stream');
-    res.set('X-Content-Type-Options', 'nosniff');
-    res.set('Cache-Control', 'public, max-age=31536000, immutable');
-    res.set('CDN-Cache-Control', 'public, max-age=31536000, immutable');
-    return res.send(buf);
+    if (!doc) return res.status(404).end();
+    const handled = await storage.serve(res, doc);
+    if (!handled) return res.status(404).end();
+    return;
   } catch (e) {
     return res.status(404).end();
   }

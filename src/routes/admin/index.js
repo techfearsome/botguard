@@ -3177,15 +3177,26 @@ router.post('/uploads', (req, res) => {
     try {
       const ws = await resolveWorkspace(req);
       const { Upload } = require('../../models');
+      const storage = require('../../lib/storage');
+      const mongoose = require('mongoose');
       const filename = sanitizeFilename(req.file.originalname, req.file.mimetype);
-      const doc = await Upload.create({
+
+      // Pre-generate the id so the storage key can include it before the doc exists.
+      const id = new mongoose.Types.ObjectId();
+      const stored = await storage.save({
+        workspaceId: ws._id, id, filename,
+        mimetype: req.file.mimetype, buffer: req.file.buffer,
+      });
+
+      await Upload.create({
+        _id: id,
         workspace_id: ws._id,
         filename,
         mimetype: req.file.mimetype,
         size: req.file.size,
-        data: req.file.buffer,
+        ...stored,
       });
-      const url = publicUrl(doc._id, filename);
+      const url = publicUrl(id, filename);
       return res.redirect('/admin/uploads?flash=' + encodeURIComponent('Uploaded: ' + url));
     } catch (e) {
       logger.error('upload_save_failed', { err: e.message });
@@ -3197,8 +3208,13 @@ router.post('/uploads', (req, res) => {
 router.post('/uploads/:id/delete', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const { Upload } = require('../../models');
+  const storage = require('../../lib/storage');
   try {
-    await Upload.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+    const doc = await Upload.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+    if (doc) {
+      await storage.remove(doc);              // delete bytes from local/s3 (mongo: no-op)
+      await Upload.deleteOne({ _id: doc._id });
+    }
   } catch (e) { /* ignore bad id */ }
   res.redirect('/admin/uploads?flash=Deleted');
 });
