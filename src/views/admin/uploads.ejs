@@ -1,0 +1,56 @@
+<%- include('../partials/header', { ws, page, title: 'Uploads - BotGuard' }) %>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px;">Uploads</h1>
+    <p class="muted">Upload images and copy a direct link to use in pages, campaigns, or site pages. Links look like <code>/wp-content/uploads/…</code> and are served from the database (survive redeploys).</p>
+  </div>
+</div>
+
+<% if (flash) { %>
+<div style="background:#12241a; border:1px solid #2f6b46; border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:13px; word-break:break-all;"><%= flash %></div>
+<% } %>
+<% if (error) { %>
+<div style="background:#2a1416; border:1px solid #6b2f34; border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:13px;"><%= error %></div>
+<% } %>
+
+<section class="panel" style="margin-bottom:20px;">
+  <form method="POST" action="/admin/uploads" enctype="multipart/form-data" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp" required>
+    <button type="submit" class="btn btn-primary">Upload</button>
+    <span class="muted" style="font-size:12px;">PNG, JPG, GIF, or WebP · max 8 MB</span>
+  </form>
+</section>
+
+<section class="panel">
+  <% if (uploads.length === 0) { %>
+    <p class="muted">No uploads yet. Add an image above to get a direct link.</p>
+  <% } else { %>
+    <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:16px;">
+      <% uploads.forEach(function(u){
+           var url = '/wp-content/uploads/' + u._id + '/' + u.filename;
+           var full = host + url;
+      %>
+        <div style="border:1px solid var(--border-subtle,#22303f); border-radius:8px; overflow:hidden; background:var(--color-background-secondary,#0f1720);">
+          <div style="aspect-ratio:16/10; background:#0b1119; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+            <img src="<%= url %>" alt="<%= u.filename %>" loading="lazy" style="max-width:100%; max-height:100%; object-fit:contain;">
+          </div>
+          <div style="padding:8px 10px;">
+            <div style="font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= u.filename %>"><%= u.filename %></div>
+            <div class="muted" style="font-size:11px; margin:2px 0 8px;"><%= (u.size/1024).toFixed(0) %> KB · <%= new Date(u.created_at).toLocaleDateString() %></div>
+            <div style="display:flex; gap:6px;">
+              <input type="text" readonly value="<%= full %>" onclick="this.select()"
+                     style="flex:1; min-width:0; font-size:11px; padding:4px 6px; font-family:monospace;">
+              <button type="button" class="btn btn-small" onclick="(function(b){navigator.clipboard.writeText('<%= full %>').then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1200);});})(this)">Copy</button>
+            </div>
+            <form method="POST" action="/admin/uploads/<%= u._id %>/delete" style="margin-top:6px;" onsubmit="return confirm('Delete this image? Any page still linking to it will break.');">
+              <button type="submit" class="btn btn-small" style="color:#f87171;">Delete</button>
+            </form>
+          </div>
+        </div>
+      <% }); %>
+    </div>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

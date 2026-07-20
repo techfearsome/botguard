@@ -14,6 +14,7 @@ module.exports = {
   SyncPartner: require('./SyncPartner'),
   SyncStagedEntry: require('./SyncStagedEntry'),
   RedirectLog: require('./RedirectLog'),
+  Upload: require('./Upload'),
   CloudflareRule: require('./CloudflareRule'),
   CloudflareLog: require('./CloudflareLog'),
 };

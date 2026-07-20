@@ -3140,6 +3140,69 @@ router.get('/redirect-logs', async (req, res) => {
   });
 });
 
+// ── Media Uploads ────────────────────────────────────────────────────────
+// Images are stored in Mongo (no persistent filesystem in this container) and
+// served at /wp-content/uploads/<id>/<filename>. Admin routes are already
+// behind requireAdmin (router.use above).
+const multer = require('multer');
+const { isAllowedMime, MAX_BYTES, sanitizeFilename, publicUrl } = require('../../lib/uploadHelpers');
+const uploadMw = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_BYTES, files: 1 },
+  fileFilter: (req, file, cb) => cb(null, isAllowedMime(file.mimetype)),
+}).single('file');
+
+router.get('/uploads', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Upload } = require('../../models');
+  const uploads = await Upload.find({ workspace_id: ws._id })
+    .select('filename mimetype size created_at')  // never load the Buffer into the list
+    .sort({ created_at: -1 }).limit(500).lean();
+  const host = `${req.protocol}://${req.get('host')}`;
+  res.render('admin/uploads', {
+    ws, page: 'uploads', uploads, host,
+    flash: req.query.flash || '', error: req.query.error || '',
+  });
+});
+
+router.post('/uploads', (req, res) => {
+  uploadMw(req, res, async (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File too large (max 8 MB)' : 'Upload failed';
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent(msg));
+    }
+    if (!req.file) {
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent('No file, or unsupported type (PNG/JPG/GIF/WebP only)'));
+    }
+    try {
+      const ws = await resolveWorkspace(req);
+      const { Upload } = require('../../models');
+      const filename = sanitizeFilename(req.file.originalname, req.file.mimetype);
+      const doc = await Upload.create({
+        workspace_id: ws._id,
+        filename,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        data: req.file.buffer,
+      });
+      const url = publicUrl(doc._id, filename);
+      return res.redirect('/admin/uploads?flash=' + encodeURIComponent('Uploaded: ' + url));
+    } catch (e) {
+      logger.error('upload_save_failed', { err: e.message });
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent('Could not save upload'));
+    }
+  });
+});
+
+router.post('/uploads/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Upload } = require('../../models');
+  try {
+    await Upload.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+  } catch (e) { /* ignore bad id */ }
+  res.redirect('/admin/uploads?flash=Deleted');
+});
+
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);
   res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });

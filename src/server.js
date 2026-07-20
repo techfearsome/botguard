@@ -133,6 +133,28 @@ app.use('/api', gadsSyncRoutes);
 const syncRoutes = require('./routes/sync');
 app.use('/sync', syncRoutes);
 
+// --- Media uploads: serve images stored in Mongo at a WordPress-looking path.
+// Public (images are embedded in pages), long immutable cache so Cloudflare
+// serves from edge after the first origin fetch. Mounted before the root_path
+// catch-all; multi-segment path so it never collides with a campaign slug.
+app.get('/wp-content/uploads/:id/:filename', async (req, res) => {
+  try {
+    const { Upload } = require('./models');
+    const doc = await Upload.findById(req.params.id).lean();
+    if (!doc || !doc.data) return res.status(404).end();
+    const buf = Buffer.isBuffer(doc.data)
+      ? doc.data
+      : Buffer.from(doc.data.buffer || doc.data);
+    res.set('Content-Type', doc.mimetype || 'application/octet-stream');
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.set('CDN-Cache-Control', 'public, max-age=31536000, immutable');
+    return res.send(buf);
+  } catch (e) {
+    return res.status(404).end();
+  }
+});
+
 // --- Admin panel (scoped per workspace, multi-tenant ready) ---
 app.use('/admin', adminRoutes);
 
