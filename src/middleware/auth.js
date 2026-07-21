@@ -204,17 +204,54 @@ function loginPage(req, res) {
   res.render('login', { error, next_url });
 }
 
+// Record a login attempt to the LoginEvent collection. Fire-and-forget: a DB
+// error must never block or fail the login flow itself.
+function recordLoginEvent(req, { username, success, reason }) {
+  try {
+    const { LoginEvent } = require('../models');
+    const { getClientIp, hashIp } = require('../lib/ip');
+    const ip = getClientIp(req) || req.ip || '';
+    let device = {};
+    try {
+      const { parseUA } = require('../lib/uaParser');
+      const ua = req.headers['user-agent'] || '';
+      const p = parseUA(ua, req.headers) || {};
+      device = {
+        user_agent: ua,
+        device_class: p.device_class || '',
+        device_label: p.device_label || '',
+        browser: p.browser ? `${p.browser.name || ''} ${p.browser.version || ''}`.trim() : '',
+        os: p.os ? `${p.os.name || ''} ${p.os.version || ''}`.trim() : '',
+      };
+    } catch (_) { device = { user_agent: req.headers['user-agent'] || '' }; }
+
+    LoginEvent.create({
+      username: username || '',
+      success: !!success,
+      reason: reason || '',
+      ip,
+      ip_hash: ip ? hashIp(ip) : '',
+      ...device,
+    }).catch((e) => logger.warn('login_event_write_failed', { err: e.message }));
+  } catch (e) {
+    logger.warn('login_event_error', { err: e.message });
+  }
+}
+
 function loginSubmit(req, res) {
   const { username, password, next: nextUrl } = req.body || {};
   const creds = getStoredCredentials();
 
   if (!creds) {
     logger.error('login_no_credentials_configured');
+    recordLoginEvent(req, { username, success: false, reason: 'no_credentials' });
     return res.redirect('/admin/login?error=invalid');
   }
 
   if (username !== creds.username || !verifyPassword(password, creds.passwordHash)) {
+    const reason = username !== creds.username ? 'unknown_user' : 'bad_password';
     logger.warn('login_failed', { username, ip: req.ip });
+    recordLoginEvent(req, { username, success: false, reason });
     return res.redirect('/admin/login?error=invalid');
   }
 
@@ -227,6 +264,7 @@ function loginSubmit(req, res) {
   });
 
   logger.info('login_ok', { username, ip: req.ip });
+  recordLoginEvent(req, { username, success: true, reason: 'ok' });
   res.redirect(typeof nextUrl === 'string' && nextUrl.startsWith('/') ? nextUrl : '/admin');
 }
 

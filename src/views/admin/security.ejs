@@ -1,0 +1,84 @@
+<%- include('../partials/header', { ws, page, title: 'Security - BotGuard' }) %>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px;">Login Security</h1>
+    <p class="muted">Recent admin logins and failed attempts, with IP and device details. Events are kept for 90 days.</p>
+  </div>
+  <a href="/admin/settings" class="btn">← Settings</a>
+</div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:20px;">
+  <section class="panel" style="text-align:center;">
+    <div class="muted" style="font-size:12px;">Failed attempts (24h)</div>
+    <div style="font-size:26px; font-weight:700; color:<%= failed24h > 0 ? '#f87171' : '#34d399' %>;"><%= failed24h.toLocaleString() %></div>
+  </section>
+  <section class="panel" style="text-align:center;">
+    <div class="muted" style="font-size:12px;">Distinct success IPs (30d)</div>
+    <div style="font-size:26px; font-weight:700;"><%= successfulIps30d.toLocaleString() %></div>
+  </section>
+  <section class="panel" style="text-align:center;">
+    <div class="muted" style="font-size:12px;">Total events</div>
+    <div style="font-size:26px; font-weight:700;"><%= total.toLocaleString() %></div>
+  </section>
+</div>
+
+<section class="panel" style="margin-bottom:16px;">
+  <div style="display:flex; gap:8px;">
+    <% [['all','All'],['success','Successful'],['failed','Failed']].forEach(function(f){ %>
+      <a href="/admin/security?show=<%= f[0] %>" class="btn btn-small" style="<%= filterMode === f[0] ? 'font-weight:700;' : 'opacity:.7;' %>"><%= f[1] %></a>
+    <% }); %>
+  </div>
+</section>
+
+<section class="panel">
+  <% if (events.length === 0) { %>
+    <p class="muted">No login events recorded yet.</p>
+  <% } else { %>
+    <div style="overflow:auto; border:1px solid var(--border-subtle,#22303f); border-radius:8px;">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead style="position:sticky; top:0; background:var(--color-background-secondary,#0f1720);">
+          <tr style="text-align:left;">
+            <th style="padding:8px 10px;">Time</th>
+            <th style="padding:8px 10px;">Result</th>
+            <th style="padding:8px 10px;">Username</th>
+            <th style="padding:8px 10px;">IP</th>
+            <th style="padding:8px 10px;">Device</th>
+            <th style="padding:8px 10px;">Browser / OS</th>
+          </tr>
+        </thead>
+        <tbody>
+        <% events.forEach(function(e){ %>
+          <tr style="border-top:1px solid var(--border-subtle,#1c2733);">
+            <td style="padding:6px 10px; white-space:nowrap;"><%= new Date(e.created_at).toLocaleString() %></td>
+            <td style="padding:6px 10px;">
+              <% if (e.success) { %>
+                <span style="color:#34d399; font-weight:600;">success</span>
+              <% } else { %>
+                <span style="color:#f87171; font-weight:600;">failed</span>
+                <% if (e.reason) { %><br><span class="muted" style="font-size:11px;"><%= e.reason %></span><% } %>
+              <% } %>
+            </td>
+            <td style="padding:6px 10px; font-family:monospace;"><%= e.username || '—' %></td>
+            <td style="padding:6px 10px; font-family:monospace;">
+              <% if (e.ip) { %><a href="/admin/tools/ip-check?ip=<%= encodeURIComponent(e.ip) %>" title="Check this IP"><%= e.ip %></a><% } else { %>—<% } %>
+            </td>
+            <td style="padding:6px 10px;"><%= e.device_label || e.device_class || '—' %></td>
+            <td style="padding:6px 10px;"><%= [e.browser, e.os].filter(Boolean).join(' · ') || '—' %></td>
+          </tr>
+        <% }); %>
+        </tbody>
+      </table>
+    </div>
+
+    <% var pages = Math.ceil(total / perPage); if (pages > 1) { %>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:14px;">
+        <% if (currentPage > 1) { %><a class="btn btn-small" href="/admin/security?show=<%= filterMode %>&p=<%= currentPage-1 %>">‹ Prev</a><% } %>
+        <span class="muted" style="font-size:13px;">Page <%= currentPage %> of <%= pages %></span>
+        <% if (currentPage < pages) { %><a class="btn btn-small" href="/admin/security?show=<%= filterMode %>&p=<%= currentPage+1 %>">Next ›</a><% } %>
+      </div>
+    <% } %>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

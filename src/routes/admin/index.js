@@ -3266,6 +3266,33 @@ router.get('/tools/ip-check', async (req, res) => {
   });
 });
 
+// ── Security: admin login history ────────────────────────────────────────
+router.get('/security', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { LoginEvent } = require('../../models');
+
+  const filterMode = ['all', 'success', 'failed'].includes(req.query.show) ? req.query.show : 'all';
+  const q = {};
+  if (filterMode === 'success') q.success = true;
+  else if (filterMode === 'failed') q.success = false;
+
+  const perPage = 100;
+  const page = Math.max(parseInt(req.query.p, 10) || 1, 1);
+
+  const [events, total, failed24h, distinctIps] = await Promise.all([
+    LoginEvent.find(q).sort({ created_at: -1 }).skip((page - 1) * perPage).limit(perPage).lean(),
+    LoginEvent.countDocuments(q),
+    LoginEvent.countDocuments({ success: false, created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
+    LoginEvent.distinct('ip', { success: true, created_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }),
+  ]);
+
+  res.render('admin/security', {
+    ws, page: 'security', events, total, filterMode,
+    currentPage: page, perPage,
+    failed24h, successfulIps30d: (distinctIps || []).filter(Boolean).length,
+  });
+});
+
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);
   res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });

@@ -15,6 +15,7 @@ module.exports = {
   SyncStagedEntry: require('./SyncStagedEntry'),
   RedirectLog: require('./RedirectLog'),
   Upload: require('./Upload'),
+  LoginEvent: require('./LoginEvent'),
   CloudflareRule: require('./CloudflareRule'),
   CloudflareLog: require('./CloudflareLog'),
 };
