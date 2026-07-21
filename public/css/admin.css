@@ -277,6 +277,34 @@ code,
   border-bottom-color: var(--accent);
 }
 
+/* Tools dropdown */
+.nav-dropdown {
+  position: relative;
+  display: inline-block;
+}
+.nav-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 6px;
+  background: var(--color-background-secondary, #0f1720);
+  border: 1px solid var(--border-subtle, #22303f);
+  border-radius: 8px;
+  padding: 6px;
+  min-width: 150px;
+  z-index: 50;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+.nav-dropdown-menu a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border-bottom: none;
+}
+.nav-dropdown-menu a:hover {
+  background: rgba(255,255,255,0.05);
+}
+
 /* The "live" pulse dot in the nav next to the Live link */
 .nav-pulse {
   display: inline-block;

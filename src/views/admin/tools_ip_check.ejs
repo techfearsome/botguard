@@ -1,0 +1,103 @@
+<%- include('../partials/header', { ws, page, title: 'IP Check - BotGuard' }) %>
+
+<%
+  function fmt(v){ return (v === null || v === undefined || v === '') ? '—' : v; }
+  function yn(v){ return v ? 'Yes' : 'No'; }
+  var r = result;
+  var riskColor = r && r.risk_score >= 66 ? '#f87171' : (r && r.risk_score >= 33 ? '#f59e0b' : '#34d399');
+%>
+
+<div style="margin-bottom:16px;">
+  <h1 style="margin-bottom:4px;">IP Check</h1>
+  <p class="muted">Look up any IP address using ProxyCheck or IPLocate. Both return the same normalized fields, so you can compare them for the same IP.</p>
+</div>
+
+<section class="panel" style="margin-bottom:20px;">
+  <form method="GET" action="/admin/tools/ip-check" style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
+    <div style="flex:1; min-width:240px;">
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">IP address</label>
+      <input type="text" name="ip" value="<%= ip %>" placeholder="e.g. 64.204.7.228 or 2001:4860:4860::8888" style="width:100%; font-family:monospace;">
+    </div>
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Provider</label>
+      <select name="provider">
+        <option value="proxycheck" <%= provider === 'proxycheck' ? 'selected' : '' %> <%= hasProxycheck ? '' : 'disabled' %>>
+          ProxyCheck<%= hasProxycheck ? '' : ' (no key)' %>
+        </option>
+        <option value="iplocate" <%= provider === 'iplocate' ? 'selected' : '' %> <%= hasIplocate ? '' : 'disabled' %>>
+          IPLocate<%= hasIplocate ? '' : ' (no key)' %>
+        </option>
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Look up</button>
+  </form>
+  <% if (!hasProxycheck && !hasIplocate) { %>
+    <p class="muted" style="margin-top:10px; color:#f59e0b;">No provider API key is configured. Set PROXYCHECK_API_KEY or IPLOCATE_API_KEY to use this tool.</p>
+  <% } %>
+</section>
+
+<% if (error) { %>
+  <div style="background:#2a1416; border:1px solid #6b2f34; border-radius:8px; padding:12px 14px; margin-bottom:16px; font-size:13px;"><%= error %></div>
+<% } %>
+
+<% if (result) { %>
+  <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+    <span style="font-family:monospace; font-size:18px; font-weight:700;"><%= result.ip %></span>
+    <span class="muted" style="font-size:12px;">via <%= result.source || provider %></span>
+    <span style="margin-left:auto;"></span>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span class="muted" style="font-size:12px;">Risk</span>
+      <div style="width:120px; height:8px; background:#1c2733; border-radius:5px; overflow:hidden;">
+        <div style="width:<%= Math.max(0, Math.min(100, result.risk_score || 0)) %>%; height:100%; background:<%= riskColor %>;"></div>
+      </div>
+      <strong style="color:<%= riskColor %>;"><%= result.risk_score != null ? result.risk_score : '—' %></strong>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px;">
+
+    <section class="panel">
+      <h3 style="margin-top:0; font-size:14px;">Location</h3>
+      <table style="width:100%; font-size:13px;">
+        <tr><td class="muted" style="padding:4px 0;">Country</td><td style="text-align:right;"><%= fmt(result.country) %><%= result.country_name ? ' · ' + result.country_name : '' %></td></tr>
+        <tr><td class="muted" style="padding:4px 0;">Region</td><td style="text-align:right;"><%= fmt(result.region) %></td></tr>
+        <tr><td class="muted" style="padding:4px 0;">City</td><td style="text-align:right;"><%= fmt(result.city) %></td></tr>
+        <tr><td class="muted" style="padding:4px 0;">Timezone</td><td style="text-align:right; font-family:monospace;"><%= fmt(result.timezone) %></td></tr>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h3 style="margin-top:0; font-size:14px;">Network</h3>
+      <table style="width:100%; font-size:13px;">
+        <tr><td class="muted" style="padding:4px 0;">ASN</td><td style="text-align:right; font-family:monospace;"><%= result.asn ? 'AS' + result.asn : '—' %></td></tr>
+        <tr><td class="muted" style="padding:4px 0;">Org (ASN)</td><td style="text-align:right;"><%= fmt(result.asn_org) %></td></tr>
+        <% if (result.asn_domain) { %><tr><td class="muted" style="padding:4px 0;">Domain</td><td style="text-align:right;"><%= result.asn_domain %></td></tr><% } %>
+        <tr><td class="muted" style="padding:4px 0;">Organisation</td><td style="text-align:right;"><%= fmt(result.organisation) %></td></tr>
+        <tr><td class="muted" style="padding:4px 0;">Type</td><td style="text-align:right;"><%= fmt(result.type) %></td></tr>
+        <% if (result.operator_name) { %><tr><td class="muted" style="padding:4px 0;">Operator</td><td style="text-align:right;"><%= result.operator_name %></td></tr><% } %>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h3 style="margin-top:0; font-size:14px;">Privacy &amp; Threat</h3>
+      <table style="width:100%; font-size:13px;">
+        <tr><td class="muted" style="padding:4px 0;">Proxy</td><td style="text-align:right; <%= result.is_proxy ? 'color:#f87171;font-weight:600;' : '' %>"><%= yn(result.is_proxy) %><%= result.proxy_type ? ' (' + result.proxy_type + ')' : '' %></td></tr>
+        <tr><td class="muted" style="padding:4px 0;">Hosting / DC</td><td style="text-align:right; <%= result.hosting ? 'color:#f59e0b;font-weight:600;' : '' %>"><%= yn(result.hosting) %></td></tr>
+        <% if (result.is_icloud_relay) { %><tr><td class="muted" style="padding:4px 0;">iCloud Relay</td><td style="text-align:right;">Yes</td></tr><% } %>
+        <% if (result.scraper) { %><tr><td class="muted" style="padding:4px 0;">Scraper</td><td style="text-align:right; color:#f87171;">Yes</td></tr><% } %>
+        <% if (result.operator_anonymity) { %><tr><td class="muted" style="padding:4px 0;">Anonymity</td><td style="text-align:right;"><%= result.operator_anonymity %></td></tr><% } %>
+        <tr><td class="muted" style="padding:4px 0;">Risk score</td><td style="text-align:right; color:<%= riskColor %>; font-weight:600;"><%= result.risk_score != null ? result.risk_score : '—' %></td></tr>
+        <% if (result.confidence != null) { %><tr><td class="muted" style="padding:4px 0;">Confidence</td><td style="text-align:right;"><%= result.confidence %></td></tr><% } %>
+      </table>
+    </section>
+  </div>
+
+  <details style="margin-top:16px;">
+    <summary style="cursor:pointer; font-weight:600; font-size:13px;">Raw provider response</summary>
+    <pre style="margin-top:10px; background:#0b1119; border:1px solid var(--border-subtle,#22303f); border-radius:8px; padding:12px; overflow:auto; font-size:12px; max-height:420px;"><%= JSON.stringify(result.raw || result, null, 2) %></pre>
+  </details>
+<% } else if (ran && !error) { %>
+  <p class="muted">No result.</p>
+<% } %>
+
+<%- include('../partials/footer') %>

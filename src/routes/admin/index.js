@@ -3219,6 +3219,53 @@ router.post('/uploads/:id/delete', async (req, res) => {
   res.redirect('/admin/uploads?flash=Deleted');
 });
 
+// ── Tools: IP Check ──────────────────────────────────────────────────────
+function isValidIp(ip) {
+  if (!ip) return false;
+  const s = String(ip).trim();
+  // IPv4
+  if (/^(\d{1,3})(\.\d{1,3}){3}$/.test(s)) {
+    return s.split('.').every((o) => Number(o) >= 0 && Number(o) <= 255);
+  }
+  // IPv6 (loose but safe — hex groups and ::)
+  return /^[0-9a-f:]+$/i.test(s) && s.includes(':') && s.length >= 3;
+}
+
+router.get('/tools/ip-check', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const hasProxycheck = !!process.env.PROXYCHECK_API_KEY;
+  const hasIplocate = !!process.env.IPLOCATE_API_KEY;
+
+  const ip = (req.query.ip || '').trim();
+  let provider = req.query.provider === 'iplocate' ? 'iplocate' : 'proxycheck';
+  // If the chosen provider has no key, fall to whichever is available.
+  if (provider === 'proxycheck' && !hasProxycheck && hasIplocate) provider = 'iplocate';
+  if (provider === 'iplocate' && !hasIplocate && hasProxycheck) provider = 'proxycheck';
+
+  let result = null, error = '', ran = false;
+  if (ip) {
+    ran = true;
+    if (!isValidIp(ip)) {
+      error = 'That does not look like a valid IPv4 or IPv6 address.';
+    } else if ((provider === 'proxycheck' && !hasProxycheck) || (provider === 'iplocate' && !hasIplocate)) {
+      error = `The ${provider} API key is not configured.`;
+    } else {
+      try {
+        const mod = provider === 'iplocate' ? require('../../lib/iplocate') : require('../../lib/proxycheck');
+        result = await mod.lookup(ip);
+        if (!result) error = `No data returned for ${ip} from ${provider} (the IP may be unknown, or the provider is unavailable).`;
+      } catch (e) {
+        logger.error('ip_check_failed', { ip, provider, err: e.message });
+        error = 'Lookup failed: ' + e.message;
+      }
+    }
+  }
+
+  res.render('admin/tools_ip_check', {
+    ws, page: 'tools', ip, provider, hasProxycheck, hasIplocate, result, error, ran,
+  });
+});
+
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);
   res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });
