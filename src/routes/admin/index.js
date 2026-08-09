@@ -43,6 +43,7 @@ router.get('/logout', logout);
 
 // --- Everything below this gate requires authentication ---
 router.use(requireAdmin);
+router.use('/analytics', require('./analytics'));
 
 // Admin pages must never be cached (would leak session-specific data via shared CDN cache)
 router.use((req, res, next) => {

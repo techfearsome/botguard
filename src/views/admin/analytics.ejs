@@ -1,0 +1,117 @@
+<%- include('../partials/header', { ws, page, title: 'Analytics - BotGuard' }) %>
+
+<%
+  function qs(overrides){
+    var p = Object.assign({}, query, overrides);
+    return Object.keys(p).filter(function(k){return p[k]!=='' && p[k]!=null;}).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(p[k]);}).join('&');
+  }
+  var overallCvr = totals.clicks ? (100*totals.conversions/totals.clicks) : 0;
+%>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+  <div>
+    <h1 style="margin-bottom:4px;">UTM &amp; ValueTrack Analytics</h1>
+    <p class="muted">Which placements, campaigns, and devices drive conversions. Conversion-rate analysis (no ad-spend data, so this is CVR, not CPA).</p>
+  </div>
+  <a href="/admin/analytics/export.csv?<%= qs({}) %>" class="btn btn-small">Export CSV</a>
+</div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px;">
+  <section class="panel" style="text-align:center;"><div class="muted" style="font-size:12px;">Clicks</div><div style="font-size:24px; font-weight:700;"><%= totals.clicks.toLocaleString() %></div></section>
+  <section class="panel" style="text-align:center;"><div class="muted" style="font-size:12px;">Conversions</div><div style="font-size:24px; font-weight:700;"><%= totals.conversions.toLocaleString() %></div></section>
+  <section class="panel" style="text-align:center;"><div class="muted" style="font-size:12px;">Overall CVR</div><div style="font-size:24px; font-weight:700;"><%= overallCvr.toFixed(2) %>%</div></section>
+</div>
+
+<section class="panel" style="margin-bottom:16px;">
+  <form method="GET" action="/admin/analytics" style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Group by</label>
+      <select name="dim">
+        <% Object.keys(dimensions).forEach(function(k){ %>
+          <option value="<%= k %>" <%= dimKey===k?'selected':'' %>><%= dimensions[k].label %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Date range</label>
+      <select name="range" onchange="document.getElementById('an-custom').style.display=this.value==='custom'?'inline-flex':'none';">
+        <% datePresets.forEach(function(p){ %>
+          <option value="<%= p[0] %>" <%= preset===p[0]?'selected':'' %>><%= p[1] %></option>
+        <% }); %>
+      </select>
+    </div>
+    <span id="an-custom" style="<%= preset==='custom'?'':'display:none;' %> gap:6px; align-items:center;">
+      <input type="date" name="date_from" value="<%= query.date_from || '' %>">
+      <input type="date" name="date_to" value="<%= query.date_to || '' %>">
+    </span>
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Campaign</label>
+      <select name="campaign">
+        <option value="">All</option>
+        <% campaigns.forEach(function(c){ %>
+          <option value="<%= c._id %>" <%= query.campaign===String(c._id)?'selected':'' %>><%= c.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Source</label>
+      <select name="source">
+        <option value="">All</option>
+        <% sources.forEach(function(s){ %><option value="<%= s %>" <%= query.source===s?'selected':'' %>><%= s %></option><% }); %>
+      </select>
+    </div>
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Medium</label>
+      <select name="medium">
+        <option value="">All</option>
+        <% mediums.forEach(function(m){ %><option value="<%= m %>" <%= query.medium===m?'selected':'' %>><%= m %></option><% }); %>
+      </select>
+    </div>
+    <div>
+      <label style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px;">Min clicks to flag</label>
+      <input type="number" name="min" value="<%= minClicks %>" min="1" style="width:80px;">
+    </div>
+    <button type="submit" class="btn btn-primary">Apply</button>
+    <a href="/admin/analytics" class="btn">Reset</a>
+  </form>
+</section>
+
+<section class="panel">
+  <% if (rows.length === 0) { %>
+    <p class="muted">No data for these filters. Try a wider date range.</p>
+  <% } else { %>
+    <p class="muted" style="font-size:12px; margin-bottom:10px;">Rows flagged <span style="color:#f87171; font-weight:600;">exclude?</span> have at least <%= minClicks %> clicks and zero conversions — candidates to exclude in your ad platform. Small samples are shown but not flagged.</p>
+    <div style="overflow:auto; border:1px solid var(--border-subtle,#22303f); border-radius:8px;">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead style="position:sticky; top:0; background:var(--color-background-secondary,#0f1720);">
+          <tr style="text-align:left;">
+            <th style="padding:8px 10px;"><%= dimensions[dimKey].label %></th>
+            <th style="padding:8px 10px; text-align:right;">Clicks</th>
+            <th style="padding:8px 10px; text-align:right;">Conversions</th>
+            <th style="padding:8px 10px; text-align:right;">CVR</th>
+            <th style="padding:8px 10px;"></th>
+          </tr>
+        </thead>
+        <tbody>
+        <% rows.forEach(function(r){
+             var cvrPct = (r.cvr*100);
+             var cvrColor = cvrPct >= 5 ? '#34d399' : (cvrPct > 0 ? '#f59e0b' : '#f87171');
+        %>
+          <tr style="border-top:1px solid var(--border-subtle,#1c2733); <%= r.exclude_candidate ? 'background:rgba(248,113,113,0.06);' : '' %>">
+            <td style="padding:6px 10px;">
+              <span title="<%= r._id %>"><%= r.label %></span>
+              <% if (String(r.label) !== String(r._id)) { %><br><span class="muted" style="font-size:11px; font-family:monospace;"><%= r._id %></span><% } %>
+            </td>
+            <td style="padding:6px 10px; text-align:right;"><%= r.clicks.toLocaleString() %></td>
+            <td style="padding:6px 10px; text-align:right;"><%= r.conversions.toLocaleString() %></td>
+            <td style="padding:6px 10px; text-align:right; color:<%= cvrColor %>; font-weight:600;"><%= cvrPct.toFixed(1) %>%</td>
+            <td style="padding:6px 10px;"><% if (r.exclude_candidate) { %><span style="color:#f87171; font-weight:600; font-size:12px;">exclude?</span><% } %></td>
+          </tr>
+        <% }); %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>
