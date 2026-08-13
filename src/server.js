@@ -218,77 +218,46 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal_error' });
 });
 
+// Single-process startup (used when CLUSTER_WORKERS=1 or clustering is off).
+// Runs everything: Mongo, background jobs, Express. In clustered mode, workers
+// use startWorker() instead and the master runs background jobs separately.
 async function start() {
   await mongoose.connect(process.env.MONGO_URI);
   logger.info('mongo_connected', { uri: process.env.MONGO_URI });
 
   await ensureDefaultWorkspace();
 
-  // One-time backfill of frequency labels onto existing data. This is
-  // idempotent — if every record is already labelled, it's a no-op. The
-  // first server boot after deploying the frequency-grading feature
-  // populates labels for any CIDRs that existed before the feature shipped;
-  // subsequent boots return early after a count check. Cost is one cheap
-  // `countDocuments` call when labels already exist.
   try {
     const { seedFrequencyLabels } = require('../scripts/seedFrequencyLabels');
     const result = await seedFrequencyLabels();
-    if (!result.skipped) {
-      logger.info('freq_label_backfill_complete', result);
-    }
-  } catch (e) {
-    logger.warn('freq_label_backfill_failed', { err: e.message });
-  }
+    if (!result.skipped) logger.info('freq_label_backfill_complete', result);
+  } catch (e) { logger.warn('freq_label_backfill_failed', { err: e.message }); }
 
-  // Start background CIDR intelligence worker — analyses click traffic
-  // every 60s and flags suspicious subnets for admin review.
-  // Fire-and-forget; errors are logged internally, never crash the server.
   try {
     const { startCidrAnalyser, startWeeklyRefresh } = require('./lib/cidrAnalyser');
     startCidrAnalyser();
-    // Weekly 7-day refresh — runs Sunday 23:59 server local time by
-    // default. Refreshes snapshot evidence and frequency labels with
-    // full week visibility, without touching live state owned by the
-    // 60s worker. Configurable via CIDR_WEEKLY_REFRESH_* env vars.
     startWeeklyRefresh();
-  } catch (e) {
-    logger.warn('cidr_analyser_start_failed', { err: e.message });
-  }
+  } catch (e) { logger.warn('cidr_analyser_start_failed', { err: e.message }); }
 
-  // Start dwell-time writeback — persists visit duration from LivePresence
-  // to Click documents so the CIDR analyser can score blocks by engagement.
   try {
     const { live } = require('./lib/livePresence');
     const { startDwellWriteback } = require('./lib/dwellWriteback');
     startDwellWriteback(live);
-  } catch (e) {
-    logger.warn('dwell_writeback_start_failed', { err: e.message });
-  }
+  } catch (e) { logger.warn('dwell_writeback_start_failed', { err: e.message }); }
 
   const port = Number(process.env.PORT) || 3000;
   const server = app.listen(port, () => {
     logger.info('server_started', { port, base_url: process.env.BASE_URL });
   });
 
-  // Graceful shutdown - critical for rolling deploys behind Coolify/Docker.
-  // When the orchestrator sends SIGTERM, we:
-  //   1. Stop accepting new connections
-  //   2. Let in-flight requests finish (up to 10s)
-  //   3. Close Mongo connection cleanly
-  //   4. Exit
-  // Without this, active visitors mid-request would see connection resets
-  // every time you redeploy.
   let shuttingDown = false;
   function shutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info('shutdown_started', { signal });
-
-    // Stop accepting new connections
     server.close((err) => {
       if (err) logger.error('server_close_error', { err: err.message });
       else logger.info('server_closed');
-      // Close Mongo last so any in-flight click writes can complete
       mongoose.connection.close(false).then(() => {
         logger.info('mongo_closed');
         process.exit(0);
@@ -297,8 +266,6 @@ async function start() {
         process.exit(1);
       });
     });
-
-    // Hard timeout - if we can't close gracefully in 10s, force exit
     setTimeout(() => {
       logger.error('shutdown_timeout_forcing_exit');
       process.exit(1);
@@ -308,7 +275,129 @@ async function start() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-start().catch((err) => {
-  logger.error('startup_failed', { err: err.message, stack: err.stack });
-  process.exit(1);
-});
+// ── Clustering ───────────────────────────────────────────────────────────
+// Use all available CPU cores so the single-threaded event loop isn't a
+// bottleneck under heavy traffic. Each worker is a full Express server
+// sharing the same port.
+//
+// Env:
+//   CLUSTER_WORKERS  — explicit worker count. Takes precedence over auto.
+//                      Set to 1 to disable clustering (single-process mode).
+//   (unset)          — auto-detect: min(os.cpus().length, 4).
+//
+// Background jobs (CIDR analyser, dwell writeback, frequency backfill) run
+// in the MASTER only so they aren't duplicated across workers.
+// ─────────────────────────────────────────────────────────────────────────
+
+const cluster = require('cluster');
+const os = require('os');
+
+function getWorkerCount() {
+  const env = parseInt(process.env.CLUSTER_WORKERS, 10);
+  if (Number.isFinite(env) && env >= 1) return env;
+  return Math.min(os.cpus().length, 4);
+}
+
+if (cluster.isPrimary) {
+  const workers = getWorkerCount();
+
+  if (workers <= 1) {
+    // Single-process mode — run everything in one process (previous behavior).
+    start().catch((err) => {
+      logger.error('startup_failed', { err: err.message, stack: err.stack });
+      process.exit(1);
+    });
+  } else {
+    logger.info('cluster_master', { pid: process.pid, workers });
+
+    // Master: run background jobs only (no Express/listen).
+    (async () => {
+      try {
+        await mongoose.connect(process.env.MONGO_URI);
+        logger.info('master_mongo_connected');
+        await ensureDefaultWorkspace();
+
+        // Frequency backfill (one-time, idempotent).
+        try {
+          const { seedFrequencyLabels } = require('../scripts/seedFrequencyLabels');
+          const result = await seedFrequencyLabels();
+          if (!result.skipped) logger.info('freq_label_backfill_complete', result);
+        } catch (e) { logger.warn('freq_label_backfill_failed', { err: e.message }); }
+
+        // CIDR intelligence + dwell writeback — master-only.
+        try {
+          const { startCidrAnalyser, startWeeklyRefresh } = require('./lib/cidrAnalyser');
+          startCidrAnalyser();
+          startWeeklyRefresh();
+        } catch (e) { logger.warn('cidr_analyser_start_failed', { err: e.message }); }
+
+        try {
+          const { live } = require('./lib/livePresence');
+          const { startDwellWriteback } = require('./lib/dwellWriteback');
+          startDwellWriteback(live);
+        } catch (e) { logger.warn('dwell_writeback_start_failed', { err: e.message }); }
+      } catch (err) {
+        logger.error('master_startup_failed', { err: err.message });
+        process.exit(1);
+      }
+    })();
+
+    // Fork workers.
+    for (let i = 0; i < workers; i++) cluster.fork();
+
+    // Restart crashed workers automatically.
+    cluster.on('exit', (worker, code, signal) => {
+      logger.warn('cluster_worker_exit', { pid: worker.process.pid, code, signal });
+      if (code !== 0) {
+        logger.info('cluster_worker_respawn');
+        cluster.fork();
+      }
+    });
+
+    // Graceful shutdown: forward SIGTERM to workers, then exit master.
+    ['SIGTERM', 'SIGINT'].forEach((sig) => {
+      process.on(sig, () => {
+        logger.info('cluster_master_shutdown', { signal: sig });
+        for (const id in cluster.workers) {
+          cluster.workers[id].process.kill(sig);
+        }
+        setTimeout(() => process.exit(0), 12000).unref();
+      });
+    });
+  }
+} else {
+  // Worker: run Express (skip background jobs — master handles those).
+  startWorker().catch((err) => {
+    logger.error('worker_startup_failed', { err: err.message, stack: err.stack });
+    process.exit(1);
+  });
+}
+
+/**
+ * Worker-only startup: connect Mongo, listen on the port, handle shutdown.
+ * Skips background jobs (CIDR, dwell, backfill) — those run in the master.
+ */
+async function startWorker() {
+  await mongoose.connect(process.env.MONGO_URI);
+  logger.info('worker_mongo_connected', { pid: process.pid });
+
+  const port = Number(process.env.PORT) || 3000;
+  const server = app.listen(port, () => {
+    logger.info('worker_started', { pid: process.pid, port });
+  });
+
+  let shuttingDown = false;
+  function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info('worker_shutdown', { pid: process.pid, signal });
+    server.close((err) => {
+      if (err) logger.error('server_close_error', { err: err.message });
+      mongoose.connection.close(false).then(() => process.exit(0))
+        .catch(() => process.exit(1));
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
