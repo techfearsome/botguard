@@ -218,11 +218,33 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal_error' });
 });
 
+// ── Mongo connection pool tuning ─────────────────────────────────────────
+// Explicit, bounded settings so heavy traffic doesn't exhaust connections or
+// hang on a slow Mongo. With clustering, each worker gets its own pool, so
+// the total is workers × maxPoolSize (e.g. 4 × 20 = 80 — well within Mongo's
+// default 128 max).
+//
+// Env overrides (optional):
+//   MONGO_POOL_SIZE             — connections per process (default 20)
+//   MONGO_SERVER_SELECTION_MS   — how long to wait for a primary (default 5000)
+//   MONGO_SOCKET_TIMEOUT_MS    — idle socket timeout (default 45000)
+// ─────────────────────────────────────────────────────────────────────────
+function mongoOptions() {
+  return {
+    maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE, 10) || 20,
+    minPoolSize: 2,
+    serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_MS, 10) || 5000,
+    socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 45000,
+    heartbeatFrequencyMS: 10000,
+    retryWrites: true,
+  };
+}
+
 // Single-process startup (used when CLUSTER_WORKERS=1 or clustering is off).
 // Runs everything: Mongo, background jobs, Express. In clustered mode, workers
 // use startWorker() instead and the master runs background jobs separately.
 async function start() {
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect(process.env.MONGO_URI, mongoOptions());
   logger.info('mongo_connected', { uri: process.env.MONGO_URI });
 
   await ensureDefaultWorkspace();
@@ -313,7 +335,7 @@ if (cluster.isPrimary) {
     // Master: run background jobs only (no Express/listen).
     (async () => {
       try {
-        await mongoose.connect(process.env.MONGO_URI);
+        await mongoose.connect(process.env.MONGO_URI, mongoOptions());
         logger.info('master_mongo_connected');
         await ensureDefaultWorkspace();
 
@@ -378,7 +400,7 @@ if (cluster.isPrimary) {
  * Skips background jobs (CIDR, dwell, backfill) — those run in the master.
  */
 async function startWorker() {
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect(process.env.MONGO_URI, mongoOptions());
   logger.info('worker_mongo_connected', { pid: process.pid });
 
   const port = Number(process.env.PORT) || 3000;
