@@ -29,16 +29,16 @@ const RISK_ANONYMIZER = 90;   // proxy / vpn / tor / abuser
 const RISK_HOSTING = 50;      // datacenter / hosting only
 const RISK_CLEAN = 0;
 
-const memCache = new Map();
-function cacheGet(ip) {
-  const entry = memCache.get(ip);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL_MS) { memCache.delete(ip); return null; }
-  return entry.data;
+// Shared Redis-first enrichment cache (same as ProxyCheck — falls back to
+// in-memory when Redis is down).
+const enrichCache = require('./enrichCache');
+
+async function cacheGet(ip) {
+  return enrichCache.get('il:' + ip);
 }
-function cacheSet(ip, data) {
-  if (memCache.size >= CACHE_MAX_SIZE) memCache.delete(memCache.keys().next().value);
-  memCache.set(ip, { data, ts: Date.now() });
+
+async function cacheSet(ip, data) {
+  await enrichCache.set('il:' + ip, data);
 }
 
 // Map an IPLocate response to ProxyCheck's normalized shape.
@@ -100,7 +100,7 @@ function normalize(ip, raw) {
 async function lookup(ip) {
   if (!ip) return null;
 
-  const cached = cacheGet(ip);
+  const cached = await cacheGet(ip);
   if (cached) return { ...cached, source: 'iplocate-cache' };
 
   const apiKey = process.env.IPLOCATE_API_KEY;
@@ -124,7 +124,7 @@ async function lookup(ip) {
     }
 
     const normalized = normalize(ip, data);
-    cacheSet(ip, normalized);
+    await cacheSet(ip, normalized);
     return { ...normalized, source: 'iplocate' };
   } catch (err) {
     logger.warn('iplocate_lookup_failed', { ip, err: err.message, code: err.code });
@@ -132,6 +132,6 @@ async function lookup(ip) {
   }
 }
 
-function clearCache() { memCache.clear(); }
+function clearCache() { enrichCache.clear(); }
 
 module.exports = { lookup, clearCache, normalize };

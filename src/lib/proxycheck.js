@@ -61,26 +61,17 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000;  // 6 hours
 const CACHE_MAX_SIZE = 50_000;
 const CALL_TIMEOUT_MS = 3500;             // bumped up - real-world API calls from distant regions can be ~1-2s
 
-const memCache = new Map();
+// Shared Redis-first enrichment cache (falls back to in-memory when Redis is
+// down). Replaces the old per-process Map so enrichment survives restarts and
+// is shared across cluster workers.
+const enrichCache = require('./enrichCache');
 
-function cacheGet(ip) {
-  const entry = memCache.get(ip);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL_MS) {
-    memCache.delete(ip);
-    return null;
-  }
-  memCache.delete(ip);
-  memCache.set(ip, entry);    // refresh LRU position
-  return entry.data;
+async function cacheGet(ip) {
+  return enrichCache.get('pc:' + ip);
 }
 
-function cacheSet(ip, data) {
-  if (memCache.size >= CACHE_MAX_SIZE) {
-    const firstKey = memCache.keys().next().value;
-    memCache.delete(firstKey);
-  }
-  memCache.set(ip, { ts: Date.now(), data });
+async function cacheSet(ip, data) {
+  await enrichCache.set('pc:' + ip, data);
 }
 
 /**
@@ -110,7 +101,7 @@ function cacheSet(ip, data) {
 async function lookup(ip) {
   if (!ip) return null;
 
-  const cached = cacheGet(ip);
+  const cached = await cacheGet(ip);
   if (cached) return { ...cached, source: 'cache' };
 
   const apiKey = process.env.PROXYCHECK_API_KEY;
@@ -143,7 +134,7 @@ async function lookup(ip) {
         message: data.message || null,
       });
       // Cache "no data" briefly so we don't hammer the API on errors
-      cacheSet(ip, null);
+      await cacheSet(ip, null);
       return null;
     }
 
@@ -154,7 +145,7 @@ async function lookup(ip) {
     }
 
     const normalized = normalize(ip, ipData);
-    cacheSet(ip, normalized);
+    await cacheSet(ip, normalized);
     return { ...normalized, source: 'proxycheck' };
   } catch (err) {
     // axios timeout or network error
@@ -240,7 +231,7 @@ function normalize(ip, raw) {
 }
 
 function clearCache() {
-  memCache.clear();
+  enrichCache.clear();
 }
 
 module.exports = { lookup, clearCache, normalize };
