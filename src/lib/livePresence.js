@@ -164,6 +164,7 @@ class LivePresence extends EventEmitter {
       in_app_browser: entry.in_app_browser || null,
       utm: entry.utm || {},
       decision: entry.decision || null,
+      worker_id: entry.worker_id || 0,
       arrived_at: existing ? existing.arrived_at : now,
       last_seen_at: now,
       converted: existing ? existing.converted : false,

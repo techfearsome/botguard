@@ -722,6 +722,7 @@ function applyPageTracking(html, workspace) {
 function registerLiveVisitor(doc, campaign, workspace) {
   if (!doc || !doc.click_id) return;
   try {
+    const cluster = require('cluster');
     live.arrived({
       click_id: doc.click_id,
       workspace_id: workspace?._id,
@@ -740,6 +741,7 @@ function registerLiveVisitor(doc, campaign, workspace) {
       in_app_browser: doc.in_app_browser,
       utm: doc.utm,
       decision: doc.decision,
+      worker_id: cluster.isWorker ? cluster.worker.id : 0,
     });
   } catch (err) {
     // Live presence is best-effort - never let it break a /go response
