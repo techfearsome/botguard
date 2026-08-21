@@ -270,6 +270,13 @@ async function start() {
   const port = Number(process.env.PORT) || 3000;
   const server = app.listen(port, () => {
     logger.info('server_started', { port, base_url: process.env.BASE_URL });
+    // Start live-presence sync (Redis pub/sub) so the admin dashboard
+    // shows all visitors even if clustering is enabled later.
+    try {
+      const { live } = require('./lib/livePresence');
+      const liveSync = require('./lib/liveSync');
+      liveSync.start(live);
+    } catch (e) { logger.debug('live_sync_skip', { err: e.message }); }
   });
 
   let shuttingDown = false;
@@ -406,6 +413,13 @@ async function startWorker() {
   const port = Number(process.env.PORT) || 3000;
   const server = app.listen(port, () => {
     logger.info('worker_started', { pid: process.pid, port });
+    // Start live-presence sync — syncs visitors across cluster workers
+    // via Redis pub/sub so the admin live dashboard sees all visitors.
+    try {
+      const { live } = require('./lib/livePresence');
+      const liveSync = require('./lib/liveSync');
+      liveSync.start(live);
+    } catch (e) { logger.debug('live_sync_skip', { err: e.message }); }
   });
 
   let shuttingDown = false;
