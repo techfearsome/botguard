@@ -78,52 +78,18 @@ async function handleClick(req, res, opts) {
     const doc = buildClickDoc({ req, workspace, campaign });
     const deviceClass = doc.ua_parsed?.device_class || 'other';
 
-    // --- Campaign status gate (runs FIRST, before UTM gate / ProxyCheck) ---
-    // A paused campaign is "ready but disabled" - all traffic skips the filter
-    // chain and goes to the safe page. This means:
-    //   - No ProxyCheck call (saves the external HTTP cost)
-    //   - No UTM/country/proxy gates run
-    //   - No filter chain runs
-    //   - No auto-conversion injection on the safe page (we never inject on safe)
-    //   - The click is still logged with decision='block', reason='campaign_paused'
-    //     so admins can see paused-campaign traffic in /admin/clicks and /admin/live
-    //
-    // Note: 'archived' campaigns are filtered out at lookup time (return 404).
-    // Only 'paused' falls through to here.
-    if (campaign.status === 'paused') {
-      doc.scores = {
-        network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
-        total: 0,
-        profile_used: campaign.source_profile,
-        flags: ['campaign_paused'],
-      };
-      doc.decision = 'block';
-      doc.decision_reason = 'campaign_paused';
-      doc.mode_at_decision = 'enforce';     // pause is always enforcing - not a scored decision
-      doc.page_rendered = 'safe';
-
-      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
-      const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
-      if (safePage) doc.landing_page_id = safePage._id;
-
-      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-      registerLiveVisitor(doc, campaign, workspace);
-      setGoCookies(req, res, doc);
-      setNoCacheHeaders(req, res, campaign);
-      return res.status(200).type('html').send(applyPageTracking(html, workspace));
-    }
-
-    // --- Ad schedule gate (runs after manual pause, before filter chain) ---
-    // If the campaign has an ad_schedule enabled and the current moment falls
-    // outside all scheduled windows, behave exactly like a paused campaign
-    // (safe page, no filter chain, no enrichment cost). A manually-active
-    // campaign whose schedule says "off right now" is treated as schedule-
-    // paused. A manually-paused campaign is already caught above and never
-    // reaches here — so manual pause always overrides the schedule.
+    // --- Ad schedule gate (runs FIRST when enabled — overrides manual status) --
+    // When a campaign has an enabled schedule, the schedule is the authority:
+    //   - Inside a window  → campaign RUNS (even if status is 'paused')
+    //   - Outside all windows → campaign PAUSES (even if status is 'active')
+    // This lets you set a campaign to 'paused', enable a schedule, and the
+    // schedule will activate it during windows and pause it outside them.
+    // When no schedule is enabled, the manual status gate below applies as before.
     if (campaign.ad_schedule && campaign.ad_schedule.enabled) {
       const { isInSchedule } = require('../lib/campaignSchedule');
       const schedCheck = isInSchedule(campaign.ad_schedule);
       if (!schedCheck.inSchedule) {
+        // Outside all scheduled windows → pause (safe page).
         doc.scores = {
           network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
           total: 0,
@@ -145,6 +111,32 @@ async function handleClick(req, res, opts) {
         setNoCacheHeaders(req, res, campaign);
         return res.status(200).type('html').send(applyPageTracking(html, workspace));
       }
+      // Inside a scheduled window → proceed to the filter chain (skip the
+      // manual pause gate below — the schedule overrides it).
+    } else if (campaign.status === 'paused') {
+      // --- Manual pause gate (only when NO schedule is enabled) ---
+      // A paused campaign without a schedule behaves as before: all traffic
+      // goes to the safe page, no filter chain, no enrichment cost.
+      doc.scores = {
+        network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
+        total: 0,
+        profile_used: campaign.source_profile,
+        flags: ['campaign_paused'],
+      };
+      doc.decision = 'block';
+      doc.decision_reason = 'campaign_paused';
+      doc.mode_at_decision = 'enforce';
+      doc.page_rendered = 'safe';
+
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
+      if (safePage) doc.landing_page_id = safePage._id;
+
+      writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+      registerLiveVisitor(doc, campaign, workspace);
+      setGoCookies(req, res, doc);
+      setNoCacheHeaders(req, res, campaign);
+      return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
     // --- UTM gate (runs BEFORE the filter chain so we don't waste a ProxyCheck call) ---
