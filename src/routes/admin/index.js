@@ -188,6 +188,7 @@ router.post('/campaigns', async (req, res) => {
       },
       postback_url: body.postback_url || '',
       notes: body.notes || '',
+      ad_schedule: parseAdSchedule(body),
       campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
       redirect_url: (body.redirect_url || '').trim(),
       redirect_urls: parseRedirectUrls(body),
@@ -315,6 +316,27 @@ function parseAutoConversion(body) {
 // targeting. `bot_guard_devices` arrives as an array (multiple checked), a
 // string (one checked), or undefined (none checked) from the form parser.
 const GUARD_DEVICE_CLASSES = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
+// Parse the ad schedule from the campaign form. Multiple rules arrive as
+// parallel arrays (sched_day[], sched_start[], sched_end[]).
+function parseAdSchedule(body) {
+  const enabled = body.sched_enabled === '1' || body.sched_enabled === 'on';
+  const timezone = (body.sched_timezone || 'UTC').trim();
+  const rules = [];
+  if (enabled && body.sched_day) {
+    const days = Array.isArray(body.sched_day) ? body.sched_day : [body.sched_day];
+    const starts = Array.isArray(body.sched_start) ? body.sched_start : [body.sched_start || '00:00'];
+    const ends = Array.isArray(body.sched_end) ? body.sched_end : [body.sched_end || '23:59'];
+    for (let i = 0; i < days.length; i++) {
+      const day = parseInt(days[i], 10);
+      if (day < 0 || day > 6 || !Number.isFinite(day)) continue;
+      const start = /^\d{2}:\d{2}$/.test(starts[i] || '') ? starts[i] : '00:00';
+      const end = /^\d{2}:\d{2}$/.test(ends[i] || '') ? ends[i] : '23:59';
+      rules.push({ day, start, end });
+    }
+  }
+  return { enabled, timezone, rules };
+}
+
 function parseCampaignBotGuard(body) {
   let devices = body.bot_guard_devices;
   if (devices === undefined || devices === null) devices = [];
@@ -424,6 +446,7 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.bot_guard': parseCampaignBotGuard(body),
           postback_url: body.postback_url || '',
           notes: body.notes || '',
+          ad_schedule: parseAdSchedule(body),
           campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
           redirect_url: (body.redirect_url || '').trim(),
           redirect_urls: parseRedirectUrls(body),

@@ -138,6 +138,21 @@ const CampaignSchema = new mongoose.Schema({
   postback_url: String,
   conversion_pixel: String,
 
+  // ── Ad schedule (per-campaign time windows) ────────────────────────────
+  // When enabled, the campaign only serves traffic during the declared
+  // windows. Outside those windows it behaves as paused (safe page). OFF by
+  // default — campaign runs 24/7 unless explicitly scheduled.
+  // Manual status changes (pause/unpause) override the schedule.
+  ad_schedule: {
+    enabled: { type: Boolean, default: false },
+    timezone: { type: String, default: 'UTC' },  // IANA timezone for the rule times
+    rules: [{
+      day:   { type: Number, min: 0, max: 6 },   // 0=Sun, 1=Mon … 6=Sat
+      start: { type: String, default: '00:00' },  // HH:MM in the schedule timezone
+      end:   { type: String, default: '23:59' },  // HH:MM
+    }],
+  },
+
   // ── Campaign type ──────────────────────────────────────────────────
   // 'offer'    — default. Clean traffic sees the offer page (existing behavior).
   // 'redirect' — clean traffic that passes ALL configured checks (L1 gates +

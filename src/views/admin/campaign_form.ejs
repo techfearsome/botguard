@@ -534,6 +534,70 @@
     <input type="text" name="postback_url" value="<%= campaign?.postback_url || '' %>" placeholder="https://your-tracker.example.com/postback?clickid={click_id}">
   </div>
 
+  <%# ── Ad Schedule ─────────────────────────────────────────────────────── %>
+  <fieldset>
+    <legend style="font-weight:600; padding:0 6px;">Ad Schedule</legend>
+    <%
+      var sched = (campaign && campaign.ad_schedule) || { enabled: false, timezone: 'UTC', rules: [] };
+      var schedEnabled = !!sched.enabled;
+      var schedTz = sched.timezone || 'UTC';
+      var schedRules = Array.isArray(sched.rules) ? sched.rules : [];
+      var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    %>
+
+    <div class="form-row">
+      <label><input type="checkbox" name="sched_enabled" value="1" <%= schedEnabled ? 'checked' : '' %> onchange="document.getElementById('schedFields').style.display=this.checked?'block':'none';"> Enable ad schedule</label>
+      <small class="muted">When enabled, the campaign only serves traffic during the windows below. Outside those windows it behaves as paused (safe page). Manual pause/unpause overrides the schedule. Off by default = campaign runs 24/7.</small>
+    </div>
+
+    <div id="schedFields" style="display:<%= schedEnabled ? 'block' : 'none' %>;">
+      <div class="form-row">
+        <label>Schedule timezone</label>
+        <input type="text" name="sched_timezone" value="<%= schedTz %>" placeholder="e.g. America/New_York, Asia/Kolkata, UTC" style="max-width:320px;">
+        <small class="muted">IANA timezone name. The UI shows your browser's local time — enter the timezone your schedule is in. <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank">List</a></small>
+      </div>
+
+      <div class="form-row">
+        <label>Run windows (times in the timezone above)</label>
+        <small class="muted" style="display:block; margin-bottom:8px;">Add one or more windows. The campaign runs during ANY matching window. For cross-midnight (e.g. 20:30 to 02:00), add two rules: one for 20:30–00:00 and another for 00:00–02:00 (same as Google Ads).</small>
+        <div id="schedRulesContainer">
+          <% if (schedRules.length === 0) schedRules = [{day:1, start:'00:00', end:'23:59'}]; %>
+          <% schedRules.forEach(function(r, i){ %>
+            <div class="sched-rule" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+              <select name="sched_day">
+                <% dayNames.forEach(function(dn, di){ %>
+                  <option value="<%= di %>" <%= r.day === di ? 'selected' : '' %>><%= dn %></option>
+                <% }); %>
+              </select>
+              <input type="time" name="sched_start" value="<%= r.start || '00:00' %>" style="width:110px;">
+              <span>to</span>
+              <input type="time" name="sched_end" value="<%= r.end || '23:59' %>" style="width:110px;">
+              <button type="button" class="btn btn-small" onclick="this.parentNode.remove();" style="color:#f87171;">×</button>
+            </div>
+          <% }); %>
+        </div>
+        <button type="button" class="btn btn-small" onclick="addSchedRule()">+ Add window</button>
+      </div>
+    </div>
+
+    <script>
+    function addSchedRule() {
+      var c = document.getElementById('schedRulesContainer');
+      var div = document.createElement('div');
+      div.className = 'sched-rule';
+      div.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:6px;';
+      var days = <%= JSON.stringify(dayNames) %>;
+      var opts = days.map(function(d,i){return '<option value="'+i+'">'+d+'</option>';}).join('');
+      div.innerHTML = '<select name="sched_day">'+opts+'</select>'
+        + '<input type="time" name="sched_start" value="00:00" style="width:110px;">'
+        + '<span>to</span>'
+        + '<input type="time" name="sched_end" value="23:59" style="width:110px;">'
+        + '<button type="button" class="btn btn-small" onclick="this.parentNode.remove();" style="color:#f87171;">×</button>';
+      c.appendChild(div);
+    }
+    </script>
+  </fieldset>
+
   <div class="form-row">
     <label>Notes</label>
     <textarea name="notes" rows="3"><%= campaign?.notes || '' %></textarea>

@@ -113,6 +113,40 @@ async function handleClick(req, res, opts) {
       return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
+    // --- Ad schedule gate (runs after manual pause, before filter chain) ---
+    // If the campaign has an ad_schedule enabled and the current moment falls
+    // outside all scheduled windows, behave exactly like a paused campaign
+    // (safe page, no filter chain, no enrichment cost). A manually-active
+    // campaign whose schedule says "off right now" is treated as schedule-
+    // paused. A manually-paused campaign is already caught above and never
+    // reaches here — so manual pause always overrides the schedule.
+    if (campaign.ad_schedule && campaign.ad_schedule.enabled) {
+      const { isInSchedule } = require('../lib/campaignSchedule');
+      const schedCheck = isInSchedule(campaign.ad_schedule);
+      if (!schedCheck.inSchedule) {
+        doc.scores = {
+          network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
+          total: 0,
+          profile_used: campaign.source_profile,
+          flags: ['schedule_paused'],
+        };
+        doc.decision = 'block';
+        doc.decision_reason = 'schedule_paused';
+        doc.mode_at_decision = 'enforce';
+        doc.page_rendered = 'safe';
+
+        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+        const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
+        if (safePage) doc.landing_page_id = safePage._id;
+
+        writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
+        registerLiveVisitor(doc, campaign, workspace);
+        setGoCookies(req, res, doc);
+        setNoCacheHeaders(req, res, campaign);
+        return res.status(200).type('html').send(applyPageTracking(html, workspace));
+      }
+    }
+
     // --- UTM gate (runs BEFORE the filter chain so we don't waste a ProxyCheck call) ---
     const gateResult = utmGateCheck({ utm: doc.utm, campaign });
     if (gateResult.blocked) {
