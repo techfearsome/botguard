@@ -581,12 +581,20 @@
     </div>
 
     <script>
+    // Auto-detect the browser's timezone and prefill if the field is empty or 'UTC'.
+    (function() {
+      var tzField = document.querySelector('input[name="sched_timezone"]');
+      if (tzField && (!tzField.value || tzField.value === 'UTC')) {
+        try { tzField.value = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e) {}
+      }
+    })();
+
     function addSchedRule() {
       var c = document.getElementById('schedRulesContainer');
       var div = document.createElement('div');
       div.className = 'sched-rule';
       div.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:6px;';
-      var days = <%= JSON.stringify(dayNames) %>;
+      var days = <%- JSON.stringify(dayNames) %>;
       var opts = days.map(function(d,i){return '<option value="'+i+'">'+d+'</option>';}).join('');
       div.innerHTML = '<select name="sched_day">'+opts+'</select>'
         + '<input type="time" name="sched_start" value="00:00" style="width:110px;">'
