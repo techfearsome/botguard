@@ -55,9 +55,9 @@
     <% }) %>
   </select>
 
-  <input type="text" name="source" placeholder="utm_source" value="<%= query.source || '' %>">
-
-  <input type="text" name="click_id" placeholder="gclid/wbraid/gbraid/fbclid/msclkid" value="<%= query.click_id || '' %>" title="Search any ad-platform click ID. Case-sensitive exact match.">
+  <input type="text" name="source" placeholder="Source (e.g. google, hilltop)" value="<%= query.source || '' %>" title="Filter by utm_source value">
+  <input type="text" name="medium" placeholder="Medium (e.g. cpc)" value="<%= query.medium || '' %>" title="Filter by utm_medium value">
+  <input type="text" name="click_id" placeholder="Click ID (gclid/fbclid/…)" value="<%= query.click_id || '' %>" title="Search any ad-platform click ID (exact match)">
 
   <button type="submit" class="btn">Filter</button>
   <a href="/admin/clicks" class="btn">Reset</a>

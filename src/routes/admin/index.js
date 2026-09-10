@@ -826,7 +826,8 @@ function buildClicksFilter(req, ws) {
   const filter = { workspace_id: ws._id };
   if (req.query.campaign) filter.campaign_id = req.query.campaign;
   if (req.query.decision) filter.decision = req.query.decision;
-  if (req.query.source) filter['utm.source'] = req.query.source;
+  if (req.query.source) filter['utm.source'] = new RegExp(req.query.source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  if (req.query.medium) filter['utm.medium'] = new RegExp(req.query.medium.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
   // Click-ID search: try the value against all five ad-platform identifiers
   // simultaneously. Useful when debugging "did Google ever send us a click
