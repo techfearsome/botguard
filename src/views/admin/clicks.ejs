@@ -62,55 +62,57 @@
   </div>
 
   <div id="adv-filters" style="display:<%= (query.source||query.medium||query.utm_campaign||query.utm_content||query.utm_term||query.click_id||query.vt_campaignid||query.vt_adgroupid||query.vt_creative||query.vt_keyword||query.vt_network||query.vt_device||query.vt_matchtype||query.vt_placement||query.vt_tm||query.vt_ap||query.country||query.ip) ? 'block' : 'none' %>; margin-top:14px; border-top:1px solid var(--border-subtle); padding-top:14px;">
-    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px; font-weight:600;">UTM Parameters</div>
-    <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; margin-bottom:14px;">
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Source</label><input type="text" name="source" placeholder="e.g. google, hilltop" value="<%= query.source || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Medium</label><input type="text" name="medium" placeholder="e.g. cpc, display_ads" value="<%= query.medium || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Campaign</label><input type="text" name="utm_campaign" placeholder="e.g. classes" value="<%= query.utm_campaign || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Content</label><input type="text" name="utm_content" placeholder="e.g. placement" value="<%= query.utm_content || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Term</label><input type="text" name="utm_term" placeholder="e.g. cooking school" value="<%= query.utm_term || '' %>"></div>
+    <style>.adv-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}.adv-grid label{display:block;font-size:11px;color:var(--text-tertiary);margin-bottom:3px;}.adv-grid input,.adv-grid select{width:100%!important;box-sizing:border-box;font-size:13px;padding:7px 10px;}@media(max-width:900px){.adv-grid{grid-template-columns:repeat(2,1fr);}}@media(max-width:500px){.adv-grid{grid-template-columns:1fr;}}</style>
+
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">UTM Parameters</div>
+    <div class="adv-grid">
+      <div><label>Source</label><input type="text" name="source" placeholder="e.g. google, hilltop" value="<%= query.source || '' %>"></div>
+      <div><label>Medium</label><input type="text" name="medium" placeholder="e.g. cpc, display_ads" value="<%= query.medium || '' %>"></div>
+      <div><label>Campaign</label><input type="text" name="utm_campaign" placeholder="e.g. classes" value="<%= query.utm_campaign || '' %>"></div>
+      <div><label>Content</label><input type="text" name="utm_content" placeholder="e.g. placement" value="<%= query.utm_content || '' %>"></div>
+      <div><label>Term</label><input type="text" name="utm_term" placeholder="e.g. cooking school" value="<%= query.utm_term || '' %>"></div>
     </div>
 
-    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px; font-weight:600;">ValueTrack (Google Ads)</div>
-    <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; margin-bottom:14px;">
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Campaign ID</label><input type="text" name="vt_campaignid" placeholder="e.g. 24040619516" value="<%= query.vt_campaignid || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Ad Group ID</label><input type="text" name="vt_adgroupid" placeholder="e.g. 201522912914" value="<%= query.vt_adgroupid || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Creative / Ad ID</label><input type="text" name="vt_creative" placeholder="e.g. 817167984708" value="<%= query.vt_creative || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Keyword</label><input type="text" name="vt_keyword" placeholder="e.g. cooking school" value="<%= query.vt_keyword || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Network</label>
-        <select name="vt_network" style="width:100%;">
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">ValueTrack (Google Ads)</div>
+    <div class="adv-grid">
+      <div><label>Campaign ID</label><input type="text" name="vt_campaignid" placeholder="e.g. 24040619516" value="<%= query.vt_campaignid || '' %>"></div>
+      <div><label>Ad Group ID</label><input type="text" name="vt_adgroupid" placeholder="e.g. 201522912914" value="<%= query.vt_adgroupid || '' %>"></div>
+      <div><label>Creative / Ad ID</label><input type="text" name="vt_creative" placeholder="e.g. 817167984708" value="<%= query.vt_creative || '' %>"></div>
+      <div><label>Keyword</label><input type="text" name="vt_keyword" placeholder="e.g. cooking school" value="<%= query.vt_keyword || '' %>"></div>
+      <div><label>Network</label>
+        <select name="vt_network">
           <option value="">Any</option>
           <% [['g','Search'],['s','Search partner'],['d','Display'],['ytv','YouTube'],['x','Cross-network']].forEach(n => { %>
             <option value="<%= n[0] %>" <%= query.vt_network === n[0] ? 'selected' : '' %>><%= n[1] %> (<%= n[0] %>)</option>
           <% }) %>
         </select>
       </div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Device</label>
-        <select name="vt_device" style="width:100%;">
+      <div><label>Device</label>
+        <select name="vt_device">
           <option value="">Any</option>
           <% [['m','Mobile'],['t','Tablet'],['c','Computer']].forEach(d => { %>
             <option value="<%= d[0] %>" <%= query.vt_device === d[0] ? 'selected' : '' %>><%= d[1] %> (<%= d[0] %>)</option>
           <% }) %>
         </select>
       </div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Match type</label>
-        <select name="vt_matchtype" style="width:100%;">
+      <div><label>Match type</label>
+        <select name="vt_matchtype">
           <option value="">Any</option>
           <% [['e','Exact'],['p','Phrase'],['b','Broad']].forEach(m => { %>
             <option value="<%= m[0] %>" <%= query.vt_matchtype === m[0] ? 'selected' : '' %>><%= m[1] %> (<%= m[0] %>)</option>
           <% }) %>
         </select>
       </div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Placement</label><input type="text" name="vt_placement" placeholder="e.g. mobileapp::1-…" value="<%= query.vt_placement || '' %>"></div>
+      <div><label>Placement</label><input type="text" name="vt_placement" placeholder="e.g. mobileapp::1-…" value="<%= query.vt_placement || '' %>"></div>
     </div>
 
-    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px; font-weight:600;">Custom Tracking &amp; Click IDs</div>
-    <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; margin-bottom:14px;">
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Tracking Marker (tm)</label><input type="text" name="vt_tm" placeholder="e.g. tt" value="<%= query.vt_tm || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Ad Platform (ap)</label><input type="text" name="vt_ap" placeholder="e.g. gads" value="<%= query.vt_ap || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Click ID (gclid/fbclid/…)</label><input type="text" name="click_id" placeholder="Exact match" value="<%= query.click_id || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">Country</label><input type="text" name="country" placeholder="e.g. US, IN" value="<%= query.country || '' %>"></div>
-      <div><label style="font-size:11px; color:var(--text-tertiary);">IP address</label><input type="text" name="ip" placeholder="Exact IP" value="<%= query.ip || '' %>"></div>
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">Custom Tracking &amp; Click IDs</div>
+    <div class="adv-grid">
+      <div><label>Tracking Marker (tm)</label><input type="text" name="vt_tm" placeholder="e.g. tt" value="<%= query.vt_tm || '' %>"></div>
+      <div><label>Ad Platform (ap)</label><input type="text" name="vt_ap" placeholder="e.g. gads" value="<%= query.vt_ap || '' %>"></div>
+      <div><label>Click ID (gclid/fbclid/…)</label><input type="text" name="click_id" placeholder="Exact match" value="<%= query.click_id || '' %>"></div>
+      <div><label>Country</label><input type="text" name="country" placeholder="e.g. US, IN" value="<%= query.country || '' %>"></div>
+      <div><label>IP address</label><input type="text" name="ip" placeholder="Exact IP" value="<%= query.ip || '' %>"></div>
     </div>
   </div>
 </form>
