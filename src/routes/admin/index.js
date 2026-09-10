@@ -826,13 +826,36 @@ function buildClicksFilter(req, ws) {
   const filter = { workspace_id: ws._id };
   if (req.query.campaign) filter.campaign_id = req.query.campaign;
   if (req.query.decision) filter.decision = req.query.decision;
-  if (req.query.source) filter['utm.source'] = new RegExp(req.query.source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-  if (req.query.medium) filter['utm.medium'] = new RegExp(req.query.medium.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
-  // Click-ID search: try the value against all five ad-platform identifiers
-  // simultaneously. Useful when debugging "did Google ever send us a click
-  // with this gclid?" without the admin having to know which platform's
-  // identifier it is. Case-sensitive match - these IDs are case-sensitive.
+  // Helper: case-insensitive substring regex (safe-escaped).
+  const ilike = (v) => new RegExp(v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+
+  // UTM parameters
+  if (req.query.source) filter['utm.source'] = ilike(req.query.source);
+  if (req.query.medium) filter['utm.medium'] = ilike(req.query.medium);
+  if (req.query.utm_campaign) filter['utm.campaign'] = ilike(req.query.utm_campaign);
+  if (req.query.utm_content) filter['utm.content'] = ilike(req.query.utm_content);
+  if (req.query.utm_term) filter['utm.term'] = ilike(req.query.utm_term);
+
+  // Google Ads ValueTrack parameters (exact match for IDs, substring for text)
+  if (req.query.vt_campaignid) filter['valuetrack.google.campaignid'] = req.query.vt_campaignid.trim();
+  if (req.query.vt_adgroupid) filter['valuetrack.google.adgroupid'] = req.query.vt_adgroupid.trim();
+  if (req.query.vt_creative) filter['valuetrack.google.creative'] = req.query.vt_creative.trim();
+  if (req.query.vt_keyword) filter['valuetrack.google.keyword'] = ilike(req.query.vt_keyword);
+  if (req.query.vt_network) filter['valuetrack.google.network'] = req.query.vt_network.trim();
+  if (req.query.vt_device) filter['valuetrack.google.device'] = req.query.vt_device.trim();
+  if (req.query.vt_matchtype) filter['valuetrack.google.matchtype'] = req.query.vt_matchtype.trim();
+  if (req.query.vt_placement) filter['valuetrack.google.placement'] = ilike(req.query.vt_placement);
+
+  // Custom tracking params (tm, ap)
+  if (req.query.vt_tm) filter['valuetrack.google.tm'] = req.query.vt_tm.trim();
+  if (req.query.vt_ap) filter['valuetrack.google.ap'] = req.query.vt_ap.trim();
+
+  // IP + country
+  if (req.query.country) filter.country = req.query.country.trim().toUpperCase();
+  if (req.query.ip) filter.ip = req.query.ip.trim();
+
+  // Click-ID search: try the value against all ad-platform identifiers simultaneously.
   if (req.query.click_id && typeof req.query.click_id === 'string') {
     const cid = req.query.click_id.trim();
     if (cid) {
