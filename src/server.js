@@ -133,6 +133,23 @@ app.use('/api', gadsSyncRoutes);
 const syncRoutes = require('./routes/sync');
 app.use('/sync', syncRoutes);
 
+// --- Favicon: serve from the uploads system if configured, else skip.
+app.get('/favicon.ico', async (req, res) => {
+  try {
+    const { Workspace, Upload } = require('./models');
+    const { DEFAULT_SLUG } = require('./lib/bootstrap');
+    const ws = await Workspace.findOne({ slug: DEFAULT_SLUG }).lean();
+    if (!ws?.settings?.favicon_upload_id) return res.status(204).end();
+    const doc = await Upload.findById(ws.settings.favicon_upload_id).lean();
+    if (!doc) return res.status(204).end();
+    const storage = require('./lib/storage');
+    const handled = await storage.serve(res, doc);
+    if (!handled) return res.status(204).end();
+  } catch (_) {
+    res.status(204).end();
+  }
+});
+
 // --- Media uploads: serve images stored in Mongo at a WordPress-looking path.
 // Public (images are embedded in pages), long immutable cache so Cloudflare
 // serves from edge after the first origin fetch. Mounted before the root_path

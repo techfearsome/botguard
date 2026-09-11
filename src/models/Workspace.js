@@ -28,6 +28,10 @@ const WorkspaceSchema = new mongoose.Schema({
     // proxy/ASN gates which run on every request.
     block_ai_crawlers: { type: Boolean, default: false },
 
+    // Favicon — stored via the uploads system (MongoDB/local/S3), served at
+    // /favicon.ico. Upload ID references the Upload collection.
+    favicon_upload_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Upload', default: null },
+
     // Third-party analytics injection - applied to all offer + safe pages.
     // Useful for session replay (Clarity), error tracking, and ad-platform pixels.
     tracking: {

@@ -9,6 +9,33 @@
 
 <section class="panel" id="appearance">
   <h3>Appearance</h3>
+
+  <% if (flash) { %>
+  <div style="background:var(--success-bg); border:1px solid var(--success); border-radius:var(--radius-md); padding:10px 14px; margin-bottom:14px; font-size:13px;"><%= flash %></div>
+  <% } %>
+  <% if (error) { %>
+  <div style="background:var(--danger-bg); border:1px solid var(--danger); border-radius:var(--radius-md); padding:10px 14px; margin-bottom:14px; font-size:13px;"><%= error %></div>
+  <% } %>
+
+  <div class="form-row" style="margin-bottom:18px;">
+    <label style="font-weight:600;">Favicon</label>
+    <% if (typeof faviconUrl !== 'undefined' && faviconUrl) { %>
+      <div style="display:flex; align-items:center; gap:14px; margin-bottom:10px;">
+        <img src="<%= faviconUrl %>" alt="Current favicon" style="width:32px; height:32px; border-radius:4px; border:1px solid var(--border-default); background:var(--bg-input);">
+        <span class="muted" style="font-size:13px;">Current favicon</span>
+        <form method="POST" action="/admin/settings/favicon/remove" style="margin:0;">
+          <button type="submit" class="btn btn-small" style="color:var(--danger);">Remove</button>
+        </form>
+      </div>
+    <% } else { %>
+      <p class="muted" style="font-size:13px; margin-bottom:8px;">No favicon set. Upload one to show in browser tabs and bookmarks.</p>
+    <% } %>
+    <form method="POST" action="/admin/settings/favicon" enctype="multipart/form-data" style="display:flex; gap:10px; align-items:center;">
+      <input type="file" name="favicon" accept="image/png,image/x-icon,image/vnd.microsoft.icon,image/svg+xml,image/jpeg,image/gif,image/webp" required>
+      <button type="submit" class="btn btn-primary">Upload favicon</button>
+    </form>
+    <small class="muted">PNG, ICO, SVG, JPG, GIF, or WebP · max 1 MB. Recommended: 32×32 or 64×64 PNG.</small>
+  </div>
   <p class="muted" style="margin-top:0;">Choose a theme for the admin interface. The setting is persisted per workspace and applies to all admins.</p>
 
   <%

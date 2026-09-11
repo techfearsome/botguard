@@ -3341,9 +3341,72 @@ router.get('/security', async (req, res) => {
   });
 });
 
+// ── Favicon upload ────────────────────────────────────────────────────────
+router.post('/settings/favicon', (req, res) => {
+  const faviconUpload = require('multer')({
+    storage: require('multer').memoryStorage(),
+    limits: { fileSize: 1 * 1024 * 1024, files: 1 }, // 1 MB max for favicons
+    fileFilter: (req, file, cb) => {
+      const allowed = ['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp'];
+      cb(null, allowed.includes(file.mimetype));
+    },
+  }).single('favicon');
+
+  faviconUpload(req, res, async (err) => {
+    if (err || !req.file) {
+      return res.redirect('/admin/settings?error=' + encodeURIComponent('No file or unsupported type. Use PNG, ICO, SVG, JPG, GIF, or WebP.'));
+    }
+    try {
+      const ws = await resolveWorkspace(req);
+      const { Upload, Workspace } = require('../../models');
+      const storage = require('../../lib/storage');
+      const { sanitizeFilename } = require('../../lib/uploadHelpers');
+      const mongoose = require('mongoose');
+
+      const filename = sanitizeFilename(req.file.originalname, req.file.mimetype);
+      const id = new mongoose.Types.ObjectId();
+      const stored = await storage.save({
+        workspaceId: ws._id, id, filename,
+        mimetype: req.file.mimetype, buffer: req.file.buffer,
+      });
+      await Upload.create({
+        _id: id, workspace_id: ws._id, filename,
+        mimetype: req.file.mimetype, size: req.file.size, ...stored,
+      });
+
+      // Save the favicon reference on the workspace.
+      await Workspace.updateOne({ _id: ws._id }, { $set: { 'settings.favicon_upload_id': id } });
+      cache.invalidateWorkspace(ws.slug);
+      return res.redirect('/admin/settings?flash=' + encodeURIComponent('Favicon updated'));
+    } catch (e) {
+      logger.error('favicon_upload_failed', { err: e.message });
+      return res.redirect('/admin/settings?error=' + encodeURIComponent('Could not save favicon'));
+    }
+  });
+});
+
+router.post('/settings/favicon/remove', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Workspace } = require('../../models');
+  await Workspace.updateOne({ _id: ws._id }, { $unset: { 'settings.favicon_upload_id': 1 } });
+  cache.invalidateWorkspace(ws.slug);
+  res.redirect('/admin/settings?flash=' + encodeURIComponent('Favicon removed'));
+});
+
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);
-  res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });
+  let faviconUrl = null;
+  if (ws.settings?.favicon_upload_id) {
+    const { Upload } = require('../../models');
+    const fav = await Upload.findById(ws.settings.favicon_upload_id).select('filename').lean();
+    if (fav) faviconUrl = `/wp-content/uploads/${fav._id}/${fav.filename}`;
+  }
+  res.render('admin/settings', {
+    ws, page: 'settings', adminUser: req.adminUser,
+    generated: req.query.key || null,
+    faviconUrl,
+    flash: req.query.flash || '', error: req.query.error || '',
+  });
 });
 
 // ── Federated Sync (threat-intel sharing between installs) ───────────────
