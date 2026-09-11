@@ -36,6 +36,15 @@
     </form>
     <small class="muted">PNG, ICO, SVG, JPG, GIF, or WebP · max 1 MB. Recommended: 32×32 or 64×64 PNG.</small>
   </div>
+
+  <div class="form-row" style="margin-bottom:18px;">
+    <label style="font-weight:600;">Conversion Currency</label>
+    <form method="POST" action="/admin/settings/currency" style="display:flex; gap:10px; align-items:center;">
+      <input type="text" name="conversion_currency" value="<%= ws.settings?.conversion_currency || 'USD' %>" placeholder="USD" maxlength="3" style="width:100px; text-transform:uppercase;">
+      <button type="submit" class="btn">Save</button>
+    </form>
+    <small class="muted">ISO 4217 currency code (e.g. USD, EUR, GBP, CAD, INR). Used for auto-conversion values and the Google Ads conversion export.</small>
+  </div>
   <p class="muted" style="margin-top:0;">Choose a theme for the admin interface. The setting is persisted per workspace and applies to all admins.</p>
 
   <%

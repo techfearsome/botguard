@@ -65,6 +65,14 @@
         <input type="text" name="auto_conversion_event_name" value="<%= ac.event_name || 'auto_click' %>" placeholder="auto_click" maxlength="50">
         <small class="muted">e.g. <code>install</code>, <code>signup</code>, <code>purchase</code> — use this to differentiate when the same offer pays per type.</small>
       </div>
+      <div class="form-row">
+        <label>Conversion value</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="number" name="auto_conversion_value" value="<%= ac.conversion_value || 0 %>" placeholder="0.00" min="0" step="0.01" style="max-width:160px;">
+          <span class="muted">per conversion</span>
+        </div>
+        <small class="muted">The monetary value assigned to each conversion from this page. Used in reports and the Google Ads conversion export. Currency is set in Settings.</small>
+      </div>
     </fieldset>
   <% } %>
 

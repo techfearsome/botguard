@@ -6,7 +6,10 @@
     <p class="muted">All recorded conversions across pixel, postback, and auto-detected sources · <strong><%= range.label %></strong>.</p>
   </div>
   <div>
-    <a href="/admin/conversions.csv?<%= new URLSearchParams(query).toString() %>" class="btn">Export CSV</a>
+    <div style="display:flex; gap:8px;">
+      <a href="/admin/conversions.csv?<%= new URLSearchParams(query).toString() %>" class="btn">Export CSV</a>
+      <a href="/admin/conversions-gads.csv?<%= new URLSearchParams(query).toString() %>" class="btn btn-primary" title="Google Ads offline conversion format (gclid-only rows)">Export Google Ads</a>
+    </div>
   </div>
 </div>
 

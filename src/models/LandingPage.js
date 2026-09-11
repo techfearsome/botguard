@@ -28,9 +28,8 @@ const LandingPageSchema = new mongoose.Schema({
   auto_conversion: {
     enabled: { type: Boolean, default: false },
     terms: { type: [String], default: [] },
-    // What to record on the Conversion document. Useful when the offer pays per type
-    // (e.g. install, signup, purchase) and you want to discriminate without extra setup.
     event_name: { type: String, default: 'auto_click' },
+    conversion_value: { type: Number, default: 0 },
   },
 
   // Bot Guard (Level 2) — only meaningful on offer pages.

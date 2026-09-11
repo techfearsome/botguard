@@ -32,6 +32,10 @@ const WorkspaceSchema = new mongoose.Schema({
     // /favicon.ico. Upload ID references the Upload collection.
     favicon_upload_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Upload', default: null },
 
+    // Default conversion currency (ISO 4217). Used for auto-conversions and the
+    // Google Ads export. Configurable per workspace; defaults to USD.
+    conversion_currency: { type: String, default: 'USD' },
+
     // Third-party analytics injection - applied to all offer + safe pages.
     // Useful for session replay (Clarity), error tracking, and ad-platform pixels.
     tracking: {

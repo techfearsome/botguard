@@ -179,6 +179,7 @@ router.post('/auto-conv', async (req, res) => {
       ts: new Date(),
       source: 'auto',
       event_name: eventName,
+      value: Number(data.conversion_value) || 0,
       auto_detected: true,
       matched_term: term,
       matched_text: text,

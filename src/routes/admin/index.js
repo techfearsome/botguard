@@ -309,7 +309,8 @@ function parseAutoConversion(body) {
     terms = Array.from(new Set(terms)).slice(0, 50);
   }
   const eventName = (body.auto_conversion_event_name || 'auto_click').trim().slice(0, 50) || 'auto_click';
-  return { enabled, terms, event_name: eventName };
+  const convValue = Math.max(0, parseFloat(body.auto_conversion_value) || 0);
+  return { enabled, terms, event_name: eventName, conversion_value: convValue };
 }
 
 // Parse campaign-level Bot Guard (Level 2) settings, including per-device
@@ -1178,6 +1179,75 @@ router.get('/conversions.csv', async (req, res) => {
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="conversions-${new Date().toISOString().slice(0, 10)}.csv"`);
   res.send(rows.join('\n'));
+});
+
+// Google Ads offline conversion upload format.
+// Columns: Google Click ID, Conversion Name, Conversion Time, Conversion Value, Conversion Currency
+// Google requires: gclid present, time in yyyy-MM-dd HH:mm:ss+HHMM format.
+router.get('/conversions-gads.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = { workspace_id: ws._id };
+  if (req.query.campaign) filter.campaign_id = req.query.campaign;
+  if (req.query.source) filter.source = req.query.source;
+  if (req.query.event) filter.event_name = req.query.event;
+  if (req.query.auto === '1') filter.auto_detected = true;
+
+  let range;
+  if ((req.query.from || req.query.to) && !req.query.range) {
+    range = parseRange({ range: 'custom', date_from: req.query.from, date_to: req.query.to });
+  } else {
+    range = parseRange(req.query);
+  }
+  applyRangeToFilter(filter, range);
+
+  const conversions = await Conversion.find(filter)
+    .sort({ ts: -1 }).limit(10000)
+    .populate('campaign_id', 'name slug')
+    .lean();
+
+  // Look up gclid for each conversion from the Click collection.
+  const clickIds = Array.from(new Set(conversions.map((c) => c.click_id)));
+  const clicks = clickIds.length
+    ? await Click.find({ workspace_id: ws._id, click_id: { $in: clickIds } })
+        .select('click_id external_ids').lean()
+    : [];
+  const clickMap = Object.fromEntries(clicks.map((c) => [c.click_id, c]));
+
+  const currency = ws.settings?.conversion_currency || 'USD';
+
+  // Google Ads format: yyyy-MM-dd HH:mm:ss+0000 (UTC)
+  function gadsTime(d) {
+    if (!d) return '';
+    const dt = new Date(d);
+    return dt.getUTCFullYear()
+      + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0')
+      + '-' + String(dt.getUTCDate()).padStart(2, '0')
+      + ' ' + String(dt.getUTCHours()).padStart(2, '0')
+      + ':' + String(dt.getUTCMinutes()).padStart(2, '0')
+      + ':' + String(dt.getUTCSeconds()).padStart(2, '0')
+      + '+0000';
+  }
+
+  const headers = ['Google Click ID', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'];
+  const rows = [headers.join(',')];
+
+  for (const c of conversions) {
+    const click = clickMap[c.click_id] || {};
+    const gclid = click.external_ids?.gclid;
+    if (!gclid) continue; // Google Ads only accepts rows with a gclid.
+
+    rows.push([
+      gclid,
+      c.event_name || 'lead',
+      gadsTime(c.ts),
+      c.value ?? 0,
+      currency,
+    ].map(csvEscape).join(','));
+  }
+
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="gads-conversions-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(rows.join('\r\n'));
 });
 
 function csvEscape(v) {
@@ -3339,6 +3409,16 @@ router.get('/security', async (req, res) => {
     currentPage: page, perPage,
     failed24h, successfulIps30d: (distinctIps || []).filter(Boolean).length,
   });
+});
+
+// ── Conversion currency ───────────────────────────────────────────────────
+router.post('/settings/currency', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Workspace } = require('../../models');
+  const currency = (req.body.conversion_currency || 'USD').trim().toUpperCase().slice(0, 3);
+  await Workspace.updateOne({ _id: ws._id }, { $set: { 'settings.conversion_currency': currency } });
+  cache.invalidateWorkspace(ws.slug);
+  res.redirect('/admin/settings?flash=' + encodeURIComponent('Currency set to ' + currency));
 });
 
 // ── Favicon upload ────────────────────────────────────────────────────────

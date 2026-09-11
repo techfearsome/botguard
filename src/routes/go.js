@@ -446,6 +446,7 @@ async function handleClick(req, res, opts) {
         const injection = buildInjection({
           terms: targetPage.auto_conversion.terms,
           eventName: targetPage.auto_conversion.event_name || 'auto_click',
+          conversionValue: targetPage.auto_conversion.conversion_value || 0,
         });
         html = injectBeforeBodyEnd(html, injection);
         doc.auto_conv_injected = true;

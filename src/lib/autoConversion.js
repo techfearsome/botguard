@@ -45,6 +45,7 @@ function buildInjection({ terms = [], endpoint = '/cb/auto-conv', eventName = 'a
     terms: normalized,
     endpoint,
     event_name: eventName,
+    conversion_value: opts.conversionValue || 0,
     // 30-day dedup
     session_cookie: 'bg_conv',
     session_days: 30,
@@ -323,6 +324,7 @@ const RUNTIME = `
         var payload = {
           click_id: clickId,
           event_name: cfg.event_name,
+          conversion_value: cfg.conversion_value || 0,
           term: match.term,
           text: match.text,
           element: match.tag + (match.id ? '#' + match.id : '') + (match.cls ? '.' + match.cls.split(' ')[0] : ''),
