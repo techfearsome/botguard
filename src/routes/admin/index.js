@@ -1182,8 +1182,8 @@ router.get('/conversions.csv', async (req, res) => {
 });
 
 // Google Ads offline conversion upload format.
-// Columns: Google Click ID, Conversion Name, Conversion Time, Conversion Value, Conversion Currency
-// Google requires: gclid present, time in yyyy-MM-dd HH:mm:ss+HHMM format.
+// Columns: Google Click ID, Wbraid, Gbraid, Conversion Name, Conversion Time, Conversion Value, Conversion Currency
+// Each row needs at least one of gclid/wbraid/gbraid. Blank columns are fine.
 router.get('/conversions-gads.csv', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const filter = { workspace_id: ws._id };
@@ -1228,16 +1228,22 @@ router.get('/conversions-gads.csv', async (req, res) => {
       + '+0000';
   }
 
-  const headers = ['Google Click ID', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'];
+  const headers = ['Google Click ID', 'Wbraid', 'Gbraid', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'];
   const rows = [headers.join(',')];
 
   for (const c of conversions) {
     const click = clickMap[c.click_id] || {};
-    const gclid = click.external_ids?.gclid;
-    if (!gclid) continue; // Google Ads only accepts rows with a gclid.
+    const eid = click.external_ids || {};
+    const gclid = eid.gclid || '';
+    const wbraid = eid.wbraid || '';
+    const gbraid = eid.gbraid || '';
+    // Google Ads needs at least one of gclid, wbraid, or gbraid.
+    if (!gclid && !wbraid && !gbraid) continue;
 
     rows.push([
       gclid,
+      wbraid,
+      gbraid,
       c.event_name || 'lead',
       gadsTime(c.ts),
       c.value ?? 0,
