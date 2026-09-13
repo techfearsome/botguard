@@ -137,8 +137,8 @@
   .an-pct{color:var(--text-tertiary);font-size:11px;min-width:40px;text-align:right;display:inline-block;}
   .an-bar-track{height:7px;background:var(--bg-input);border-radius:4px;overflow:hidden;margin-top:3px;}
   .an-bar-fill{height:100%;border-radius:4px;}
-  .an-ts{display:flex;align-items:flex-end;gap:2px;height:110px;}
-  .an-ts-col{flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;}
+  .an-ts{display:flex;align-items:stretch;gap:2px;height:120px;}
+  .an-ts-col{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;}
   .an-ts-a{background:#34d399;border-radius:2px 2px 0 0;}
   .an-ts-b{background:#f87171;}
   .an-ts-x{display:flex;gap:2px;margin-top:6px;font-size:9px;color:var(--text-tertiary);}
@@ -225,7 +225,7 @@
   </div>
 
   <div class="an-card">
-    <div class="an-title">Traffic by country</div>
+    <div class="an-title">Top 5 countries</div>
     <% if (stats.country.length === 0) { %>
       <p class="muted" style="font-size:12px;">No country data in this range.</p>
     <% } else { var maxC = 0; stats.country.forEach(function(x){ if (x.n > maxC) maxC = x.n; }); %>
@@ -261,8 +261,9 @@
       <div class="an-ts">
         <% stats.time.forEach(function(t){ %>
           <div class="an-ts-col" title="<%= t._id %> — <%= t.allowed %> allowed, <%= t.blocked %> blocked">
-            <div class="an-ts-b" style="height:<%= maxTs ? (100*t.blocked/maxTs) : 0 %>%;"></div>
-            <div class="an-ts-a" style="height:<%= maxTs ? (100*t.allowed/maxTs) : 0 %>%;"></div>
+            <% var hB = maxTs ? (100*t.blocked/maxTs) : 0; var hA = maxTs ? (100*t.allowed/maxTs) : 0; %>
+            <div class="an-ts-b" style="height:<%= (t.blocked > 0 && hB < 2) ? 2 : hB %>%;"></div>
+            <div class="an-ts-a" style="height:<%= (t.allowed > 0 && hA < 2) ? 2 : hA %>%;"></div>
           </div>
         <% }); %>
       </div>

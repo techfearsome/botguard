@@ -973,7 +973,7 @@ router.get('/clicks', async (req, res) => {
       { $match: filter },
       { $group: { _id: { $ifNull: ['$country', 'unknown'] }, n: { $sum: 1 },
                   allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
-      { $sort: { n: -1 } }, { $limit: 12 },
+      { $sort: { n: -1 } }, { $limit: 5 },
     ]),
     // Time series — hourly when the range is a day or less, otherwise daily.
     Click.aggregate([
