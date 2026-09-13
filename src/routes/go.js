@@ -78,42 +78,14 @@ async function handleClick(req, res, opts) {
     const doc = buildClickDoc({ req, workspace, campaign });
     const deviceClass = doc.ua_parsed?.device_class || 'other';
 
-    // --- Ad schedule gate (runs FIRST when enabled — overrides manual status) --
-    // When a campaign has an enabled schedule, the schedule is the authority:
-    //   - Inside a window  → campaign RUNS (even if status is 'paused')
-    //   - Outside all windows → campaign PAUSES (even if status is 'active')
-    // This lets you set a campaign to 'paused', enable a schedule, and the
-    // schedule will activate it during windows and pause it outside them.
-    // When no schedule is enabled, the manual status gate below applies as before.
-    if (campaign.ad_schedule && campaign.ad_schedule.enabled) {
-      const { isInSchedule } = require('../lib/campaignSchedule');
-      const schedCheck = isInSchedule(campaign.ad_schedule);
-      if (!schedCheck.inSchedule) {
-        // Outside all scheduled windows → pause (safe page).
-        doc.scores = {
-          network: 0, headers: 0, behavior: 0, pattern: 0, referer: 0,
-          total: 0,
-          profile_used: campaign.source_profile,
-          flags: ['schedule_paused'],
-        };
-        doc.decision = 'block';
-        doc.decision_reason = 'schedule_paused';
-        doc.mode_at_decision = 'enforce';
-        doc.page_rendered = 'safe';
-
-        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
-        const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
-        if (safePage) doc.landing_page_id = safePage._id;
-
-        writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
-        registerLiveVisitor(doc, campaign, workspace);
-        setGoCookies(req, res, doc);
-        setNoCacheHeaders(req, res, campaign);
-        return res.status(200).type('html').send(applyPageTracking(html, workspace));
-      }
-      // Inside a scheduled window → proceed to the filter chain (skip the
-      // manual pause gate below — the schedule overrides it).
-    } else if (campaign.status === 'paused') {
+    // --- Campaign status gate ---
+    // `status` is the SINGLE SOURCE OF TRUTH for whether a campaign serves.
+    // The ad-schedule runner (src/lib/scheduleRunner.js) flips this field at
+    // window boundaries, so a scheduled campaign is genuinely 'paused' or
+    // 'active' in the database — the dashboard, the API and the serving path
+    // all agree. A manual pause here is therefore always respected: nothing
+    // at request time second-guesses the stored status.
+    if (campaign.status === 'paused') {
       // --- Manual pause gate (only when NO schedule is enabled) ---
       // A paused campaign without a schedule behaves as before: all traffic
       // goes to the safe page, no filter chain, no enrichment cost.

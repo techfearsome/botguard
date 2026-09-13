@@ -112,15 +112,6 @@ router.get('/campaigns', async (req, res) => {
     .populate('landing_page_id', 'name slug')
     .sort({ updated_at: -1 })
     .lean();
-  // Compute the LIVE schedule verdict for each campaign so the list shows
-  // what's actually being served right now, not just the stored status.
-  const { isInSchedule } = require('../../lib/campaignSchedule');
-  const now = new Date();
-  for (const c of campaigns) {
-    if (c.ad_schedule && c.ad_schedule.enabled) {
-      c._sched = isInSchedule(c.ad_schedule, now);
-    }
-  }
   res.render('admin/campaigns', { ws, campaigns, page: 'campaigns' });
 });
 

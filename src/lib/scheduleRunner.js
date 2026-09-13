@@ -45,22 +45,42 @@ async function runTick() {
 
     for (const c of campaigns) {
       const verdict = isInSchedule(c.ad_schedule, now);
-      const shouldBeActive = verdict.inSchedule;
-      const isActive = c.status === 'active';
+      const nowOpen = verdict.inSchedule;
+      const wasOpen = c.ad_schedule.last_window_state;
 
-      // Idempotent: only write when the state differs.
-      if (shouldBeActive && !isActive) {
-        await Campaign.updateOne({ _id: c._id }, { $set: { status: 'active' } });
-        await cache.invalidateCampaign(c.workspace_id, c.slug).catch(() => {});
-        activated++;
-        logger.info('schedule_activated', { campaign: c.name, slug: c.slug, reason: verdict.reason });
-      } else if (!shouldBeActive && isActive) {
-        await Campaign.updateOne({ _id: c._id }, { $set: { status: 'paused' } });
-        await cache.invalidateCampaign(c.workspace_id, c.slug).catch(() => {});
-        paused++;
-        logger.info('schedule_paused', { campaign: c.name, slug: c.slug, reason: verdict.reason });
+      // First time we've seen this campaign (or after an edit) — record the
+      // current window state without touching status, so we don't stomp a
+      // deliberate manual setting on the very first tick.
+      if (wasOpen === null || wasOpen === undefined) {
+        await Campaign.updateOne({ _id: c._id },
+          { $set: { 'ad_schedule.last_window_state': nowOpen } });
+        continue;
       }
-      // else: already in the right state — do nothing.
+
+      // No boundary crossed → leave status alone. This is what lets a manual
+      // pause (or resume) mid-window persist instead of being reverted.
+      if (wasOpen === nowOpen) continue;
+
+      // ── Boundary crossed ────────────────────────────────────────────────
+      const isActive = c.status === 'active';
+      const update = { 'ad_schedule.last_window_state': nowOpen };
+
+      if (nowOpen && !isActive) {
+        // Window just OPENED and campaign is paused → activate.
+        update.status = 'active';
+        activated++;
+        logger.info('schedule_activated', { campaign: c.name, slug: c.slug });
+      } else if (!nowOpen && isActive) {
+        // Window just CLOSED and campaign is active → pause.
+        update.status = 'paused';
+        paused++;
+        logger.info('schedule_paused', { campaign: c.name, slug: c.slug });
+      }
+      // else: boundary crossed but campaign already in the desired state
+      // (e.g. user manually paused during the window) → just record the state.
+
+      await Campaign.updateOne({ _id: c._id }, { $set: update });
+      await cache.invalidateCampaign(c.workspace_id, c.slug).catch(() => {});
     }
 
     if (activated || paused) {

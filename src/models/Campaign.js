@@ -151,6 +151,11 @@ const CampaignSchema = new mongoose.Schema({
       start: { type: String, default: '00:00' },  // HH:MM in the schedule timezone
       end:   { type: String, default: '23:59' },  // HH:MM
     }],
+    // Last window state the runner observed. Used to detect BOUNDARIES
+    // (open→closed, closed→open) so the runner only acts on transitions.
+    // This is what makes a manual pause mid-window stick: with no transition,
+    // the runner leaves the status alone.
+    last_window_state: { type: Boolean, default: null },
   },
 
   // ── Campaign type ──────────────────────────────────────────────────

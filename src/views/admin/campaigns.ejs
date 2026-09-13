@@ -54,22 +54,17 @@
           <% } %>
         </td>
         <td>
-          <% if (c.status === 'archived') { %>
-            <span class="badge badge-status-archived" title="URL returns 404">Archived</span>
-          <% } else if (c._sched) { %>
-            <%# Schedule enabled — it overrides the manual status at serve time. %>
-            <% if (c._sched.inSchedule) { %>
-              <span class="badge badge-allow" title="Schedule window is OPEN — serving the offer page now">Running</span>
-            <% } else { %>
-              <span class="badge badge-block" title="Outside all schedule windows — serving the safe page now">Paused</span>
-            <% } %>
-            <br><small class="muted" style="font-size:10px;">by schedule</small>
-          <% } else if (c.status === 'active') { %>
+          <% if (c.status === 'active') { %>
             <span class="badge badge-allow" title="Active — full pipeline runs">Active</span>
           <% } else if (c.status === 'paused') { %>
             <span class="badge badge-block" title="All traffic goes to safe page">Paused</span>
+          <% } else if (c.status === 'archived') { %>
+            <span class="badge badge-status-archived" title="URL returns 404">Archived</span>
           <% } else { %>
             <span class="badge"><%= c.status %></span>
+          <% } %>
+          <% if (c.ad_schedule && c.ad_schedule.enabled) { %>
+            <br><small class="muted" style="font-size:10px;" title="Status is managed by the ad schedule">⏱ scheduled</small>
           <% } %>
         </td>
         <td><%= c.landing_page_id?.name || '–' %></td>
