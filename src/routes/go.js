@@ -282,8 +282,12 @@ async function handleClick(req, res, opts) {
     // client-side checks and POSTs to /go/guard-verify.
     if (guardConfig) {
       const { verifyPassCookie, readPassCookie } = require('../lib/guardToken');
-      const passCookie = req.cookies?.[`bg_guard_${targetPage._id}`];
-      const failCookie = req.cookies?.[`bg_guardfail_${targetPage._id}`];
+      // Per-campaign guard cookie: once a visitor clears the guard on any page
+      // in this campaign, they skip it for 24 hours on that campaign.
+      const guardCookieKey = `bg_guard_${campaign._id}`;
+      const guardFailKey = `bg_guardfail_${campaign._id}`;
+      const passCookie = req.cookies?.[guardCookieKey];
+      const failCookie = req.cookies?.[guardFailKey];
       const alreadyPassed = passCookie && verifyPassCookie(passCookie, doc.ip);
       const alreadyFailed = failCookie && verifyPassCookie(failCookie, doc.ip);
 
@@ -586,11 +590,11 @@ async function handleGuardVerify(req, res) {
       click.page_rendered = 'offer';
       await click.save().catch(() => {});
 
-      // Set a pass cookie tied to this IP. On the return request the guard
-      // sees it and serves the real offer page.
-      const passCookie = signPassCookie(click.click_id, click.ip);
-      res.cookie(`bg_guard_${offerPage._id}`, passCookie, {
-        maxAge: 30 * 60 * 1000, httpOnly: false, sameSite: 'lax', secure: true,
+      // Set a pass cookie tied to this IP + keyed per CAMPAIGN (not page).
+      // 24-hour TTL so refreshes and revisits within a day skip the guard.
+      const passCookieVal = signPassCookie(click.click_id, click.ip);
+      res.cookie(`bg_guard_${click.campaign_id}`, passCookieVal, {
+        maxAge: 24 * 60 * 60 * 1000, httpOnly: false, sameSite: 'lax', secure: true,
       });
     } else {
       // Failed — mark as safe, feed flags into intelligence.
@@ -599,11 +603,10 @@ async function handleGuardVerify(req, res) {
       click.scores.flags = [...(click.scores.flags || []), ...verdict.flags.map(f => `guard_${f}`)];
       await click.save().catch(() => {});
 
-      // Set a FAIL cookie. On the return request the guard sees it and
-      // serves the safe page directly (no re-guarding, no loop).
-      const failCookie = signPassCookie('FAIL:' + click.click_id, click.ip);
-      res.cookie(`bg_guardfail_${offerPage._id}`, failCookie, {
-        maxAge: 30 * 60 * 1000, httpOnly: false, sameSite: 'lax', secure: true,
+      // Set a FAIL cookie keyed per campaign with 24h TTL.
+      const failCookieVal = signPassCookie('FAIL:' + click.click_id, click.ip);
+      res.cookie(`bg_guardfail_${click.campaign_id}`, failCookieVal, {
+        maxAge: 24 * 60 * 60 * 1000, httpOnly: false, sameSite: 'lax', secure: true,
       });
     }
 
