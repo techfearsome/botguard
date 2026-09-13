@@ -284,6 +284,12 @@ async function start() {
     startDwellWriteback(live);
   } catch (e) { logger.warn('dwell_writeback_start_failed', { err: e.message }); }
 
+  // Campaign ad-schedule reconciliation — flips status at window boundaries.
+  try {
+    const { startScheduleRunner } = require('./lib/scheduleRunner');
+    startScheduleRunner();
+  } catch (e) { logger.warn('schedule_runner_start_failed', { err: e.message }); }
+
   const port = Number(process.env.PORT) || 3000;
   const server = app.listen(port, () => {
     logger.info('server_started', { port, base_url: process.env.BASE_URL });
@@ -382,6 +388,13 @@ if (cluster.isPrimary) {
           const { startDwellWriteback } = require('./lib/dwellWriteback');
           startDwellWriteback(live);
         } catch (e) { logger.warn('dwell_writeback_start_failed', { err: e.message }); }
+
+        // Campaign ad-schedule reconciliation — master only, so N workers
+        // don't all try to flip the same campaign.
+        try {
+          const { startScheduleRunner } = require('./lib/scheduleRunner');
+          startScheduleRunner();
+        } catch (e) { logger.warn('schedule_runner_start_failed', { err: e.message }); }
       } catch (err) {
         logger.error('master_startup_failed', { err: err.message });
         process.exit(1);
