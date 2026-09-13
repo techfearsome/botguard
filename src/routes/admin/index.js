@@ -937,8 +937,71 @@ router.get('/clicks', async (req, res) => {
 
   const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
 
+  // ── Analytics aggregations (respect the same filters as the list) ────────
+  // All five run in parallel against the same filter, so the charts always
+  // describe exactly the rows the table is showing.
+  const [byDevice, byDecision, byIpType, byCountry, byTime] = await Promise.all([
+    // Device distribution
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$ua_parsed.device_class', 'unknown'] }, n: { $sum: 1 } } },
+      { $sort: { n: -1 } }, { $limit: 10 },
+    ]),
+    // Allowed vs blocked
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$decision', 'unknown'] }, n: { $sum: 1 } } },
+      { $sort: { n: -1 } },
+    ]),
+    // Traffic type: residential / business / hosting / vpn / proxy / tor
+    Click.aggregate([
+      { $match: filter },
+      { $group: {
+          _id: {
+            $cond: [
+              { $eq: ['$is_proxy', true] },
+              { $ifNull: ['$proxy_type', 'proxy'] },
+              { $ifNull: ['$ip_type', 'unknown'] },
+            ],
+          },
+          n: { $sum: 1 },
+      } },
+      { $sort: { n: -1 } }, { $limit: 12 },
+    ]),
+    // Country distribution
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$country', 'unknown'] }, n: { $sum: 1 },
+                  allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
+      { $sort: { n: -1 } }, { $limit: 12 },
+    ]),
+    // Time series — hourly when the range is a day or less, otherwise daily.
+    Click.aggregate([
+      { $match: filter },
+      { $group: {
+          _id: (range.range === 'today' || range.range === 'yesterday')
+            ? { $dateToString: { format: '%H:00', date: '$ts' } }
+            : { $dateToString: { format: '%Y-%m-%d', date: '$ts' } },
+          total: { $sum: 1 },
+          allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } },
+          blocked: { $sum: { $cond: [{ $ne: ['$decision', 'allow'] }, 1, 0] } },
+      } },
+      { $sort: { _id: 1 } }, { $limit: 60 },
+    ]),
+  ]);
+
+  const stats = {
+    device: byDevice,
+    decision: byDecision,
+    ipType: byIpType,
+    country: byCountry,
+    time: byTime,
+    timeGranularity: (range.range === 'today' || range.range === 'yesterday') ? 'hour' : 'day',
+    grandTotal: totalCount,
+  };
+
   res.render('admin/clicks', {
-    ws, clicks, campaigns,
+    ws, clicks, campaigns, stats,
     query: req.query,
     range,
     rangeOptions: RANGE_OPTIONS,

@@ -117,6 +117,169 @@
   </div>
 </form>
 
+<%# ── Traffic analytics (respects the active filters) ───────────────────── %>
+<% if (typeof stats !== 'undefined' && stats.grandTotal > 0) {
+  var PALETTE = ['#f6821f','#3b82f6','#34d399','#a78bfa','#f87171','#fbbf24','#22d3ee','#f472b6','#84cc16','#94a3b8'];
+  var pct = function(n, t){ return t ? (100*n/t) : 0; };
+  var decColors = { allow:'#34d399', block:'#f87171', would_block:'#fbbf24', unknown:'#94a3b8' };
+  var CIRC = 2 * Math.PI * 42;
+%>
+<style>
+  .an-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:18px;}
+  .an-card{background:var(--bg-panel);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:14px 16px;box-shadow:var(--shadow-card);}
+  .an-title{font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:12px;}
+  .an-row{display:flex;align-items:center;gap:14px;}
+  .an-legend{flex:1;min-width:0;font-size:12px;}
+  .an-li{display:flex;align-items:center;gap:7px;margin-bottom:5px;}
+  .an-dot{width:9px;height:9px;border-radius:2px;flex:none;}
+  .an-lbl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .an-val{font-variant-numeric:tabular-nums;color:var(--text-primary);font-weight:600;}
+  .an-pct{color:var(--text-tertiary);font-size:11px;min-width:40px;text-align:right;display:inline-block;}
+  .an-bar-track{height:7px;background:var(--bg-input);border-radius:4px;overflow:hidden;margin-top:3px;}
+  .an-bar-fill{height:100%;border-radius:4px;}
+  .an-ts{display:flex;align-items:flex-end;gap:2px;height:110px;}
+  .an-ts-col{flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;}
+  .an-ts-a{background:#34d399;border-radius:2px 2px 0 0;}
+  .an-ts-b{background:#f87171;}
+  .an-ts-x{display:flex;gap:2px;margin-top:6px;font-size:9px;color:var(--text-tertiary);}
+  .an-ts-x span{flex:1;min-width:3px;text-align:center;overflow:hidden;}
+</style>
+
+<div class="an-grid">
+
+  <div class="an-card">
+    <div class="an-title">Device distribution</div>
+    <div class="an-row">
+      <svg width="120" height="120" viewBox="0 0 120 120" style="flex:none;">
+        <circle cx="60" cy="60" r="42" fill="none" stroke="var(--bg-input)" stroke-width="16"></circle>
+        <% var offD = 0; stats.device.forEach(function(d, i){
+             var len = (stats.grandTotal ? d.n/stats.grandTotal : 0) * CIRC; %>
+          <circle cx="60" cy="60" r="42" fill="none" stroke="<%= PALETTE[i % PALETTE.length] %>"
+            stroke-width="16" stroke-dasharray="<%= len.toFixed(2) %> <%= (CIRC-len).toFixed(2) %>"
+            stroke-dashoffset="<%= (-offD).toFixed(2) %>" transform="rotate(-90 60 60)"><title><%= d._id || 'unknown' %>: <%= d.n %></title></circle>
+          <% offD += len; %>
+        <% }); %>
+        <text x="60" y="57" text-anchor="middle" font-size="17" font-weight="700" fill="var(--text-primary)"><%= stats.grandTotal.toLocaleString() %></text>
+        <text x="60" y="72" text-anchor="middle" font-size="9" fill="var(--text-tertiary)">clicks</text>
+      </svg>
+      <div class="an-legend">
+        <% stats.device.forEach(function(d, i){ %>
+          <div class="an-li">
+            <span class="an-dot" style="background:<%= PALETTE[i % PALETTE.length] %>"></span>
+            <span class="an-lbl"><%= d._id || 'unknown' %></span>
+            <span class="an-val"><%= d.n.toLocaleString() %></span>
+            <span class="an-pct"><%= pct(d.n, stats.grandTotal).toFixed(1) %>%</span>
+          </div>
+        <% }); %>
+      </div>
+    </div>
+  </div>
+
+  <div class="an-card">
+    <div class="an-title">Allowed vs blocked</div>
+    <div class="an-row">
+      <svg width="120" height="120" viewBox="0 0 120 120" style="flex:none;">
+        <circle cx="60" cy="60" r="42" fill="none" stroke="var(--bg-input)" stroke-width="16"></circle>
+        <% var offC = 0; stats.decision.forEach(function(d){
+             var len = (stats.grandTotal ? d.n/stats.grandTotal : 0) * CIRC; %>
+          <circle cx="60" cy="60" r="42" fill="none" stroke="<%= decColors[d._id] || '#94a3b8' %>"
+            stroke-width="16" stroke-dasharray="<%= len.toFixed(2) %> <%= (CIRC-len).toFixed(2) %>"
+            stroke-dashoffset="<%= (-offC).toFixed(2) %>" transform="rotate(-90 60 60)"><title><%= d._id %>: <%= d.n %></title></circle>
+          <% offC += len; %>
+        <% }); %>
+        <% var allowRow = null; stats.decision.forEach(function(x){ if (x._id === 'allow') allowRow = x; }); %>
+        <text x="60" y="57" text-anchor="middle" font-size="17" font-weight="700" fill="#34d399"><%= pct(allowRow ? allowRow.n : 0, stats.grandTotal).toFixed(0) %>%</text>
+        <text x="60" y="72" text-anchor="middle" font-size="9" fill="var(--text-tertiary)">allowed</text>
+      </svg>
+      <div class="an-legend">
+        <% stats.decision.forEach(function(d){ %>
+          <div class="an-li">
+            <span class="an-dot" style="background:<%= decColors[d._id] || '#94a3b8' %>"></span>
+            <span class="an-lbl"><%= d._id %></span>
+            <span class="an-val"><%= d.n.toLocaleString() %></span>
+            <span class="an-pct"><%= pct(d.n, stats.grandTotal).toFixed(1) %>%</span>
+          </div>
+        <% }); %>
+      </div>
+    </div>
+  </div>
+
+  <div class="an-card">
+    <div class="an-title">Traffic type</div>
+    <% if (stats.ipType.length === 0) { %>
+      <p class="muted" style="font-size:12px;">No enrichment data in this range.</p>
+    <% } else { var maxT = 0; stats.ipType.forEach(function(x){ if (x.n > maxT) maxT = x.n; }); %>
+      <% stats.ipType.forEach(function(t, i){ %>
+        <div style="margin-bottom:9px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;">
+            <span class="an-lbl"><%= t._id || 'unknown' %></span>
+            <span><span class="an-val"><%= t.n.toLocaleString() %></span>
+              <span class="an-pct"><%= pct(t.n, stats.grandTotal).toFixed(1) %>%</span></span>
+          </div>
+          <div class="an-bar-track">
+            <div class="an-bar-fill" style="width:<%= maxT ? (100*t.n/maxT) : 0 %>%;background:<%= PALETTE[i % PALETTE.length] %>"></div>
+          </div>
+        </div>
+      <% }); %>
+    <% } %>
+  </div>
+
+  <div class="an-card">
+    <div class="an-title">Traffic by country</div>
+    <% if (stats.country.length === 0) { %>
+      <p class="muted" style="font-size:12px;">No country data in this range.</p>
+    <% } else { var maxC = 0; stats.country.forEach(function(x){ if (x.n > maxC) maxC = x.n; }); %>
+      <% stats.country.forEach(function(c){ %>
+        <div style="margin-bottom:9px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;">
+            <span class="an-lbl"><strong><%= c._id || '—' %></strong>
+              <span class="muted" style="font-size:11px;">(<%= c.allowed %> allowed)</span></span>
+            <span><span class="an-val"><%= c.n.toLocaleString() %></span>
+              <span class="an-pct"><%= pct(c.n, stats.grandTotal).toFixed(1) %>%</span></span>
+          </div>
+          <div class="an-bar-track" title="<%= c.allowed %> allowed of <%= c.n %>">
+            <div style="height:100%;display:flex;width:<%= maxC ? (100*c.n/maxC) : 0 %>%;">
+              <div style="background:#34d399;width:<%= c.n ? (100*c.allowed/c.n) : 0 %>%;"></div>
+              <div style="background:#f87171;flex:1;"></div>
+            </div>
+          </div>
+        </div>
+      <% }); %>
+      <div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">
+        <span style="color:#34d399;">■</span> allowed &nbsp; <span style="color:#f87171;">■</span> blocked
+      </div>
+    <% } %>
+  </div>
+
+  <div class="an-card" style="grid-column:1/-1;">
+    <div class="an-title">Traffic over time (<%= stats.timeGranularity === 'hour' ? 'hourly' : 'daily' %>)</div>
+    <% if (stats.time.length === 0) { %>
+      <p class="muted" style="font-size:12px;">No data in this range.</p>
+    <% } else {
+         var maxTs = 0; stats.time.forEach(function(x){ if (x.total > maxTs) maxTs = x.total; });
+         var step = Math.max(1, Math.ceil(stats.time.length / 12)); %>
+      <div class="an-ts">
+        <% stats.time.forEach(function(t){ %>
+          <div class="an-ts-col" title="<%= t._id %> — <%= t.allowed %> allowed, <%= t.blocked %> blocked">
+            <div class="an-ts-b" style="height:<%= maxTs ? (100*t.blocked/maxTs) : 0 %>%;"></div>
+            <div class="an-ts-a" style="height:<%= maxTs ? (100*t.allowed/maxTs) : 0 %>%;"></div>
+          </div>
+        <% }); %>
+      </div>
+      <div class="an-ts-x">
+        <% stats.time.forEach(function(t, i){ %>
+          <span><%= (i % step === 0) ? String(t._id).replace(/^\d{4}-/, '') : '' %></span>
+        <% }); %>
+      </div>
+      <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">
+        <span style="color:#34d399;">■</span> allowed &nbsp; <span style="color:#f87171;">■</span> blocked &nbsp;·&nbsp; peak <%= maxTs.toLocaleString() %>
+      </div>
+    <% } %>
+  </div>
+
+</div>
+<% } %>
+
 <% if (clicks.length === 0) { %>
   <div class="empty-state"><p>No clicks match these filters.</p></div>
 <% } else { %>
