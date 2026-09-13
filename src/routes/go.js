@@ -610,7 +610,15 @@ async function handleGuardVerify(req, res) {
     // Both cases: redirect back to the ORIGINAL campaign URL. The /go flow
     // renders the offer or safe page inline from html_template. We can't link
     // to /p/:slug — that serves site pages, not campaign landing pages.
-    const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    let baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    // Ensure baseUrl has a scheme — without it the browser treats the redirect
+    // as a relative path and doubles the domain in the URL (the same bug that
+    // hit redirect campaigns with scheme-less URLs).
+    if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+      baseUrl = 'https://' + baseUrl;
+    }
+    // Strip trailing slash to avoid double-slash when concatenating.
+    baseUrl = baseUrl.replace(/\/+$/, '');
     let returnUrl = payload.return_url || '/';
     if (!returnUrl.startsWith('/') || returnUrl.startsWith('//')) returnUrl = '/';
     return res.json({ redirect: `${baseUrl}${returnUrl}` });
