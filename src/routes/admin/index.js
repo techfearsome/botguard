@@ -914,7 +914,7 @@ router.get('/clicks', async (req, res) => {
   // which is built for bulk.
   const PAGE_SIZE_OPTIONS = [50, 100, 250, 500];
   const requestedPerPage = parseInt(req.query.per, 10);
-  const perPage = PAGE_SIZE_OPTIONS.includes(requestedPerPage) ? requestedPerPage : 100;
+  const perPage = PAGE_SIZE_OPTIONS.includes(requestedPerPage) ? requestedPerPage : 50;
   const requestedPage = parseInt(req.query.page_n, 10);
   const pageNum = (Number.isFinite(requestedPage) && requestedPage >= 1) ? requestedPage : 1;
   const skip = (pageNum - 1) * perPage;
