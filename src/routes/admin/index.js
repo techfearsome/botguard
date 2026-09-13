@@ -188,7 +188,7 @@ router.post('/campaigns', async (req, res) => {
       },
       postback_url: body.postback_url || '',
       notes: body.notes || '',
-      ad_schedule: parseAdSchedule(body),
+      ad_schedule: parseAdSchedule(body) || { enabled: false, timezone: 'UTC', rules: [] },
       campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
       redirect_url: (body.redirect_url || '').trim(),
       redirect_urls: parseRedirectUrls(body),
@@ -319,22 +319,45 @@ function parseAutoConversion(body) {
 const GUARD_DEVICE_CLASSES = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
 // Parse the ad schedule from the campaign form. Multiple rules arrive as
 // parallel arrays (sched_day[], sched_start[], sched_end[]).
+//
+// IMPORTANT: if the form did not include the schedule section at all (no
+// sched_enabled field AND no sched_day field), we return null so the caller
+// can SKIP updating ad_schedule — this prevents an unrelated campaign save
+// from silently wiping an existing schedule.
 function parseAdSchedule(body) {
-  const enabled = body.sched_enabled === '1' || body.sched_enabled === 'on';
-  const timezone = (body.sched_timezone || 'UTC').trim();
+  const sectionPresent = ('sched_enabled' in body) || ('sched_day' in body) || ('sched_timezone' in body);
+  if (!sectionPresent) return null;   // signal: don't touch the stored schedule
+
+  const enabled = body.sched_enabled === '1' || body.sched_enabled === 'on' || body.sched_enabled === true;
+  const timezone = (body.sched_timezone || 'UTC').trim() || 'UTC';
   const rules = [];
-  if (enabled && body.sched_day) {
+
+  if (body.sched_day) {
     const days = Array.isArray(body.sched_day) ? body.sched_day : [body.sched_day];
-    const starts = Array.isArray(body.sched_start) ? body.sched_start : [body.sched_start || '00:00'];
-    const ends = Array.isArray(body.sched_end) ? body.sched_end : [body.sched_end || '23:59'];
+    const starts = Array.isArray(body.sched_start) ? body.sched_start : [body.sched_start];
+    const ends = Array.isArray(body.sched_end) ? body.sched_end : [body.sched_end];
+
+    // Normalize "H:MM" → "HH:MM" (some browsers submit single-digit hours).
+    const normTime = (v, fallback) => {
+      const s = String(v || '').trim();
+      const m = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return fallback;
+      const h = Math.min(23, parseInt(m[1], 10));
+      const mi = Math.min(59, parseInt(m[2], 10));
+      return String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0');
+    };
+
     for (let i = 0; i < days.length; i++) {
       const day = parseInt(days[i], 10);
-      if (day < 0 || day > 6 || !Number.isFinite(day)) continue;
-      const start = /^\d{2}:\d{2}$/.test(starts[i] || '') ? starts[i] : '00:00';
-      const end = /^\d{2}:\d{2}$/.test(ends[i] || '') ? ends[i] : '23:59';
-      rules.push({ day, start, end });
+      if (!Number.isFinite(day) || day < 0 || day > 6) continue;
+      rules.push({
+        day,
+        start: normTime(starts[i], '00:00'),
+        end: normTime(ends[i], '23:59'),
+      });
     }
   }
+
   return { enabled, timezone, rules };
 }
 
@@ -421,10 +444,11 @@ router.post('/campaigns/:id', async (req, res) => {
     const proxyGate = parseProxyGate(body);
     const devicePages = parseDevicePages(body.device_pages);
 
-    await Campaign.updateOne(
-      { _id: req.params.id, workspace_id: ws._id },
-      {
-        $set: {
+    // Only include ad_schedule when the form actually submitted that section —
+    // otherwise an unrelated save would wipe an existing schedule.
+    const parsedSchedule = parseAdSchedule(body);
+
+    const setFields = {
           slug,
           root_path: rootPathResult.normalized,
           name: body.name,
@@ -447,13 +471,16 @@ router.post('/campaigns/:id', async (req, res) => {
           'filter_config.bot_guard': parseCampaignBotGuard(body),
           postback_url: body.postback_url || '',
           notes: body.notes || '',
-          ad_schedule: parseAdSchedule(body),
           campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
           redirect_url: (body.redirect_url || '').trim(),
           redirect_urls: parseRedirectUrls(body),
           redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
-        },
-      }
+    };
+    if (parsedSchedule !== null) setFields.ad_schedule = parsedSchedule;
+
+    await Campaign.updateOne(
+      { _id: req.params.id, workspace_id: ws._id },
+      { $set: setFields }
     );
     // Invalidate both old and new slug to handle slug renames
     await cache.invalidateCampaign(ws._id, existing.slug);
