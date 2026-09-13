@@ -937,6 +937,15 @@ router.get('/clicks', async (req, res) => {
 
   const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
 
+  // Decide time-series granularity from the ACTUAL span of the filter, not the
+  // preset name — a custom range covering a single day should be hourly, not
+  // one giant daily column.
+  let useHourly = (range.range === 'today' || range.range === 'yesterday');
+  if (filter.ts && filter.ts.$gte && filter.ts.$lt) {
+    const spanHours = (filter.ts.$lt - filter.ts.$gte) / 36e5;
+    useHourly = spanHours <= 48;
+  }
+
   // ── Analytics aggregations (respect the same filters as the list) ────────
   // All five run in parallel against the same filter, so the charts always
   // describe exactly the rows the table is showing.
@@ -979,7 +988,7 @@ router.get('/clicks', async (req, res) => {
     Click.aggregate([
       { $match: filter },
       { $group: {
-          _id: (range.range === 'today' || range.range === 'yesterday')
+          _id: useHourly
             ? { $dateToString: { format: '%H:00', date: '$ts' } }
             : { $dateToString: { format: '%Y-%m-%d', date: '$ts' } },
           total: { $sum: 1 },
@@ -996,7 +1005,7 @@ router.get('/clicks', async (req, res) => {
     ipType: byIpType,
     country: byCountry,
     time: byTime,
-    timeGranularity: (range.range === 'today' || range.range === 'yesterday') ? 'hour' : 'day',
+    timeGranularity: useHourly ? 'hour' : 'day',
     grandTotal: totalCount,
   };
 
