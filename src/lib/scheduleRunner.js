@@ -28,7 +28,16 @@ const { isInSchedule } = require('./campaignSchedule');
 
 const TICK_MS = 60 * 1000; // check every minute
 
-async function runTick() {
+// Guards against overlapping runs — if a tick runs long (slow Mongo), the next
+// interval fire is skipped rather than racing the one still in flight.
+let tickInFlight = false;
+
+async function runTick(opts = {}) {
+  if (tickInFlight) {
+    logger.warn('schedule_tick_skipped_overlap');
+    return;
+  }
+  tickInFlight = true;
   try {
     const { Campaign } = require('../models');
     const cache = require('./cache');
@@ -84,18 +93,24 @@ async function runTick() {
     }
 
     if (activated || paused) {
-      logger.info('schedule_tick_applied', { activated, paused, checked: campaigns.length });
+      // On the boot tick, this means we corrected drift that happened while
+      // the process was down (a window opened or closed during downtime).
+      logger.info(opts.boot ? 'schedule_drift_corrected_on_boot' : 'schedule_tick_applied',
+        { activated, paused, checked: campaigns.length });
     }
   } catch (err) {
     logger.error('schedule_tick_failed', { err: err.message });
+  } finally {
+    tickInFlight = false;
   }
 }
 
 function startScheduleRunner() {
   // Run once at boot so a restart immediately corrects any drift that happened
-  // while the process was down.
-  runTick().catch(() => {});
-  const timer = setInterval(runTick, TICK_MS);
+  // while the process was down. Because last_window_state is persisted in Mongo
+  // (not memory), a boundary crossed during downtime is still detected here.
+  runTick({ boot: true }).catch(() => {});
+  const timer = setInterval(() => runTick(), TICK_MS);
   if (timer.unref) timer.unref();
   logger.info('schedule_runner_started', { interval_ms: TICK_MS });
   return timer;
