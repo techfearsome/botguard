@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 
 const { resolveSlug } = require('../../lib/slug');
 const cache = require('../../lib/cache');
@@ -852,7 +853,16 @@ router.get('/live/stream', async (req, res) => {
  */
 function buildClicksFilter(req, ws) {
   const filter = { workspace_id: ws._id };
-  if (req.query.campaign) filter.campaign_id = req.query.campaign;
+  // Cast to ObjectId explicitly: find() auto-casts via the schema, but
+  // aggregate() does NOT — passing a raw string there matches nothing, which
+  // silently emptied the analytics charts whenever a campaign was selected.
+  if (req.query.campaign) {
+    try {
+      filter.campaign_id = new mongoose.Types.ObjectId(String(req.query.campaign));
+    } catch (_) {
+      filter.campaign_id = req.query.campaign; // let an invalid id match nothing
+    }
+  }
   if (req.query.decision) filter.decision = req.query.decision;
 
   // Helper: case-insensitive substring regex (safe-escaped).
@@ -3250,9 +3260,9 @@ router.get('/redirect', async (req, res) => {
     // constrain to redirect campaigns. A specific campaign selection narrows
     // further; otherwise show all redirect campaigns.
     const filter = buildClicksFilter(req, ws);
-    if (req.query.campaign) {
-      filter.campaign_id = req.query.campaign; // buildClicksFilter already set this
-    } else {
+    if (!req.query.campaign) {
+      // No specific campaign chosen — constrain to all redirect campaigns.
+      // (When one IS chosen, buildClicksFilter already set it as an ObjectId.)
       filter.campaign_id = { $in: redirectCampaignIds };
     }
     range = parseRange(req.query);
