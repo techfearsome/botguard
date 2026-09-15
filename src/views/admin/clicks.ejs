@@ -251,6 +251,33 @@
     <% } %>
   </div>
 
+  <div class="an-card">
+    <div class="an-title">Top 5 traffic sources</div>
+    <% if (!stats.source || stats.source.length === 0) { %>
+      <p class="muted" style="font-size:12px;">No source data in this range.</p>
+    <% } else { var maxS = 0; stats.source.forEach(function(x){ if (x.n > maxS) maxS = x.n; }); %>
+      <% stats.source.forEach(function(sv, i){ %>
+        <div style="margin-bottom:9px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;">
+            <span class="an-lbl" title="<%= sv._id %>"><strong><%= sv._id %></strong>
+              <span class="muted" style="font-size:11px;">(<%= sv.allowed %> allowed)</span></span>
+            <span><span class="an-val"><%= sv.n.toLocaleString() %></span>
+              <span class="an-pct"><%= pct(sv.n, stats.grandTotal).toFixed(1) %>%</span></span>
+          </div>
+          <div class="an-bar-track" title="<%= sv.allowed %> allowed of <%= sv.n %>">
+            <div style="height:100%;display:flex;width:<%= maxS ? (100*sv.n/maxS) : 0 %>%;">
+              <div style="background:#34d399;width:<%= sv.n ? (100*sv.allowed/sv.n) : 0 %>%;"></div>
+              <div style="background:#f87171;flex:1;"></div>
+            </div>
+          </div>
+        </div>
+      <% }); %>
+      <div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">
+        <span style="color:#34d399;">■</span> allowed &nbsp; <span style="color:#f87171;">■</span> blocked
+      </div>
+    <% } %>
+  </div>
+
   <div class="an-card" style="grid-column:1/-1;">
     <div class="an-title">Traffic over time (<%= stats.timeGranularity === 'hour' ? 'hourly' : 'daily' %>)</div>
     <% if (stats.time.length === 0) { %>

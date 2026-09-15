@@ -959,7 +959,7 @@ router.get('/clicks', async (req, res) => {
   // ── Analytics aggregations (respect the same filters as the list) ────────
   // All five run in parallel against the same filter, so the charts always
   // describe exactly the rows the table is showing.
-  const [byDevice, byDecision, byIpType, byCountry, byTime] = await Promise.all([
+  const [byDevice, byDecision, byIpType, byCountry, bySource, byTime] = await Promise.all([
     // Device distribution
     Click.aggregate([
       { $match: filter },
@@ -994,6 +994,13 @@ router.get('/clicks', async (req, res) => {
                   allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
       { $sort: { n: -1 } }, { $limit: 5 },
     ]),
+    // Top traffic sources (utm_source)
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$utm.source', 'direct/none'] }, n: { $sum: 1 },
+                  allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
+      { $sort: { n: -1 } }, { $limit: 5 },
+    ]),
     // Time series — hourly when the range is a day or less, otherwise daily.
     Click.aggregate([
       { $match: filter },
@@ -1014,6 +1021,7 @@ router.get('/clicks', async (req, res) => {
     decision: byDecision,
     ipType: byIpType,
     country: byCountry,
+    source: bySource,
     time: byTime,
     timeGranularity: useHourly ? 'hour' : 'day',
     grandTotal: totalCount,
