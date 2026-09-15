@@ -154,15 +154,23 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
         flags.push('asn_hard_block');
       }
 
-      // If ProxyCheck said "clean" but the blacklist matched, mark proxy
-      if (!enrichment.is_proxy && asnHit.override === 'mark_proxy') {
-        enrichment.is_proxy = true;
-        enrichment.proxy_type = `BLACKLIST_${asnHit.category.toUpperCase()}`;
-        flags.push('asn_blacklist_promoted_to_proxy');
-      }
-      if (asnHit.override === 'mark_tor') {
-        enrichment.is_proxy = true;
-        enrichment.proxy_type = 'TOR';
+      // If ProxyCheck said "clean" but the blacklist matched, mark proxy.
+      // EXCEPTION: iCloud Private Relay egress lives on Cloudflare/Fastly/Akamai
+      // ASNs, so a blacklist entry for those networks would otherwise undo the
+      // relay exemption above and block real consumer iOS users. The relay
+      // verdict wins; the match is still flagged for visibility.
+      if (enrichment.is_icloud_relay) {
+        flags.push('asn_match_suppressed_icloud_relay');
+      } else {
+        if (!enrichment.is_proxy && asnHit.override === 'mark_proxy') {
+          enrichment.is_proxy = true;
+          enrichment.proxy_type = `BLACKLIST_${asnHit.category.toUpperCase()}`;
+          flags.push('asn_blacklist_promoted_to_proxy');
+        }
+        if (asnHit.override === 'mark_tor') {
+          enrichment.is_proxy = true;
+          enrichment.proxy_type = 'TOR';
+        }
       }
     }
   }
