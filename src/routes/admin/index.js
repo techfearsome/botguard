@@ -959,7 +959,7 @@ router.get('/clicks', async (req, res) => {
   // ── Analytics aggregations (respect the same filters as the list) ────────
   // All five run in parallel against the same filter, so the charts always
   // describe exactly the rows the table is showing.
-  const [byDevice, byDecision, byIpType, byCountry, bySource, byTime] = await Promise.all([
+  const [byDevice, byDecision, byIpType, byCountry, bySource, byCampaign, byTime] = await Promise.all([
     // Device distribution
     Click.aggregate([
       { $match: filter },
@@ -1001,6 +1001,15 @@ router.get('/clicks', async (req, res) => {
                   allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
       { $sort: { n: -1 } }, { $limit: 5 },
     ]),
+    // Top campaigns with a three-way decision split
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: '$campaign_id', n: { $sum: 1 },
+                  allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } },
+                  blocked: { $sum: { $cond: [{ $eq: ['$decision', 'block'] }, 1, 0] } },
+                  would:   { $sum: { $cond: [{ $eq: ['$decision', 'would_block'] }, 1, 0] } } } },
+      { $sort: { n: -1 } }, { $limit: 5 },
+    ]),
     // Time series — hourly when the range is a day or less, otherwise daily.
     Click.aggregate([
       { $match: filter },
@@ -1016,12 +1025,20 @@ router.get('/clicks', async (req, res) => {
     ]),
   ]);
 
+  // Resolve campaign ids to names for the campaigns card.
+  const campNameMap = {};
+  for (const c of campaigns) campNameMap[String(c._id)] = c.name;
+  for (const row of byCampaign) {
+    row.label = campNameMap[String(row._id)] || (row._id ? 'unknown' : 'none');
+  }
+
   const stats = {
     device: byDevice,
     decision: byDecision,
     ipType: byIpType,
     country: byCountry,
     source: bySource,
+    campaign: byCampaign,
     time: byTime,
     timeGranularity: useHourly ? 'hour' : 'day',
     grandTotal: totalCount,

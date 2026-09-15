@@ -278,6 +278,35 @@
     <% } %>
   </div>
 
+  <div class="an-card">
+    <div class="an-title">Top 5 campaigns</div>
+    <% if (!stats.campaign || stats.campaign.length === 0) { %>
+      <p class="muted" style="font-size:12px;">No campaign data in this range.</p>
+    <% } else { var maxK = 0; stats.campaign.forEach(function(x){ if (x.n > maxK) maxK = x.n; }); %>
+      <% stats.campaign.forEach(function(k){ %>
+        <div style="margin-bottom:9px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;">
+            <span class="an-lbl" title="<%= k.label %>"><strong><%= k.label %></strong></span>
+            <span><span class="an-val"><%= k.n.toLocaleString() %></span>
+              <span class="an-pct"><%= pct(k.n, stats.grandTotal).toFixed(1) %>%</span></span>
+          </div>
+          <div class="an-bar-track" title="<%= k.allowed %> allowed · <%= k.would %> would_block · <%= k.blocked %> blocked">
+            <div style="height:100%;display:flex;width:<%= maxK ? (100*k.n/maxK) : 0 %>%;">
+              <div style="background:#34d399;width:<%= k.n ? (100*k.allowed/k.n) : 0 %>%;"></div>
+              <div style="background:#fbbf24;width:<%= k.n ? (100*k.would/k.n) : 0 %>%;"></div>
+              <div style="background:#f87171;flex:1;"></div>
+            </div>
+          </div>
+        </div>
+      <% }); %>
+      <div style="font-size:10px;color:var(--text-tertiary);margin-top:8px;">
+        <span style="color:#34d399;">■</span> allow &nbsp;
+        <span style="color:#fbbf24;">■</span> would_block &nbsp;
+        <span style="color:#f87171;">■</span> block
+      </div>
+    <% } %>
+  </div>
+
   <div class="an-card" style="grid-column:1/-1;">
     <div class="an-title">Traffic over time (<%= stats.timeGranularity === 'hour' ? 'hourly' : 'daily' %>)</div>
     <% if (stats.time.length === 0) { %>
