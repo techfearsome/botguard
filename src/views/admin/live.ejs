@@ -142,7 +142,7 @@
       '</div>',
       '<div class="v-cell v-meta">',
         '<strong>', escapeHtml(v.ip || '–'), '</strong>', proxy,
-        '<br>', escapeHtml(v.asn_org || '–'),
+        '<br><span style="display:inline-block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;" title="', escapeHtml(v.asn_org || ''), '">', escapeHtml(v.asn_org || '–'), '</span>',
         v.country ? ' · ' + escapeHtml(v.country) : '',
       '</div>',
       '<div class="v-cell v-meta">',

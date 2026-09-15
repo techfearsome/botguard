@@ -122,7 +122,7 @@
               </td>
               <td style="padding:6px 10px; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= c.redirect_destination || '' %>"><%= passed ? (c.redirect_destination || '—') : '—' %></td>
               <td style="padding:6px 10px; font-family:monospace;"><%= c.ip || '—' %></td>
-              <td style="padding:6px 10px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><%= c.asn ? ('AS'+c.asn+' ') : '' %><%= c.asn_org || '' %></td>
+              <td style="padding:6px 10px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= (c.asn ? ('AS'+c.asn+' ') : '') + (c.asn_org || '') %>"><%= c.asn ? ('AS'+c.asn+' ') : '' %><%= c.asn_org || '' %></td>
               <td style="padding:6px 10px;"><%= c.country || '—' %></td>
               <td style="padding:6px 10px;"><%= c.ua_parsed?.device_class || '—' %></td>
               <td style="padding:6px 10px;"><%= c.utm?.source || '—' %></td>

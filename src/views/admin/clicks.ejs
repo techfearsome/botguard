@@ -309,10 +309,10 @@
           <%= c.utm?.source || '–' %> / <%= c.utm?.medium || '–' %> / <%= c.utm?.campaign || '–' %>
         </td>
         <td><code><%= c.ip || '–' %></code></td>
-        <td title="<%= c.organisation || '' %>">
+        <td class="cell-truncate-sm" title="<%= [c.asn_org, c.organisation].filter(Boolean).join(' — ') || '' %>">
           <% if (c.asn_org) { %>
-            <%= c.asn_org %>
-            <% if (c.asn) { %><br><small class="muted">AS<%= c.asn %></small><% } %>
+            <span style="display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><%= c.asn_org %></span>
+            <% if (c.asn) { %><small class="muted">AS<%= c.asn %></small><% } %>
           <% } else { %>–<% } %>
         </td>
         <td>
