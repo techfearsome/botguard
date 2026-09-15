@@ -17,6 +17,19 @@
   <form method="POST" action="/admin/asn" class="form" style="max-width:none;">
 
     <div class="form-row">
+      <label>List</label>
+      <div style="display:flex; gap:16px; align-items:center;">
+        <label style="font-weight:normal;">
+          <input type="radio" name="list_type" value="block" checked onchange="toggleListType()"> 🚫 Block (blacklist)
+        </label>
+        <label style="font-weight:normal;">
+          <input type="radio" name="list_type" value="allow" onchange="toggleListType()"> ✅ Allow (whitelist)
+        </label>
+      </div>
+      <small class="muted" id="listTypeHint">Blacklist: matching traffic is penalised and can be marked as proxy.</small>
+    </div>
+
+    <div class="form-row">
       <label>Rule Type</label>
       <div style="display:flex; gap:16px; align-items:center;">
         <label style="font-weight:normal;">
@@ -164,8 +177,14 @@
           <% } else { %>–<% } %>
         </td>
         <td><small><%= e.asn_org || '–' %></small></td>
-        <td><span class="badge badge-cat-<%= e.category %>"><%= e.category %></span></td>
-        <td><%= e.severity %></td>
+        <td>
+          <% if (e.list_type === 'allow') { %>
+            <span class="badge badge-allow" title="Whitelisted — bypasses proxy/VPN and hosting gates">✅ allow</span>
+          <% } else { %>
+            <span class="badge badge-cat-<%= e.category %>"><%= e.category %></span>
+          <% } %>
+        </td>
+        <td><%= e.list_type === 'allow' ? '—' : e.severity %></td>
         <td><%= e.score_weight %></td>
         <td><%= e.workspace_id ? 'workspace' : 'global' %></td>
         <td><%= e.hit_count || 0 %></td>
@@ -193,6 +212,23 @@
     document.getElementById('cidr-fields').style.display = type === 'cidr' ? '' : 'none';
     document.getElementById('term-fields').style.display = type === 'term' ? '' : 'none';
   }
+
+  function toggleListType() {
+    var allow = document.querySelector('input[name="list_type"]:checked').value === 'allow';
+    var hint = document.getElementById('listTypeHint');
+    if (hint) hint.textContent = allow
+      ? 'Whitelist: matching traffic BYPASSES the proxy/VPN and hosting gates, and adds no score. Allow rules always beat block rules.'
+      : 'Blacklist: matching traffic is penalised and can be marked as proxy.';
+    // Severity / score / override are irrelevant for allow rules.
+    ['severity','score_weight','override'].forEach(function(n){
+      var el = document.querySelector('[name="'+n+'"]');
+      if (el) {
+        var row = el.closest('.form-row');
+        if (row) row.style.display = allow ? 'none' : '';
+      }
+    });
+  }
+  toggleListType();
 </script>
 
 <%- include('../partials/footer') %>

@@ -146,6 +146,24 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
       domain: enrichment.asn_domain || '',
     });
     if (asnHit.match) {
+      // ── WHITELIST: matching network is explicitly trusted ────────────────
+      // Clear any proxy/hosting verdict and add no score. This is the mirror
+      // of the blacklist: use it for corporate egress, carrier CGNAT, partner
+      // office ranges, or any network you've verified is legitimate.
+      if (asnHit.allow) {
+        enrichment.is_proxy = false;
+        enrichment.proxy_type = null;
+        enrichment.hosting = false;
+        enrichment.risk_score = 0;
+        if (enrichment.ip_type === 'hosting') enrichment.ip_type = 'whitelisted';
+        enrichment.whitelisted = true;
+        flags.push(...asnHit.flags);
+        // Skip every blacklist consequence below. Prefetcher detection runs
+        // after this point, so report it as null (a whitelisted network is
+        // trusted regardless).
+        return { score: 0, flags, enrichment, prefetcher: null };
+      }
+
       flags.push(...asnHit.flags);
       score += asnHit.score_weight;
 

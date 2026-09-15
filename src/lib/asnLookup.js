@@ -85,7 +85,14 @@ async function loadCache() {
   for (const e of entries) {
     if (e.asn) {
       const existing = byAsn.get(e.asn);
-      if (!existing || (e.workspace_id && !existing.workspace_id)) {
+      // Precedence for a duplicate ASN:
+      //   1. an 'allow' entry always wins (a whitelist exists to override blocks)
+      //   2. otherwise a workspace-scoped entry beats a global one
+      const isAllow = e.list_type === 'allow';
+      const existingIsAllow = existing && existing.list_type === 'allow';
+      if (!existing
+          || (isAllow && !existingIsAllow)
+          || (isAllow === existingIsAllow && e.workspace_id && !existing.workspace_id)) {
         byAsn.set(e.asn, e);
       }
     } else if (e.cidr) {
@@ -211,7 +218,35 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '', 
     matchKind = 'term';
     matchedValue = winner.term;
   } else {
-    return { match: false, score_weight: 0, flags: [] };
+    return { match: false, allow: false, score_weight: 0, flags: [] };
+  }
+
+  // --- 4b. WHITELIST PRECEDENCE ---------------------------------------
+  // If ANY matching entry (asn / cidr / term) is an 'allow' rule, it wins
+  // outright, regardless of severity or score. A whitelist exists precisely
+  // to override the block rules that would otherwise catch this network.
+  const allMatches = [];
+  if (asnHit) allMatches.push({ e: asnHit, kind: 'asn', val: asnHit.asn });
+  if (cidrHit) allMatches.push({ e: cidrHit, kind: 'cidr', val: cidrHit.cidr });
+  for (const t of termHits) allMatches.push({ e: t, kind: 'term', val: t.term });
+  const allowMatch = allMatches.find((m) => m.e.list_type === 'allow');
+  if (allowMatch) {
+    AsnBlacklist.updateOne(
+      { _id: allowMatch.e._id },
+      { $inc: { hit_count: 1 }, $set: { last_hit_at: new Date() } }
+    ).catch(() => {});
+    return {
+      match: true,
+      allow: true,                       // <- consumers must bypass gates
+      entry: allowMatch.e,
+      match_kind: allowMatch.kind,
+      matched_value: allowMatch.val,
+      category: allowMatch.e.category,
+      severity: 'allow',
+      score_weight: 0,                   // never penalise a whitelisted network
+      override: 'mark_clean',
+      flags: [`asn_whitelist_${allowMatch.kind}`, `whitelisted:${allowMatch.val}`],
+    };
   }
 
   // --- 5. Increment hit counters (fire-and-forget) ---
@@ -241,6 +276,7 @@ async function lookupAsn(asn, workspaceId = null, { provider = '', asnOrg = '', 
 
   return {
     match: true,
+    allow: false,
     entry: winner,
     match_kind: matchKind,
     matched_value: matchedValue,

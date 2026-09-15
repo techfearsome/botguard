@@ -20,6 +20,14 @@ const mongoose = require('mongoose');
 
 const AsnBlacklistSchema = new mongoose.Schema({
   workspace_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', index: true },
+
+  // 'block' (default) — the classic blacklist: matching traffic is penalised.
+  // 'allow'           — whitelist: matching traffic BYPASSES the proxy/VPN and
+  //                     hosting gates entirely, and no score is added. Use for
+  //                     networks you know are legitimate (corporate egress,
+  //                     carrier CGNAT, Apple relay, a partner's office range).
+  // Allow entries always win over block entries for the same IP.
+  list_type: { type: String, enum: ['block', 'allow'], default: 'block', index: true },
   // null workspace_id = global rule (applies to all workspaces)
 
   // Match modes - exactly one of these should be set per rule:

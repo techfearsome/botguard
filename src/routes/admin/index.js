@@ -1389,13 +1389,15 @@ router.post('/asn', async (req, res) => {
   const body = req.body || {};
   try {
     const ruleType = body.rule_type || 'asn';
+    const listType = body.list_type === 'allow' ? 'allow' : 'block';
     const doc = {
       workspace_id: body.scope === 'global' ? null : ws._id,
       asn_org: body.asn_org || '',
+      list_type: listType,
       category: body.category,
-      severity: body.severity || 'high',
-      score_weight: Number(body.score_weight) || 50,
-      override: body.override || 'mark_proxy',
+      severity: listType === 'allow' ? 'low' : (body.severity || 'high'),
+      score_weight: listType === 'allow' ? 0 : (Number(body.score_weight) || 50),
+      override: listType === 'allow' ? 'mark_clean' : (body.override || 'mark_proxy'),
       source: body.source || 'manual',
       notes: body.notes || '',
       active: true,
