@@ -54,8 +54,26 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
       enrichment.confidence = pcVerdict.confidence;
       enrichment.hosting = pcVerdict.hosting;
       enrichment.scraper = pcVerdict.scraper;
+      enrichment.is_icloud_relay = !!pcVerdict.is_icloud_relay;
 
-      if (pcVerdict.is_proxy) {
+      // ── Apple iCloud Private Relay exemption ──────────────────────────────
+      // Relay egress is run by Cloudflare/Fastly/Akamai on Apple's behalf, so
+      // every provider labels it a datacenter VPN. It is not fraud: these are
+      // real consumer iOS users (Private Relay is on by default for iCloud+)
+      // and Apple attests the device. We clear the proxy verdict so the proxy/
+      // VPN gate doesn't block them, but keep a flag so it's visible in the
+      // click log and intelligence.
+      if (pcVerdict.is_icloud_relay) {
+        enrichment.is_proxy = false;
+        enrichment.proxy_type = null;
+        enrichment.hosting = false;
+        enrichment.risk_score = 0;
+        // ProxyCheck reports relay egress as type 'hosting' (it is, physically).
+        // Clear it so the optional block_hosting gate doesn't catch these
+        // consumer iOS users either.
+        if (enrichment.ip_type === 'hosting') enrichment.ip_type = 'icloud_relay';
+        flags.push('icloud_private_relay');
+      } else if (pcVerdict.is_proxy) {
         flags.push(`proxycheck_${pcVerdict.proxy_type?.toLowerCase() || 'proxy'}`);
         // Score scales with risk - VPN gets 60, public proxy gets 80, Tor gets 100
         const t = (pcVerdict.proxy_type || '').toUpperCase();
@@ -66,17 +84,18 @@ async function networkFilter({ ip, userAgent, headers = {}, workspaceId }) {
         else score += 70;
       }
 
-      // ProxyCheck's own risk score - blend in at lower weight
-      if (pcVerdict.risk_score >= 66) {
+      // ProxyCheck's own risk score - blend in at lower weight.
+      // Skipped for Private Relay (we zeroed its score above).
+      if (!pcVerdict.is_icloud_relay && pcVerdict.risk_score >= 66) {
         score += 30;
         flags.push('proxycheck_high_risk');
-      } else if (pcVerdict.risk_score >= 33) {
+      } else if (!pcVerdict.is_icloud_relay && pcVerdict.risk_score >= 33) {
         score += 15;
         flags.push('proxycheck_med_risk');
       }
 
       // Hosting type when not flagged as proxy is a softer signal
-      if (pcVerdict.type === 'hosting' && !pcVerdict.is_proxy) {
+      if (!pcVerdict.is_icloud_relay && pcVerdict.type === 'hosting' && !pcVerdict.is_proxy) {
         score += 25;
         flags.push('hosting_ip');
       }

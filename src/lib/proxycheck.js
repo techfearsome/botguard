@@ -206,11 +206,24 @@ function normalize(ip, raw) {
     }
   }
 
+  // Apple iCloud Private Relay detection. Apple contracts Cloudflare, Fastly
+  // and Akamai to run the relay egress, so these IPs look like datacenter VPNs
+  // to every provider. They are NOT fraud: the traffic is real consumer iOS
+  // users (Private Relay is on by default for iCloud+), and Apple attests the
+  // device. ProxyCheck identifies them via operator name / organisation.
+  const orgStr = String(network.organisation || '').toLowerCase();
+  const opStr = String(operatorName || '').toLowerCase();
+  const isIcloudRelay = orgStr.includes('icloud private relay')
+    || orgStr.includes('icloud relay')
+    || opStr === 'icloud'
+    || opStr.includes('icloud private relay');
+
   return {
     ip,
     asn,
     asn_org: network.provider || null,
     organisation: network.organisation || null,
+    is_icloud_relay: isIcloudRelay,
     country: location.country_code || null,
     country_name: location.country_name || null,
     region: location.region_name || null,
