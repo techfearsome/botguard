@@ -1,0 +1,252 @@
+<%- include('../partials/header', { ws, page, title: 'AES-GCM Tool - BotGuard' }) %>
+
+<div style="margin-bottom:16px;">
+  <h1 style="margin-bottom:4px;">AES-256-GCM Tool</h1>
+  <p class="muted">Encrypt &amp; decrypt using AES-256-GCM (WebCrypto). Key is SHA-256 of your passphrase; output is Base64(IV + ciphertext + tag). Compatible with the CuriosityStream landing page <code>data-enc</code> format. All operations run in your browser.</p>
+</div>
+
+<div style="max-width:640px;">
+  <section class="panel gcm-panel">
+
+    <!-- Mode Toggle -->
+    <div class="gcm-toggle-row">
+      <button class="gcm-toggle-btn active" id="btnEncMode" onclick="setMode('encrypt')">Encrypt</button>
+      <button class="gcm-toggle-btn" id="btnDecMode" onclick="setMode('decrypt')">Decrypt</button>
+    </div>
+
+    <!-- Key -->
+    <div class="field">
+      <label>Passphrase / Key</label>
+      <div class="gcm-key-wrap">
+        <span class="gcm-key-prefix">SHA-256 →</span>
+        <input type="text" id="keyInput" value="" placeholder="Enter key…" spellcheck="false" autocomplete="off" style="font-family:monospace; border:none; background:transparent; flex:1;">
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="field">
+      <label id="inputLabel">Plaintext Input</label>
+      <textarea id="inputArea" placeholder="Enter text to encrypt…" spellcheck="false"></textarea>
+      <div class="gcm-area-footer">
+        <span class="muted gcm-count" id="inputCount">0 chars</span>
+        <button class="btn btn-small" onclick="navigator.clipboard.writeText(document.getElementById('inputArea').value)">Copy</button>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="gcm-status" id="status"></div>
+
+    <!-- Output -->
+    <div class="field">
+      <label id="outputLabel">Encrypted Output (Base64)</label>
+      <textarea id="outputArea" placeholder="Result will appear here…" readonly spellcheck="false"></textarea>
+      <div class="gcm-area-footer">
+        <span class="muted gcm-count" id="outputCount">0 chars</span>
+        <button class="btn btn-small" onclick="copyOutput()">Copy</button>
+      </div>
+    </div>
+
+    <!-- Action -->
+    <button class="btn btn-primary gcm-action" id="actionBtn" onclick="run()" style="width:100%;">Encrypt Text</button>
+    <p class="muted" style="font-size:11px; text-align:center; margin:0;">Tip: press Ctrl/⌘ + Enter to run.</p>
+
+    <!-- Info -->
+    <div class="gcm-info">
+      <div class="gcm-info-title">How it works</div>
+      <div class="gcm-info-row"><span class="muted">Algorithm</span><span>AES-256-GCM</span></div>
+      <div class="gcm-info-row"><span class="muted">Key Derivation</span><span>SHA-256(passphrase)</span></div>
+      <div class="gcm-info-row"><span class="muted">IV / Nonce</span><span>12 bytes (random)</span></div>
+      <div class="gcm-info-row"><span class="muted">Output Format</span><span>Base64(IV + CT + Tag)</span></div>
+      <div class="gcm-info-row"><span class="muted">Auth Tag</span><span>16 bytes (GCM)</span></div>
+      <div class="gcm-info-row"><span class="muted">Compatible With</span><span>Landing page data-enc</span></div>
+    </div>
+
+  </section>
+</div>
+
+<style>
+  .gcm-panel { display:flex; flex-direction:column; gap:14px; }
+  .gcm-panel .field { display:flex; flex-direction:column; gap:6px; }
+  .gcm-panel label { font-size:12px; color:var(--text-secondary,#8b949e); }
+  .gcm-panel textarea {
+    width:100%; min-height:110px;
+    background:var(--bg-input,#0d1117);
+    border:1px solid var(--border-default,#30363d);
+    border-radius:6px;
+    color:var(--text-primary,#e6edf3);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px; padding:10px; resize:vertical;
+  }
+  .gcm-panel textarea:focus { outline:none; border-color:#58a6ff; }
+
+  .gcm-toggle-row {
+    display:grid; grid-template-columns:1fr 1fr; gap:8px;
+    background:var(--bg-input,#0d1117);
+    border:1px solid var(--border-default,#30363d);
+    border-radius:8px; padding:4px;
+  }
+  .gcm-toggle-btn {
+    font-family:'Inter', sans-serif; font-size:13px; font-weight:600;
+    border:none; border-radius:6px; padding:8px 12px; cursor:pointer;
+    background:transparent; color:var(--text-secondary,#8b949e);
+    transition:background 0.15s, color 0.15s;
+  }
+  .gcm-toggle-btn.active { background:#1f6feb; color:#fff; }
+  .gcm-toggle-btn#btnDecMode.active { background:#238636; }
+
+  .gcm-key-wrap {
+    display:flex; align-items:center; gap:8px;
+    background:var(--bg-input,#0d1117);
+    border:1px solid var(--border-default,#30363d);
+    border-radius:6px; padding:0 10px;
+  }
+  .gcm-key-wrap:focus-within { border-color:#58a6ff; }
+  .gcm-key-prefix {
+    font-family:'IBM Plex Mono', monospace; font-size:12px;
+    color:#f0883e; flex-shrink:0; padding:10px 0;
+  }
+  .gcm-key-wrap input:focus { outline:none; }
+
+  .gcm-area-footer {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-top:-2px;
+  }
+  .gcm-count { font-size:11px; font-family:'IBM Plex Mono', monospace; }
+
+  .gcm-status {
+    font-size:12px; padding:8px 12px; border-radius:6px;
+    text-align:center; display:none;
+  }
+  .gcm-status.success {
+    display:block; background:#132a17; color:#3fb950; border:1px solid #205a20;
+  }
+  .gcm-status.error {
+    display:block; background:#2a1416; color:#f85149; border:1px solid #6b2f34;
+  }
+
+  .gcm-action.encrypt-mode { background:#1f6feb; }
+  .gcm-action.decrypt-mode { background:#238636; }
+
+  .gcm-info {
+    background:var(--bg-input,#0d1117);
+    border:1px solid var(--border-default,#30363d);
+    border-radius:8px; padding:12px 14px;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .gcm-info-title { font-size:12px; font-weight:600; color:var(--text-primary,#e6edf3); margin-bottom:4px; }
+  .gcm-info-row {
+    display:flex; justify-content:space-between; font-size:12px;
+    font-family:'IBM Plex Mono', monospace;
+  }
+</style>
+
+<script>
+  var mode = 'encrypt';
+
+  function setMode(m) {
+    mode = m;
+    document.getElementById('btnEncMode').classList.toggle('active', m === 'encrypt');
+    document.getElementById('btnDecMode').classList.toggle('active', m === 'decrypt');
+    var btn = document.getElementById('actionBtn');
+    var inputLabel = document.getElementById('inputLabel');
+    var outputLabel = document.getElementById('outputLabel');
+    if (m === 'encrypt') {
+      btn.className = 'btn btn-primary gcm-action encrypt-mode';
+      btn.textContent = 'Encrypt Text';
+      document.getElementById('inputArea').placeholder = 'Enter text to encrypt…';
+      document.getElementById('outputArea').placeholder = 'Encrypted Base64 will appear here…';
+      inputLabel.textContent = 'Plaintext Input';
+      outputLabel.textContent = 'Encrypted Output (Base64)';
+    } else {
+      btn.className = 'btn btn-primary gcm-action decrypt-mode';
+      btn.textContent = 'Decrypt Text';
+      document.getElementById('inputArea').placeholder = 'Paste Base64 encrypted string…';
+      document.getElementById('outputArea').placeholder = 'Decrypted text will appear here…';
+      inputLabel.textContent = 'Encrypted Input (Base64)';
+      outputLabel.textContent = 'Decrypted Output';
+    }
+    document.getElementById('status').className = 'gcm-status';
+  }
+
+  async function getKey(passphrase) {
+    var hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(passphrase));
+    return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  }
+
+  async function encryptText(plaintext, passphrase) {
+    var key = await getKey(passphrase);
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var encoded = new TextEncoder().encode(plaintext);
+    var encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, encoded);
+    var combined = new Uint8Array(iv.length + encrypted.byteLength);
+    combined.set(iv);
+    combined.set(new Uint8Array(encrypted), iv.length);
+    return btoa(String.fromCharCode.apply(null, combined));
+  }
+
+  async function decryptText(encB64, passphrase) {
+    var raw = Uint8Array.from(atob(encB64), function(c) { return c.charCodeAt(0); });
+    var iv = raw.slice(0, 12);
+    var data = raw.slice(12);
+    var key = await getKey(passphrase);
+    var decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, data);
+    return new TextDecoder().decode(decrypted);
+  }
+
+  function showStatus(type, msg) {
+    var el = document.getElementById('status');
+    el.className = 'gcm-status ' + type;
+    el.textContent = msg;
+  }
+
+  async function run() {
+    var input = document.getElementById('inputArea').value.trim();
+    var passphrase = document.getElementById('keyInput').value;
+    var output = document.getElementById('outputArea');
+
+    if (!input) { showStatus('error', 'Input is empty.'); return; }
+    if (!passphrase) { showStatus('error', 'Key is empty.'); return; }
+
+    try {
+      if (mode === 'encrypt') {
+        var enc = await encryptText(input, passphrase);
+        output.value = enc;
+        showStatus('success', 'Encrypted successfully — ' + enc.length + ' chars Base64');
+      } else {
+        var dec = await decryptText(input, passphrase);
+        output.value = dec;
+        showStatus('success', 'Decrypted successfully — ' + dec.length + ' chars plaintext');
+      }
+      updateCounts();
+    } catch (e) {
+      if (mode === 'decrypt') {
+        showStatus('error', 'Decryption failed — wrong key or corrupted data.');
+      } else {
+        showStatus('error', 'Encryption failed: ' + e.message);
+      }
+      output.value = '';
+      updateCounts();
+    }
+  }
+
+  function copyOutput() {
+    var v = document.getElementById('outputArea').value;
+    if (v) {
+      navigator.clipboard.writeText(v).then(function() {
+        showStatus('success', 'Copied to clipboard!');
+      });
+    }
+  }
+
+  function updateCounts() {
+    document.getElementById('inputCount').textContent = document.getElementById('inputArea').value.length + ' chars';
+    document.getElementById('outputCount').textContent = document.getElementById('outputArea').value.length + ' chars';
+  }
+
+  document.getElementById('inputArea').addEventListener('input', updateCounts);
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run();
+  });
+</script>
+
+<%- include('../partials/footer') %>

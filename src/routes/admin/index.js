@@ -3534,6 +3534,15 @@ router.get('/tools/aes', async (req, res) => {
   res.render('admin/tools_aes', { ws, page: 'tools' });
 });
 
+// ── Tools: AES-256-GCM (WebCrypto) ───────────────────────────────────────
+// Fully client-side — uses the browser's native WebCrypto (no library).
+// SHA-256(passphrase) key, random 12-byte IV, Base64(IV+CT+Tag) output;
+// compatible with the CuriosityStream landing page data-enc format.
+router.get('/tools/aes-gcm', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  res.render('admin/tools_aes_gcm', { ws, page: 'tools' });
+});
+
 // ── Security: admin login history ────────────────────────────────────────
 router.get('/security', async (req, res) => {
   const ws = await resolveWorkspace(req);
