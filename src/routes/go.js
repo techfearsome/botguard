@@ -418,14 +418,26 @@ async function handleClick(req, res, opts) {
 
       // Auto-conversion tracking - only when explicitly enabled on the page that's actually rendering.
       // Safe pages never get this injection (we don't want auto-conversions on blocked traffic).
+      // Hardening: a fault while building/injecting the tracking snippet must never
+      // 500 the request or lose the click. If it throws, log it and serve the page
+      // without the injection - the visitor still lands, and the click is still written.
       if (targetPage?.auto_conversion?.enabled) {
-        const injection = buildInjection({
-          terms: targetPage.auto_conversion.terms,
-          eventName: targetPage.auto_conversion.event_name || 'auto_click',
-          conversionValue: targetPage.auto_conversion.conversion_value || 0,
-        });
-        html = injectBeforeBodyEnd(html, injection);
-        doc.auto_conv_injected = true;
+        try {
+          const injection = buildInjection({
+            terms: targetPage.auto_conversion.terms,
+            eventName: targetPage.auto_conversion.event_name || 'auto_click',
+            conversionValue: targetPage.auto_conversion.conversion_value || 0,
+          });
+          html = injectBeforeBodyEnd(html, injection);
+          doc.auto_conv_injected = true;
+        } catch (injErr) {
+          logger.error('auto_conv_injection_failed', {
+            err: injErr.message,
+            page_id: String(targetPage._id),
+            click_id: doc.click_id,
+          });
+          doc.auto_conv_injected = false;
+        }
       }
     }
 

@@ -32,7 +32,7 @@ const DEFAULT_TERMS = [
  * @param {string} opts.eventName - event_name to record on the conversion.
  * @returns {string} HTML <script> tag, ready to splice into the page.
  */
-function buildInjection({ terms = [], endpoint = '/cb/auto-conv', eventName = 'auto_click' } = {}) {
+function buildInjection({ terms = [], endpoint = '/cb/auto-conv', eventName = 'auto_click', conversionValue = 0 } = {}) {
   const useTerms = Array.isArray(terms) && terms.length > 0 ? terms : DEFAULT_TERMS;
   // Lowercase for case-insensitive matching, dedupe, drop empties
   const normalized = Array.from(new Set(
@@ -45,7 +45,7 @@ function buildInjection({ terms = [], endpoint = '/cb/auto-conv', eventName = 'a
     terms: normalized,
     endpoint,
     event_name: eventName,
-    conversion_value: opts.conversionValue || 0,
+    conversion_value: conversionValue || 0,
     // 30-day dedup
     session_cookie: 'bg_conv',
     session_days: 30,
