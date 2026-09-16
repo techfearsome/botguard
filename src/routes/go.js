@@ -133,6 +133,13 @@ async function handleClick(req, res, opts) {
       registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res, campaign); return res.status(200).type('html').send(applyPageTracking(html, workspace));
     }
 
+    // UTM gate in monitor mode (or a clean pass) doesn't block. Carry its flags
+    // so they still surface on the click in the Click Log — this is what lets you
+    // audit "which clicks are missing UTMs" without hiding the offer from them.
+    const utmGateCarryFlags = (!gateResult.blocked && Array.isArray(gateResult.flags))
+      ? gateResult.flags.filter((f) => f !== 'utm_gate_off')
+      : [];
+
     // --- Click Identifier gate (also BEFORE the filter chain) ---
     // Every real ad click carries gclid/wbraid/gbraid (Google) or msclkid (Bing).
     // A visit with no click ID is likely a copy/paste, scraper, or URL replay.
@@ -195,6 +202,14 @@ async function handleClick(req, res, opts) {
       decision_reason: result.decision_reason,
       mode_at_decision: result.mode_at_decision,
     });
+
+    // Fold in any UTM-gate flags carried from before the filter chain (pass, or
+    // monitor-mode "would_block"). The filter chain rebuilt doc.scores.flags, so
+    // we re-append here to keep them visible in the Click Log.
+    if (utmGateCarryFlags.length) {
+      doc.scores = doc.scores || {};
+      doc.scores.flags = [...(doc.scores.flags || []), ...utmGateCarryFlags];
+    }
 
     // --- Country gate (post-network, has ProxyCheck country verdict) ---
     const countryResult = countryGateCheck({ country: doc.country, campaign });

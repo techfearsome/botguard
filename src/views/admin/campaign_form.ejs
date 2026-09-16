@@ -268,6 +268,24 @@
     </div>
 
     <div class="form-row">
+      <label>Mode</label>
+      <%
+        const utmMode = campaign?.filter_config?.utm_gate?.mode === 'monitor' ? 'monitor' : 'enforce';
+      %>
+      <div style="display:flex; gap:18px; flex-wrap:wrap;">
+        <label style="font-weight:normal;">
+          <input type="radio" name="utm_gate_mode" value="enforce" <%= utmMode === 'enforce' ? 'checked' : '' %>>
+          Enforce — block visits missing required keys (route to safe page)
+        </label>
+        <label style="font-weight:normal;">
+          <input type="radio" name="utm_gate_mode" value="monitor" <%= utmMode === 'monitor' ? 'checked' : '' %>>
+          Monitor — flag missing keys in the Click Log, but still show the offer
+        </label>
+      </div>
+      <small class="muted">Use Monitor to verify your Final URL is passing UTMs (watch the Click Log for <code>utm_gate_monitor_would_block</code> / <code>utm_missing_*</code>), then switch to Enforce once traffic is clean.</small>
+    </div>
+
+    <div class="form-row">
       <label>Required UTM keys</label>
       <%
         const requiredKeys = campaign?.filter_config?.utm_gate?.required_keys || ['source','medium','campaign'];

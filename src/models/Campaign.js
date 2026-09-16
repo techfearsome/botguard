@@ -58,10 +58,16 @@ const CampaignSchema = new mongoose.Schema({
     mode: { type: String, enum: ['log_only', 'enforce'], default: 'log_only' },
     rule_overrides: { type: mongoose.Schema.Types.Mixed, default: {} },
 
-    // UTM gate: when enabled, visits missing required UTM keys are routed to safe page.
-    // Useful to keep direct/scraped visits off the offer.
+    // UTM gate: when enabled, visits missing required UTM keys are (in enforce
+    // mode) routed to the safe page. Useful to keep direct/scraped visits off
+    // the offer. In monitor mode, missing keys are only flagged on the click —
+    // the visit still reaches the offer, so you can audit attribution before
+    // committing to enforcement.
     utm_gate: {
       enabled: { type: Boolean, default: false },
+      // 'enforce' = block missing to safe page. 'monitor' = flag only, don't block.
+      // Defaults to 'enforce' so existing enabled gates keep blocking.
+      mode: { type: String, enum: ['enforce', 'monitor'], default: 'enforce' },
       required_keys: {
         type: [String],
         enum: ['source', 'medium', 'campaign', 'term', 'content'],
