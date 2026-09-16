@@ -1,0 +1,258 @@
+<%- include('../partials/header', { ws, page, title: 'AES Tool - BotGuard' }) %>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+
+<div style="margin-bottom:16px;">
+  <h1 style="margin-bottom:4px;">AES Encrypt / Decrypt</h1>
+  <p class="muted">Client-side AES-256 encryption. Nothing is sent to the server — all operations run in your browser.</p>
+</div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px;">
+
+  <!-- ENCRYPT -->
+  <section class="panel aes-panel">
+    <h3 style="margin-top:0; font-size:14px; color:#58a6ff;">Encrypt &amp; generate key</h3>
+
+    <div class="field">
+      <label for="plaintext">Plain text</label>
+      <textarea id="plaintext" placeholder="Enter text to encrypt…"></textarea>
+    </div>
+
+    <button class="btn btn-primary" onclick="doEncrypt()">Encrypt &amp; generate key</button>
+
+    <div id="enc-status" class="aes-status"></div>
+
+    <div class="field" id="enc-key-wrap" style="display:none">
+      <label>Generated key — save this</label>
+      <div class="aes-key-display">
+        <code id="enc-key"></code>
+        <button class="btn btn-small" onclick="copyText('enc-key', event)">copy</button>
+      </div>
+    </div>
+
+    <div class="field" id="enc-out-wrap" style="display:none">
+      <label>Encrypted output</label>
+      <div class="aes-output">
+        <button class="btn btn-small aes-copy" onclick="copyText('enc-output', event)">copy</button>
+        <pre id="enc-output"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ENCRYPT WITH OWN KEY -->
+  <section class="panel aes-panel">
+    <h3 style="margin-top:0; font-size:14px; color:#f0883e;">Encrypt with your key</h3>
+
+    <div class="field">
+      <label for="custom-plain">Plain text</label>
+      <textarea id="custom-plain" placeholder="Enter text to encrypt…"></textarea>
+    </div>
+
+    <div class="field">
+      <label for="custom-key">Your key</label>
+      <input type="text" id="custom-key" placeholder="Enter your own key…" style="font-family:monospace;">
+    </div>
+
+    <button class="btn" onclick="doCustomEncrypt()" style="background:#da6d25; color:#fff;">Encrypt with this key</button>
+
+    <div id="custom-status" class="aes-status"></div>
+
+    <div class="field" id="custom-out-wrap" style="display:none">
+      <label>Encrypted output</label>
+      <div class="aes-output">
+        <button class="btn btn-small aes-copy" onclick="copyText('custom-output', event)">copy</button>
+        <pre id="custom-output"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- DECRYPT -->
+  <section class="panel aes-panel">
+    <h3 style="margin-top:0; font-size:14px; color:#3fb950;">Decrypt</h3>
+
+    <div class="field">
+      <label for="ciphertext">Encrypted text</label>
+      <textarea id="ciphertext" placeholder="Paste encrypted text here…"></textarea>
+    </div>
+
+    <div class="field">
+      <label for="dec-key-input">Decryption key</label>
+      <input type="text" id="dec-key-input" placeholder="Paste the key here…" style="font-family:monospace;">
+    </div>
+
+    <button class="btn" onclick="doDecrypt()" style="background:#238636; color:#fff;">Decrypt</button>
+
+    <div id="dec-status" class="aes-status"></div>
+
+    <div class="field" id="dec-out-wrap" style="display:none">
+      <label>Decrypted output</label>
+      <div class="aes-output">
+        <button class="btn btn-small aes-copy" onclick="copyText('dec-output', event)">copy</button>
+        <pre id="dec-output"></pre>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<style>
+  .aes-panel { display:flex; flex-direction:column; gap:12px; }
+  .aes-panel .field { display:flex; flex-direction:column; gap:6px; }
+  .aes-panel label { font-size:12px; color:var(--text-secondary,#8b949e); }
+  .aes-panel textarea,
+  .aes-panel input[type="text"] {
+    width:100%;
+    background:var(--bg-input,#0d1117);
+    border:1px solid var(--border-default,#30363d);
+    border-radius:6px;
+    color:var(--text-primary,#e6edf3);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    padding:10px;
+    resize:vertical;
+  }
+  .aes-panel textarea { min-height:100px; }
+  .aes-panel textarea:focus,
+  .aes-panel input[type="text"]:focus {
+    outline:none;
+    border-color:#58a6ff;
+  }
+  .aes-status {
+    font-size:12px;
+    padding:7px 10px;
+    border-radius:6px;
+    text-align:center;
+    display:none;
+  }
+  .aes-status.error {
+    display:block;
+    background:#2a1416;
+    color:#f85149;
+    border:1px solid #6b2f34;
+  }
+  .aes-status.success {
+    display:block;
+    background:#132a17;
+    color:#3fb950;
+    border:1px solid #205a20;
+  }
+  .aes-key-display {
+    background:var(--bg-input,#0d1117);
+    border:1px dashed #f0883e;
+    border-radius:6px;
+    padding:8px 10px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+  }
+  .aes-key-display code {
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    color:#f0883e;
+    word-break:break-all;
+  }
+  .aes-output {
+    background:var(--bg-input,#0d1117);
+    border:1px solid var(--border-default,#30363d);
+    border-radius:6px;
+    padding:10px;
+    position:relative;
+    min-height:56px;
+  }
+  .aes-output pre {
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    white-space:pre-wrap;
+    word-break:break-all;
+    color:var(--text-primary,#e6edf3);
+    line-height:1.6;
+  }
+  .aes-output .aes-copy { position:absolute; top:6px; right:6px; }
+</style>
+
+<script>
+  function generateKey(len) {
+    var arr = new Uint8Array(len);
+    crypto.getRandomValues(arr);
+    return btoa(String.fromCharCode.apply(null, arr));
+  }
+
+  function showStatus(id, msg, type) {
+    var el = document.getElementById(id);
+    el.textContent = msg;
+    el.className = 'aes-status ' + type;
+  }
+
+  function clearStatus(id) {
+    var el = document.getElementById(id);
+    el.className = 'aes-status';
+    el.style.display = 'none';
+  }
+
+  function doEncrypt() {
+    clearStatus('enc-status');
+    var plain = document.getElementById('plaintext').value.trim();
+    if (!plain) { showStatus('enc-status', 'Enter some text first.', 'error'); return; }
+    try {
+      var key = generateKey(32); // 256-bit key
+      var encrypted = CryptoJS.AES.encrypt(plain, key).toString();
+      document.getElementById('enc-key').textContent = key;
+      document.getElementById('enc-output').textContent = encrypted;
+      document.getElementById('enc-key-wrap').style.display = '';
+      document.getElementById('enc-out-wrap').style.display = '';
+      showStatus('enc-status', 'Encrypted successfully.', 'success');
+    } catch (e) {
+      showStatus('enc-status', 'Encryption failed: ' + e.message, 'error');
+    }
+  }
+
+  function doCustomEncrypt() {
+    clearStatus('custom-status');
+    var plain = document.getElementById('custom-plain').value.trim();
+    var key = document.getElementById('custom-key').value.trim();
+    if (!plain || !key) { showStatus('custom-status', 'Provide both text and a key.', 'error'); return; }
+    try {
+      var encrypted = CryptoJS.AES.encrypt(plain, key).toString();
+      document.getElementById('custom-output').textContent = encrypted;
+      document.getElementById('custom-out-wrap').style.display = '';
+      showStatus('custom-status', 'Encrypted with your key.', 'success');
+    } catch (e) {
+      showStatus('custom-status', 'Encryption failed: ' + e.message, 'error');
+    }
+  }
+
+  function doDecrypt() {
+    clearStatus('dec-status');
+    var cipher = document.getElementById('ciphertext').value.trim();
+    var key = document.getElementById('dec-key-input').value.trim();
+    if (!cipher || !key) { showStatus('dec-status', 'Provide both encrypted text and key.', 'error'); return; }
+    try {
+      var bytes = CryptoJS.AES.decrypt(cipher, key);
+      var decrypted = bytes.toString(CryptoJS.enc.Utf8);
+      if (!decrypted) {
+        showStatus('dec-status', 'Wrong key or corrupted data.', 'error');
+        document.getElementById('dec-out-wrap').style.display = 'none';
+        return;
+      }
+      document.getElementById('dec-output').textContent = decrypted;
+      document.getElementById('dec-out-wrap').style.display = '';
+      showStatus('dec-status', 'Decrypted successfully.', 'success');
+    } catch (e) {
+      showStatus('dec-status', 'Decryption failed — check your key and input.', 'error');
+      document.getElementById('dec-out-wrap').style.display = 'none';
+    }
+  }
+
+  function copyText(elId, ev) {
+    var text = document.getElementById(elId).textContent;
+    navigator.clipboard.writeText(text).then(function () {
+      var btn = ev.target;
+      var orig = btn.textContent;
+      btn.textContent = 'copied!';
+      setTimeout(function () { btn.textContent = orig; }, 1500);
+    });
+  }
+</script>
+
+<%- include('../partials/footer') %>

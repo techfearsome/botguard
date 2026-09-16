@@ -3526,6 +3526,14 @@ router.get('/tools/ip-check', async (req, res) => {
   });
 });
 
+// ── Tools: AES Encrypt / Decrypt ─────────────────────────────────────────
+// Fully client-side — the page ships the crypto-js library and runs all
+// encryption/decryption in the browser. The route only renders the view.
+router.get('/tools/aes', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  res.render('admin/tools_aes', { ws, page: 'tools' });
+});
+
 // ── Security: admin login history ────────────────────────────────────────
 router.get('/security', async (req, res) => {
   const ws = await resolveWorkspace(req);
