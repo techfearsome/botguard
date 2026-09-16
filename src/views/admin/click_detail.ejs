@@ -196,6 +196,10 @@
     See https://support.google.com/google-ads/answer/6305348 for the full list. %>
 <% const vtG = click.valuetrack?.google || {}; %>
 <% const vtB = click.valuetrack?.bing || {}; %>
+<% const utm = click.utm || {}; %>
+<% const utmCoreKeys = ['source', 'medium', 'campaign']; %>
+<% const utmExtraKeys = ['term', 'content']; %>
+<% const hasUtm = [...utmCoreKeys, ...utmExtraKeys].some((k) => utm[k]); %>
 <% const hasVtG = Object.keys(vtG).length > 0; %>
 <% const hasVtB = Object.keys(vtB).length > 0; %>
 <%
@@ -217,12 +221,25 @@
   }
 %>
 
-<% if (hasVtG || hasVtB) { %>
+<% if (hasVtG || hasVtB || hasUtm) { %>
 <section class="panel">
   <h3>ValueTrack <span class="muted" style="font-weight:normal; font-size:13px;">(ad platform's dynamic parameters)</span></h3>
 
+  <h4 style="margin-top:0;">UTM Parameters</h4>
+  <table class="table table-dense">
+    <% utmCoreKeys.forEach((k) => { %>
+      <tr>
+        <td>utm_<%= k %></td>
+        <td><% if (utm[k]) { %><span class="mono"><%= utm[k] %></span><% } else { %><span class="muted">– (not passed)</span><% } %></td>
+      </tr>
+    <% }) %>
+    <% utmExtraKeys.forEach((k) => { if (utm[k]) { %>
+      <tr><td>utm_<%= k %></td><td class="mono"><%= utm[k] %></td></tr>
+    <% } }) %>
+  </table>
+
   <% if (hasVtG) { %>
-    <h4 style="margin-top:0;">Google Ads</h4>
+    <h4 style="margin-top:16px;">Google Ads</h4>
     <table class="table table-dense">
       <% Object.entries(vtG).forEach(([k, v]) => { %>
         <tr>
