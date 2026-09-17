@@ -78,12 +78,27 @@
             <option value="<%= c._id %>"><%= c.name %><%= c.root_path ? ' (/'+c.root_path+')' : '' %></option>
           <% }) %>
         </select>
+        <small class="muted">The URL is built automatically from the campaign path + your domain below. No need to paste it.</small>
       </div>
-      <div class="field">
-        <label>Target URL</label>
-        <input type="text" name="target_url" placeholder="https://yourdomain/classes?utm_campaign=classes&tm=tt&ap=gads&cid=123" required>
-        <small class="muted">Include <code>utm_campaign</code> if your UTM gate requires it. The runner adds the per-source click id + utm_source/medium.</small>
+      <div style="display:flex; gap:8px;">
+        <div class="field" style="flex:1;">
+          <label>Domain</label>
+          <input type="text" name="domain" value="<%= lt_domain %>" placeholder="yogamateusa.co.uk">
+          <small class="muted">Saved for next time.</small>
+        </div>
+        <div class="field" style="flex:1.4;">
+          <label>Default ValueTrack params</label>
+          <input type="text" name="valuetrack" value="<%= lt_valuetrack %>" placeholder="tm=tt&ap=gads&cid=123">
+          <small class="muted">Appended so traffic looks real. Also saved.</small>
+        </div>
       </div>
+      <details style="margin:2px 0;">
+        <summary class="muted" style="cursor:pointer;">Advanced: override URL</summary>
+        <div class="field" style="margin-top:8px;">
+          <input type="text" name="target_url_override" placeholder="https://…  (leave empty to auto-build from campaign + domain)">
+          <small class="muted">If set, this exact URL is used and the campaign/domain above are ignored for URL-building.</small>
+        </div>
+      </details>
       <div class="field">
         <label style="font-weight:normal;">
           <input type="checkbox" name="include_utm_gate" checked>

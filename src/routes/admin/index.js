@@ -4081,6 +4081,8 @@ router.get('/tools/loadtest', async (req, res) => {
   ]);
   res.render('admin/tools_loadtest', {
     ws, page: 'tools', proxies, runs, campaigns,
+    lt_domain: ws.settings?.loadtest?.domain || '',
+    lt_valuetrack: ws.settings?.loadtest?.valuetrack || 'tm=tt&ap=gads&cid=123',
     flash: req.query.flash || '', error: req.query.error || '',
   });
 });
@@ -4120,10 +4122,35 @@ router.post('/tools/loadtest', async (req, res) => {
   const b = req.body;
   try {
     let campaignName = '';
+    let campaign = null;
     if (b.campaign_id) {
-      const c = await Campaign.findOne({ _id: b.campaign_id, workspace_id: ws._id }).select('name').lean();
-      campaignName = c ? c.name : '';
+      campaign = await Campaign.findOne({ _id: b.campaign_id, workspace_id: ws._id }).select('name slug root_path').lean();
+      campaignName = campaign ? campaign.name : '';
     }
+
+    // Build the target URL. Priority: explicit override → auto-build from campaign
+    // + saved domain + default ValueTrack params.
+    const domain = (b.domain || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const valuetrack = (b.valuetrack || '').trim().replace(/^[?&]+/, '');
+    let targetUrl = (b.target_url_override || '').trim();
+
+    if (!targetUrl) {
+      if (!campaign) throw new Error('Pick a campaign, or provide an override URL.');
+      if (!domain) throw new Error('Set a domain (once) so the URL can be built from the campaign.');
+      const routePath = campaign.root_path ? `/${campaign.root_path}` : `/go/${campaign.slug}`;
+      const params = new URLSearchParams();
+      params.set('utm_campaign', campaign.slug);
+      // Merge in the default ValueTrack params (they aren't part of the campaign).
+      if (valuetrack) for (const [k, v] of new URLSearchParams(valuetrack)) params.set(k, v);
+      targetUrl = `https://${domain}${routePath}?${params.toString()}`;
+    }
+
+    // Remember domain + valuetrack for next time.
+    await Workspace.updateOne({ _id: ws._id }, { $set: {
+      'settings.loadtest.domain': domain || (ws.settings?.loadtest?.domain || ''),
+      'settings.loadtest.valuetrack': valuetrack || (ws.settings?.loadtest?.valuetrack || ''),
+    } });
+
     const proxyIds = Array.isArray(b.proxy_ids) ? b.proxy_ids : (b.proxy_ids ? [b.proxy_ids] : []);
     const runTag = require('crypto').randomBytes(3).toString('hex');
     const customUas = (b.custom_uas || '').split('\n').map((s) => s.trim()).filter(Boolean);
@@ -4132,7 +4159,7 @@ router.post('/tools/loadtest', async (req, res) => {
       name: (b.name || '').trim() || `run-${runTag}`,
       campaign_id: b.campaign_id || undefined,
       campaign_name: campaignName,
-      target_url: (b.target_url || '').trim(),
+      target_url: targetUrl,
       include_utm_gate: b.include_utm_gate === 'on' || b.include_utm_gate === 'true',
       ua_mode: b.ua_mode === 'custom' ? 'custom' : 'builtin',
       custom_uas: customUas,

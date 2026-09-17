@@ -88,6 +88,13 @@ const WorkspaceSchema = new mongoose.Schema({
       last_sync_added: { type: Number, default: 0 },
       last_sync_removed: { type: Number, default: 0 },
     },
+
+    // Stress-test tool defaults: remembered so the URL auto-builds from the
+    // selected campaign (domain + default ValueTrack params) instead of pasting.
+    loadtest: {
+      domain:     { type: String, default: '' }, // e.g. yogamateusa.co.uk (no scheme)
+      valuetrack: { type: String, default: 'tm=tt&ap=gads&cid=123&agid=456&aid=789&nw=d&dv=m&mt=e' },
+    },
   },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
