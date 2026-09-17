@@ -1131,7 +1131,7 @@ router.get('/clicks.csv', async (req, res) => {
       c.country || '',
       c.asn ?? '',
       c.asn_org || '',
-      c.device_class || '',
+      c.ua_parsed?.device_class || '',
       c.ua_parsed?.device_label || '',
       c.ua_parsed?.os || '',
       c.ua_parsed?.browser || '',
