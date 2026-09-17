@@ -1,0 +1,144 @@
+<%- include('../partials/header', { ws, page, title: 'Stress Test - BotGuard' }) %>
+
+<div style="margin-bottom:16px;">
+  <h1 style="margin-bottom:4px;">Stress Test</h1>
+  <p class="muted">Generate synthetic Google / Facebook / X traffic through saved proxies to see how detection holds up. The CMS runs the generator in the background and saves results here. Point only at your own domains.</p>
+</div>
+
+<% if (flash) { %><div class="status success" style="display:block; margin-bottom:12px;"><%= flash %></div><% } %>
+<% if (error) { %><div class="status error" style="display:block; margin-bottom:12px;"><%= error %></div><% } %>
+
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;">
+
+  <!-- ── Saved proxies ── -->
+  <section class="panel">
+    <h3 style="margin-top:0;">Saved proxies</h3>
+    <table class="table table-dense" style="margin-bottom:14px;">
+      <thead><tr><th>Name</th><th>Protocol</th><th>Host:Port</th><th>Expect</th><th></th></tr></thead>
+      <tbody>
+        <% if (!proxies.length) { %>
+          <tr><td colspan="5" class="muted">No proxies saved yet.</td></tr>
+        <% } %>
+        <% proxies.forEach(p => { %>
+          <tr>
+            <td><%= p.name %></td>
+            <td><code><%= p.protocol %></code></td>
+            <td class="mono"><%= p.host %>:<%= p.port %></td>
+            <td><%= p.expect %></td>
+            <td>
+              <form method="POST" action="/admin/tools/loadtest/proxies/<%= p._id %>/delete" style="margin:0;" onsubmit="return confirm('Delete this proxy?');">
+                <button type="submit" class="btn btn-small">✕</button>
+              </form>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+
+    <h4>Add a proxy</h4>
+    <form method="POST" action="/admin/tools/loadtest/proxies" style="display:flex; flex-direction:column; gap:8px;">
+      <input type="text" name="name" placeholder="Name (e.g. iProyal US Res)" required>
+      <div style="display:flex; gap:8px;">
+        <select name="protocol" style="flex:0 0 120px;">
+          <option value="http">http</option>
+          <option value="socks5">socks5</option>
+        </select>
+        <input type="text" name="host" placeholder="host" style="flex:1;" required>
+        <input type="number" name="port" placeholder="port" style="flex:0 0 90px;" required>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <input type="text" name="username" placeholder="username" style="flex:1;">
+        <input type="text" name="password" placeholder="password" style="flex:1;">
+      </div>
+      <div style="display:flex; gap:8px;">
+        <input type="text" name="country" placeholder="country note (optional)" style="flex:1;">
+        <select name="expect" style="flex:0 0 140px;">
+          <option value="unknown">expect: unknown</option>
+          <option value="allow">expect: allow</option>
+          <option value="block">expect: block</option>
+        </select>
+      </div>
+      <button type="submit" class="btn">Save proxy</button>
+    </form>
+  </section>
+
+  <!-- ── New run ── -->
+  <section class="panel">
+    <h3 style="margin-top:0;">New test run</h3>
+    <form method="POST" action="/admin/tools/loadtest" style="display:flex; flex-direction:column; gap:10px;">
+      <div class="field">
+        <label>Run name</label>
+        <input type="text" name="name" placeholder="e.g. classes iphone sweep">
+      </div>
+      <div class="field">
+        <label>Campaign</label>
+        <select name="campaign_id">
+          <option value="">— none —</option>
+          <% campaigns.forEach(c => { %>
+            <option value="<%= c._id %>"><%= c.name %><%= c.root_path ? ' (/'+c.root_path+')' : '' %></option>
+          <% }) %>
+        </select>
+      </div>
+      <div class="field">
+        <label>Target URL</label>
+        <input type="text" name="target_url" placeholder="https://yourdomain/classes?utm_campaign=classes&tm=tt&ap=gads&cid=123" required>
+        <small class="muted">Include <code>utm_campaign</code> if your UTM gate requires it. The runner adds the per-source click id + utm_source/medium.</small>
+      </div>
+      <div class="field">
+        <label style="font-weight:normal;">
+          <input type="checkbox" name="include_utm_gate" checked>
+          Include UTM params (traffic carries utm_source/medium so the gate passes). Uncheck to omit them and test the gate blocking.
+        </label>
+      </div>
+      <div class="field">
+        <label>User-Agents</label>
+        <label style="font-weight:normal;"><input type="radio" name="ua_mode" value="builtin" checked> Built-in device list (iPhone/Android/Windows/Mac/iPad)</label>
+        <label style="font-weight:normal;"><input type="radio" name="ua_mode" value="custom"> Paste custom list (one per line below)</label>
+        <textarea name="custom_uas" rows="3" placeholder="Paste one User-Agent per line (used only if 'custom' is selected)"></textarea>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <div class="field" style="flex:1;"><label>Count</label><input type="number" name="count" value="200"></div>
+        <div class="field" style="flex:1;"><label>RPS</label><input type="number" name="rps" value="5"></div>
+        <div class="field" style="flex:1;"><label>Weights g,f,x</label><input type="text" name="weights" value="60,25,15"></div>
+      </div>
+      <div class="field">
+        <label>Proxies (leave all unchecked = direct from server)</label>
+        <% if (!proxies.length) { %><small class="muted">Add a proxy on the left first.</small><% } %>
+        <% proxies.forEach(p => { %>
+          <label style="font-weight:normal;"><input type="checkbox" name="proxy_ids" value="<%= p._id %>"> <%= p.name %> <code><%= p.protocol %></code> <span class="muted">(expect <%= p.expect %>)</span></label>
+        <% }) %>
+      </div>
+      <div class="field">
+        <label>Load-test token (optional)</label>
+        <input type="text" name="loadtest_token" placeholder="matches server LOADTEST_TOKEN → flags traffic synthetic, excluded from intelligence">
+      </div>
+      <button type="submit" class="btn btn-primary">Save run</button>
+    </form>
+  </section>
+</div>
+
+<!-- ── Run history ── -->
+<section class="panel" style="margin-top:16px;">
+  <h3 style="margin-top:0;">Run history</h3>
+  <table class="table table-dense">
+    <thead><tr><th>Name</th><th>Campaign</th><th>When</th><th>Status</th><th>Sent</th><th>p95 ms</th><th></th></tr></thead>
+    <tbody>
+      <% if (!runs.length) { %><tr><td colspan="7" class="muted">No runs yet.</td></tr><% } %>
+      <% runs.forEach(r => { %>
+        <tr>
+          <td><%= r.name %></td>
+          <td><%= r.campaign_name || '–' %></td>
+          <td><%= new Date(r.created_at).toISOString().replace('T',' ').slice(0,16) %></td>
+          <td>
+            <span class="badge" style="background:<%= r.status==='done'?'#EAF3DE':(r.status==='running'?'#FEF3C7':(r.status==='error'?'#FCEBEB':'#eee')) %>;"><%= r.status %></span>
+          </td>
+          <td><%= r.results?.total_sent || 0 %></td>
+          <td><%= r.results?.p95_ms || '–' %></td>
+          <td><a href="/admin/tools/loadtest/<%= r._id %>" class="btn btn-small">Open</a></td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</section>
+
+<%- include('../partials/footer') %>

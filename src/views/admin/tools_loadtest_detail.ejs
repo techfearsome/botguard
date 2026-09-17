@@ -1,0 +1,112 @@
+<%- include('../partials/header', { ws, page, title: 'Stress Test Run - BotGuard' }) %>
+
+<div style="margin-bottom:16px;">
+  <a href="/admin/tools/loadtest" class="btn btn-small">← Back to runs</a>
+  <h1 style="margin:8px 0 4px;"><%= run.name %></h1>
+  <p class="muted">
+    <%= run.campaign_name || 'no campaign' %> ·
+    status <span class="badge" style="background:<%= run.status==='done'?'#EAF3DE':(run.status==='running'?'#FEF3C7':(run.status==='error'?'#FCEBEB':'#eee')) %>;"><%= run.status %></span>
+    · tag <code>synthtest-<%= run.run_tag %></code>
+  </p>
+</div>
+
+<% if (flash) { %><div class="status success" style="display:block; margin-bottom:12px;"><%= flash %></div><% } %>
+<% if (error) { %><div class="status error" style="display:block; margin-bottom:12px;"><%= error %></div><% } %>
+<% if (run.error) { %><div class="status error" style="display:block; margin-bottom:12px;">Runner error: <%= run.error %></div><% } %>
+
+<div style="display:flex; gap:10px; margin-bottom:16px;">
+  <form method="POST" action="/admin/tools/loadtest/<%= run._id %>/run" style="margin:0;">
+    <button type="submit" class="btn btn-primary" <%= run.status==='running'?'disabled':'' %>>
+      <%= run.status==='running' ? 'Running…' : (run.status==='done' ? 'Re-run' : 'Start') %>
+    </button>
+  </form>
+  <a href="/admin/tools/loadtest/<%= run._id %>" class="btn">Refresh</a>
+  <a href="/admin/clicks?utm_content=synthtest-<%= run.run_tag %>" class="btn">View clicks in log</a>
+</div>
+
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;">
+
+  <!-- Config -->
+  <section class="panel">
+    <h3 style="margin-top:0;">Config</h3>
+    <table class="table table-dense">
+      <tr><td>Target URL</td><td class="mono" style="word-break:break-all;"><%= run.target_url %></td></tr>
+      <tr><td>Include UTM</td><td><%= run.include_utm_gate ? 'yes' : 'no (omit utm_*)' %></td></tr>
+      <tr><td>UA source</td><td><%= run.ua_mode %><%= run.ua_mode==='custom' ? ' ('+run.custom_uas.length+' UAs)' : '' %></td></tr>
+      <tr><td>Count / RPS</td><td><%= run.count %> @ <%= run.rps %>/s</td></tr>
+      <tr><td>Weights (g/f/x)</td><td><%= run.weights %></td></tr>
+      <tr><td>Proxies</td><td><%= proxies.length ? proxies.map(p => p.name+' ['+p.protocol+']').join(', ') : 'direct (from server)' %></td></tr>
+      <tr><td>Synthetic flag</td><td><%= run.loadtest_token ? 'yes (excluded from intelligence)' : 'no (scored as normal)' %></td></tr>
+    </table>
+  </section>
+
+  <!-- Throughput / latency (from runner) -->
+  <section class="panel">
+    <h3 style="margin-top:0;">Throughput &amp; latency</h3>
+    <% if (run.status==='draft') { %>
+      <p class="muted">Not run yet. Press Start.</p>
+    <% } else { %>
+      <table class="table table-dense">
+        <tr><td>Sent</td><td><%= run.results?.total_sent || 0 %></td></tr>
+        <tr><td>OK / Errors</td><td><%= run.results?.ok || 0 %> / <%= run.results?.errors || 0 %></td></tr>
+        <tr><td>Latency p50 / p95 / p99</td><td><%= run.results?.p50_ms||0 %> / <%= run.results?.p95_ms||0 %> / <%= run.results?.p99_ms||0 %> ms</td></tr>
+      </table>
+      <% const byPool = run.results?.by_pool || {}; %>
+      <% if (Object.keys(byPool).length) { %>
+        <h4>By proxy pool</h4>
+        <table class="table table-dense">
+          <thead><tr><th>Pool</th><th>Sent</th><th>OK</th><th>Err</th><th>Statuses</th></tr></thead>
+          <tbody>
+            <% Object.entries(byPool).forEach(([k,v]) => { %>
+              <tr><td><%= k %></td><td><%= v.sent %></td><td><%= v.ok %></td><td><%= v.err %></td><td class="mono" style="font-size:11px;"><%= JSON.stringify(v.status) %></td></tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    <% } %>
+  </section>
+</div>
+
+<!-- Decision breakdown (from tagged clicks) -->
+<section class="panel" style="margin-top:16px;">
+  <h3 style="margin-top:0;">Detection results <span class="muted" style="font-weight:normal; font-size:13px;">(from <%= agg.total %> tagged clicks)</span></h3>
+  <% if (!agg.total) { %>
+    <p class="muted">No clicks tagged for this run yet. If you just started it, refresh in a few seconds. (Clicks are matched by <code>utm_content=synthtest-<%= run.run_tag %>-*</code>.)</p>
+  <% } else { %>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+      <div>
+        <h4>Decision</h4>
+        <table class="table table-dense">
+          <% Object.entries(agg.decision).forEach(([k,v]) => { %>
+            <tr><td><span class="badge" style="background:<%= k==='allow'?'#EAF3DE':'#FCEBEB' %>;"><%= k %></span></td><td><%= v %> (<%= Math.round(v/agg.total*100) %>%)</td></tr>
+          <% }) %>
+        </table>
+        <h4>By source</h4>
+        <table class="table table-dense">
+          <thead><tr><th>Source</th><th>Allow</th><th>Block</th></tr></thead>
+          <tbody>
+            <% Object.entries(agg.by_source).forEach(([k,v]) => { %>
+              <tr><td><%= k %></td><td><%= v.allow %></td><td><%= v.block %></td></tr>
+            <% }) %>
+          </tbody>
+        </table>
+        <h4>By device class</h4>
+        <table class="table table-dense">
+          <% Object.entries(agg.by_device).forEach(([k,v]) => { %>
+            <tr><td><%= k %></td><td><%= v %></td></tr>
+          <% }) %>
+        </table>
+      </div>
+      <div>
+        <h4>Block / pass reasons</h4>
+        <table class="table table-dense">
+          <% Object.entries(agg.reason).sort((a,b)=>b[1]-a[1]).forEach(([k,v]) => { %>
+            <tr><td class="mono" style="font-size:12px;"><%= k %></td><td><%= v %></td></tr>
+          <% }) %>
+        </table>
+      </div>
+    </div>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

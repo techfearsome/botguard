@@ -4061,4 +4061,141 @@ router.post('/replay', async (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tools: Stress Test (load testing)
+// Saved proxies + test runs. The CMS spawns scripts/loadtestRunner.js as a
+// child process (kept off the web event loop) which fires synthetic traffic
+// through the proxies and writes results back. Decision breakdown on the detail
+// page is derived from the run's tagged synthetic clicks.
+// ─────────────────────────────────────────────────────────────────────────
+const { spawn } = require('child_process');
+
+router.get('/tools/loadtest', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const SavedProxy = require('../../models/SavedProxy');
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const [proxies, runs, campaigns] = await Promise.all([
+    SavedProxy.find({ workspace_id: ws._id }).sort({ created_at: -1 }).lean(),
+    LoadTestRun.find({ workspace_id: ws._id }).sort({ created_at: -1 }).limit(50).lean(),
+    Campaign.find({ workspace_id: ws._id }).select('name slug root_path').sort({ name: 1 }).lean(),
+  ]);
+  res.render('admin/tools_loadtest', {
+    ws, page: 'tools', proxies, runs, campaigns,
+    flash: req.query.flash || '', error: req.query.error || '',
+  });
+});
+
+router.post('/tools/loadtest/proxies', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const SavedProxy = require('../../models/SavedProxy');
+  const b = req.body;
+  try {
+    await SavedProxy.create({
+      workspace_id: ws._id,
+      name: (b.name || '').trim() || 'proxy',
+      protocol: b.protocol === 'socks5' ? 'socks5' : 'http',
+      host: (b.host || '').trim(),
+      port: parseInt(b.port, 10) || 0,
+      username: (b.username || '').trim(),
+      password: (b.password || '').trim(),
+      country: (b.country || '').trim(),
+      expect: ['allow', 'block', 'unknown'].includes(b.expect) ? b.expect : 'unknown',
+    });
+    res.redirect('/admin/tools/loadtest?flash=' + encodeURIComponent('Proxy saved'));
+  } catch (e) {
+    res.redirect('/admin/tools/loadtest?error=' + encodeURIComponent('Save failed: ' + e.message));
+  }
+});
+
+router.post('/tools/loadtest/proxies/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const SavedProxy = require('../../models/SavedProxy');
+  await SavedProxy.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+  res.redirect('/admin/tools/loadtest?flash=' + encodeURIComponent('Proxy deleted'));
+});
+
+router.post('/tools/loadtest', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const b = req.body;
+  try {
+    let campaignName = '';
+    if (b.campaign_id) {
+      const c = await Campaign.findOne({ _id: b.campaign_id, workspace_id: ws._id }).select('name').lean();
+      campaignName = c ? c.name : '';
+    }
+    const proxyIds = Array.isArray(b.proxy_ids) ? b.proxy_ids : (b.proxy_ids ? [b.proxy_ids] : []);
+    const runTag = require('crypto').randomBytes(3).toString('hex');
+    const customUas = (b.custom_uas || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    const run = await LoadTestRun.create({
+      workspace_id: ws._id,
+      name: (b.name || '').trim() || `run-${runTag}`,
+      campaign_id: b.campaign_id || undefined,
+      campaign_name: campaignName,
+      target_url: (b.target_url || '').trim(),
+      include_utm_gate: b.include_utm_gate === 'on' || b.include_utm_gate === 'true',
+      ua_mode: b.ua_mode === 'custom' ? 'custom' : 'builtin',
+      custom_uas: customUas,
+      weights: (b.weights || '60,25,15').trim(),
+      count: Math.min(parseInt(b.count, 10) || 200, 50000),
+      rps: Math.min(parseInt(b.rps, 10) || 5, 200),
+      proxy_ids: proxyIds,
+      loadtest_token: (b.loadtest_token || '').trim(),
+      run_tag: runTag,
+      status: 'draft',
+    });
+    res.redirect('/admin/tools/loadtest/' + run._id + '?flash=' + encodeURIComponent('Run saved — press Start to launch'));
+  } catch (e) {
+    res.redirect('/admin/tools/loadtest?error=' + encodeURIComponent('Create failed: ' + e.message));
+  }
+});
+
+router.post('/tools/loadtest/:id/run', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const run = await LoadTestRun.findOne({ _id: req.params.id, workspace_id: ws._id });
+  if (!run) return res.redirect('/admin/tools/loadtest?error=Run+not+found');
+  if (run.status === 'running') return res.redirect('/admin/tools/loadtest/' + run._id + '?error=Already+running');
+  try {
+    const runnerPath = require('path').join(__dirname, '../../../scripts/loadtestRunner.js');
+    const child = spawn('node', [runnerPath, '--run-id', String(run._id)], { detached: true, stdio: 'ignore', env: process.env });
+    child.unref();
+    res.redirect('/admin/tools/loadtest/' + run._id + '?flash=' + encodeURIComponent('Started — refresh in a bit for results'));
+  } catch (e) {
+    res.redirect('/admin/tools/loadtest/' + run._id + '?error=' + encodeURIComponent('Launch failed: ' + e.message));
+  }
+});
+
+router.get('/tools/loadtest/:id', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const SavedProxy = require('../../models/SavedProxy');
+  const run = await LoadTestRun.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!run) return res.redirect('/admin/tools/loadtest?error=Run+not+found');
+  const proxies = run.proxy_ids && run.proxy_ids.length
+    ? await SavedProxy.find({ _id: { $in: run.proxy_ids } }).lean() : [];
+
+  // Decision breakdown derived from this run's tagged synthetic clicks.
+  const clicks = await Click.find({
+    workspace_id: ws._id,
+    'utm.content': new RegExp('^synthtest-' + run.run_tag + '-'),
+  }).select('decision decision_reason utm ua_parsed').limit(60000).lean();
+
+  const agg = { total: clicks.length, decision: {}, reason: {}, by_source: {}, by_device: {} };
+  for (const c of clicks) {
+    agg.decision[c.decision] = (agg.decision[c.decision] || 0) + 1;
+    agg.reason[c.decision_reason] = (agg.reason[c.decision_reason] || 0) + 1;
+    const src = c.utm?.source || 'unknown';
+    agg.by_source[src] = agg.by_source[src] || { allow: 0, block: 0 };
+    agg.by_source[src][c.decision === 'allow' ? 'allow' : 'block']++;
+    const dev = c.ua_parsed?.device_class || 'unknown';
+    agg.by_device[dev] = (agg.by_device[dev] || 0) + 1;
+  }
+
+  res.render('admin/tools_loadtest_detail', {
+    ws, page: 'tools', run, proxies, agg,
+    flash: req.query.flash || '', error: req.query.error || '',
+  });
+});
+
 module.exports = router;
