@@ -1,0 +1,33 @@
+{
+  "target_url": "https://yogamateusa.co.uk/classes?utm_source=google&utm_medium=display_ads&utm_campaign=classes&gclid=TESTgclid123&tm=tt&ap=gads&cid=123&agid=456&aid=789&kid=k1&kw=yoga&nw=d&dv=m&mt=e&pl=testplacement",
+
+  "loadtest_token": "REPLACE_WITH_THE_SAME_VALUE_AS_SERVER_LOADTEST_TOKEN",
+
+  "run_id": "run1",
+  "max_requests": 3000,
+
+  "pools": [
+    {
+      "label": "iproyal-res",
+      "proxy": "http://IPROYAL_USER_country-us:IPROYAL_PASS@geo.iproyal.com:12321",
+      "expect": "allow"
+    },
+    {
+      "label": "geonode-res",
+      "proxy": "http://geonode_C769vy5Xq3:GEONODE_PASS@RES_HOST:RES_PORT",
+      "expect": "allow"
+    },
+    {
+      "label": "geonode-dc",
+      "proxy": "http://geonode_C769vy5Xq3:GEONODE_PASS@DC_HOST:DC_PORT",
+      "expect": "block"
+    }
+  ],
+
+  "stages": [
+    { "rps": 3,  "seconds": 10 },
+    { "rps": 10, "seconds": 20 },
+    { "rps": 25, "seconds": 20 },
+    { "rps": 50, "seconds": 20 }
+  ]
+}

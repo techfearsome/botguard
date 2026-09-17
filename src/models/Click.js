@@ -148,6 +148,11 @@ const ClickSchema = new mongoose.Schema({
   // Diagnostic: was auto-conversion injection actually applied to the response HTML?
   // Useful for confirming the script is reaching the visitor's browser.
   auto_conv_injected: { type: Boolean, default: false },
+  // Load-test / synthetic traffic marker. Set when a request carries the secret
+  // LOADTEST_TOKEN header. Synthetic clicks are scored and decided normally (so
+  // detection is measurable) but are EXCLUDED from CIDR intelligence — and thus
+  // from the Google Ads exclusion sync — so stress tests can't poison production.
+  is_synthetic: { type: Boolean, default: false },
   redirect_url: String,
 
   // Session linkage

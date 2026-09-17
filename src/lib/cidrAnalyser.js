@@ -498,8 +498,11 @@ async function analyseWorkspace(workspaceId, opts = {}) {
   const clicks = await Click.find({
     workspace_id: workspaceId,
     ts: { $gte: windowStart, $lte: windowEnd },
+    // Never let synthetic/load-test traffic form CIDR dossiers. This also keeps
+    // it out of the Google Ads exclusion sync, which reads from CidrIntelligence.
+    is_synthetic: { $ne: true },
   })
-    .select('ip ts decision conversion_count user_agent ua_parsed asn_org country external_ids dwell_ms campaign_id')
+    .select('ip ts decision conversion_count user_agent ua_parsed asn_org country external_ids dwell_ms campaign_id is_synthetic')
     .lean();
 
   if (!clicks.length) {
