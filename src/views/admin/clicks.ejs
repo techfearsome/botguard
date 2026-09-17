@@ -149,6 +149,7 @@
 <style>
   .an-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:18px;}
   .an-grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:14px;}
+  .an-stack{display:flex;flex-direction:column;gap:14px;}
   .an-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px;}
   @media(max-width:900px){.an-grid-2{grid-template-columns:1fr;}.an-grid-3{grid-template-columns:1fr;}}
   .an-card{background:var(--bg-panel);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:14px 16px;box-shadow:var(--shadow-card);}
@@ -172,6 +173,7 @@
 
 <div class="an-grid-2">
 
+  <div class="an-stack">
   <div class="an-card">
     <div class="an-title">Device distribution</div>
     <div class="an-row">
@@ -228,9 +230,7 @@
       </div>
     </div>
   </div>
-</div>
-
-<div class="an-grid-3">
+  </div>
 
   <div class="an-card">
     <div class="an-title">Traffic type</div>
@@ -251,8 +251,11 @@
       <% }); %>
     <% } %>
   </div>
+</div>
 
-  <div class="an-card">
+<div class="an-grid-3">
+
+  <div class="an-card" style="order:2;">
     <div class="an-title">Top 5 countries</div>
     <% if (stats.country.length === 0) { %>
       <p class="muted" style="font-size:12px;">No country data in this range.</p>
@@ -279,7 +282,7 @@
     <% } %>
   </div>
 
-  <div class="an-card">
+  <div class="an-card" style="order:1;">
     <div class="an-title">Top 5 traffic sources</div>
     <% if (!stats.source || stats.source.length === 0) { %>
       <p class="muted" style="font-size:12px;">No source data in this range.</p>
@@ -306,7 +309,7 @@
     <% } %>
   </div>
 
-  <div class="an-card">
+  <div class="an-card" style="order:3;">
     <div class="an-title">Top 5 campaigns</div>
     <% if (!stats.campaign || stats.campaign.length === 0) { %>
       <p class="muted" style="font-size:12px;">No campaign data in this range.</p>
@@ -335,7 +338,7 @@
     <% } %>
   </div>
 
-  <div class="an-card" style="grid-column:1/-1;">
+  <div class="an-card" style="grid-column:1/-1;order:4;">
     <div class="an-title">Traffic over time (<%= stats.timeGranularity === 'hour' ? 'hourly' : 'daily' %>)</div>
     <% if (stats.time.length === 0) { %>
       <p class="muted" style="font-size:12px;">No data in this range.</p>
