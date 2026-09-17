@@ -895,6 +895,14 @@ function buildClicksFilter(req, ws) {
   if (req.query.country) filter.country = req.query.country.trim().toUpperCase();
   if (req.query.ip) filter.ip = req.query.ip.trim();
 
+  // Traffic type (ip_type) — accepts one value or many (multi-select).
+  if (req.query.ip_type) {
+    const types = (Array.isArray(req.query.ip_type) ? req.query.ip_type : [req.query.ip_type])
+      .map((t) => String(t).trim()).filter(Boolean);
+    if (types.length === 1) filter.ip_type = types[0];
+    else if (types.length > 1) filter.ip_type = { $in: types };
+  }
+
   // Click-ID search: try the value against all ad-platform identifiers simultaneously.
   if (req.query.click_id && typeof req.query.click_id === 'string') {
     const cid = req.query.click_id.trim();
@@ -1046,8 +1054,17 @@ router.get('/clicks', async (req, res) => {
     grandTotal: totalCount,
   };
 
+  // Distinct traffic types for the advanced filter multi-select (workspace-wide,
+  // so the option list is stable regardless of the current range/filter).
+  let ipTypeOptions = [];
+  try {
+    ipTypeOptions = (await Click.distinct('ip_type', { workspace_id: ws._id }))
+      .filter(Boolean).sort();
+  } catch (_) { ipTypeOptions = []; }
+
   res.render('admin/clicks', {
     ws, clicks, campaigns, stats,
+    ipTypeOptions,
     query: req.query,
     range,
     rangeOptions: RANGE_OPTIONS,

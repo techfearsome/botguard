@@ -61,7 +61,7 @@
     <button type="button" class="btn btn-small" onclick="var p=document.getElementById('adv-filters');p.style.display=p.style.display==='none'?'block':'none';" style="margin-left:auto;">Advanced ▾</button>
   </div>
 
-  <div id="adv-filters" style="display:<%= (query.source||query.medium||query.utm_campaign||query.utm_content||query.utm_term||query.click_id||query.vt_campaignid||query.vt_adgroupid||query.vt_creative||query.vt_keyword||query.vt_network||query.vt_device||query.vt_matchtype||query.vt_placement||query.vt_tm||query.vt_ap||query.country||query.ip) ? 'block' : 'none' %>; margin-top:14px; border-top:1px solid var(--border-subtle); padding-top:14px;">
+  <div id="adv-filters" style="display:<%= (query.source||query.medium||query.utm_campaign||query.utm_content||query.utm_term||query.click_id||query.vt_campaignid||query.vt_adgroupid||query.vt_creative||query.vt_keyword||query.vt_network||query.vt_device||query.vt_matchtype||query.vt_placement||query.vt_tm||query.vt_ap||query.country||query.ip||query.ip_type) ? 'block' : 'none' %>; margin-top:14px; border-top:1px solid var(--border-subtle); padding-top:14px;">
     <style>.adv-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}.adv-grid label{display:block;font-size:11px;color:var(--text-tertiary);margin-bottom:3px;}.adv-grid input,.adv-grid select{width:100%!important;box-sizing:border-box;font-size:13px;padding:7px 10px;}@media(max-width:900px){.adv-grid{grid-template-columns:repeat(2,1fr);}}@media(max-width:500px){.adv-grid{grid-template-columns:1fr;}}</style>
 
     <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">UTM Parameters</div>
@@ -114,6 +114,28 @@
       <div><label>Country</label><input type="text" name="country" placeholder="e.g. US, IN" value="<%= query.country || '' %>"></div>
       <div><label>IP address</label><input type="text" name="ip" placeholder="Exact IP" value="<%= query.ip || '' %>"></div>
     </div>
+
+    <% var selTypes = query.ip_type ? (Array.isArray(query.ip_type) ? query.ip_type : [query.ip_type]) : []; %>
+    <div style="font-size:12px;color:var(--text-secondary);margin:4px 0 8px;font-weight:600;">Traffic type <span class="muted" style="font-weight:normal;">(select one or more)</span></div>
+    <div class="tt-dd" style="position:relative;max-width:420px;margin-bottom:4px;">
+      <button type="button" class="btn btn-small" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;"
+        onclick="var m=document.getElementById('tt-menu');m.style.display=m.style.display==='block'?'none':'block';">
+        <span id="tt-label"><%= selTypes.length ? selTypes.length + ' selected' : 'Any traffic type' %></span>
+        <span>▾</span>
+      </button>
+      <div id="tt-menu" style="display:none;position:absolute;z-index:20;top:100%;left:0;right:0;margin-top:4px;max-height:240px;overflow:auto;background:var(--bg-panel);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:8px;box-shadow:var(--shadow-card);">
+        <% if (!ipTypeOptions || !ipTypeOptions.length) { %>
+          <div class="muted" style="font-size:12px;padding:4px;">No traffic types recorded yet.</div>
+        <% } %>
+        <% (ipTypeOptions || []).forEach(function(t){ %>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:4px 6px;cursor:pointer;">
+            <input type="checkbox" name="ip_type" value="<%= t %>" <%= selTypes.indexOf(t) !== -1 ? 'checked' : '' %>
+              onchange="var n=document.querySelectorAll('#tt-menu input:checked').length;document.getElementById('tt-label').textContent=n?n+' selected':'Any traffic type';">
+            <span><%= t %></span>
+          </label>
+        <% }); %>
+      </div>
+    </div>
   </div>
 </form>
 
@@ -126,6 +148,7 @@
 %>
 <style>
   .an-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:18px;}
+  .an-stack{display:flex;flex-direction:column;gap:14px;}
   .an-card{background:var(--bg-panel);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:14px 16px;box-shadow:var(--shadow-card);}
   .an-title{font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:12px;}
   .an-row{display:flex;align-items:center;gap:14px;}
@@ -147,6 +170,7 @@
 
 <div class="an-grid">
 
+  <div class="an-stack">
   <div class="an-card">
     <div class="an-title">Device distribution</div>
     <div class="an-row">
@@ -202,6 +226,7 @@
         <% }); %>
       </div>
     </div>
+  </div>
   </div>
 
   <div class="an-card">
