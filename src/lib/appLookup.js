@@ -40,15 +40,13 @@ function parseAppPlacement(utmContent) {
   };
 }
 
-async function lookupIosApp(appId) {
-  if (!appId) return null;
-  const cached = cacheGet('ios:' + appId);
-  if (cached) return cached;
-
+// Fetch one app from a specific iTunes storefront (country). Returns the parsed
+// app object, or null if the app isn't in that storefront / on error.
+async function fetchItunes(appId, cc) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(ITUNES_LOOKUP + '?id=' + encodeURIComponent(appId) + '&country=US', {
+    const res = await fetch(ITUNES_LOOKUP + '?id=' + encodeURIComponent(appId) + '&country=' + encodeURIComponent(cc), {
       signal: controller.signal, headers: { 'Accept': 'application/json' },
     });
     clearTimeout(timeout);
@@ -57,7 +55,7 @@ async function lookupIosApp(appId) {
     if (!body.results || body.results.length === 0) return null;
 
     const app = body.results[0];
-    const result = {
+    return {
       platform: 'ios', app_id: appId,
       name: app.trackName || null,
       developer: app.artistName || null,
@@ -67,16 +65,40 @@ async function lookupIosApp(appId) {
       rating: app.averageUserRating || null,
       rating_count: app.userRatingCount || null,
       bundle_id: app.bundleId || null,
-      store_url: 'https://apps.apple.com/app/id' + appId,
+      store_url: 'https://apps.apple.com/' + cc.toLowerCase() + '/app/id' + appId,
       description: (app.description || '').substring(0, 200),
+      storefront: cc,
     };
-    cacheSet('ios:' + appId, result);
-    return result;
   } catch (err) {
     clearTimeout(timeout);
-    logger.warn('itunes_lookup_error', { appId, err: err.message });
+    logger.warn('itunes_lookup_error', { appId, cc, err: err.message });
     return null;
   }
+}
+
+/**
+ * Look up an iOS app, trying one or more storefront countries in order until a
+ * result is found. Non-US apps don't exist in the US storefront, so passing the
+ * click's IP-derived country (e.g. ['AT','US']) is what makes non-US placements
+ * enrich. US is always tried last as a fallback. Cached per (storefront, appId).
+ */
+async function lookupIosApp(appId, countries = ['US']) {
+  if (!appId) return null;
+  const list = (Array.isArray(countries) ? countries : [countries])
+    .map((c) => (c || '').toString().trim().toUpperCase()).filter(Boolean);
+  if (!list.includes('US')) list.push('US'); // always fall back to US last
+
+  const tried = new Set();
+  for (const cc of list) {
+    if (tried.has(cc)) continue;
+    tried.add(cc);
+    const key = 'ios:' + cc + ':' + appId;
+    const cached = cacheGet(key);
+    if (cached) return cached;
+    const result = await fetchItunes(appId, cc);
+    if (result) { cacheSet(key, result); return result; }
+  }
+  return null;
 }
 
 function buildAndroidAppInfo(packageName) {
@@ -90,17 +112,19 @@ function buildAndroidAppInfo(packageName) {
   };
 }
 
-async function resolveAppPlacement(source) {
+async function resolveAppPlacement(source, countries = ['US']) {
   // Accept a single string or an ordered list of candidate strings, e.g.
   // [utm_content, valuetrack.google.placement]. Use the first that parses to a
   // real mobileapp:: placement. Google sometimes leaves utm_content as the
   // literal "{placement}" token while the actual app placement lands in the
   // ValueTrack placement field — so we fall back to it.
+  // `countries` is the ordered list of iTunes storefronts to try for iOS apps
+  // (e.g. [clickCountry, 'US']) so non-US placements enrich.
   const candidates = Array.isArray(source) ? source : [source];
   for (const c of candidates) {
     const parsed = parseAppPlacement(c);
     if (parsed.platform && parsed.appId) {
-      if (parsed.platform === 'ios') return lookupIosApp(parsed.appId);
+      if (parsed.platform === 'ios') return lookupIosApp(parsed.appId, countries);
       if (parsed.platform === 'android') return buildAndroidAppInfo(parsed.appId);
     }
   }

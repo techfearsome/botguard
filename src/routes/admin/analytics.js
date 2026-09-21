@@ -133,7 +133,7 @@ async function enrichRows(rows, dim, minClicks) {
       r.label = String(r._id);
       if (typeof r._id === 'string' && r._id.startsWith('mobileapp::')) {
         try {
-          const info = await resolveAppPlacement(r._id);
+          const info = await resolveAppPlacement(r._id, ['US', 'CA', 'GB', 'DE', 'AT', 'CH']);
           if (info && (info.name || info.app_name)) r.label = `${info.name || info.app_name}`;
         } catch (_) {}
       }

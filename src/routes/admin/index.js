@@ -4026,7 +4026,9 @@ router.get('/clicks/:id', async (req, res) => {
   if (!appInfo && placementSources.some((s) => s && String(s).trim())) {
     try {
       const { resolveAppPlacement } = require('../../lib/appLookup');
-      appInfo = await resolveAppPlacement(placementSources);
+      // Use the click's IP-derived country as the iTunes storefront so non-US
+      // apps enrich (US is tried as a fallback inside the lookup).
+      appInfo = await resolveAppPlacement(placementSources, [click.country, 'US']);
       if (appInfo) {
         Click.updateOne({ _id: click._id }, { $set: { app_placement: appInfo } }).catch(() => {});
       }
