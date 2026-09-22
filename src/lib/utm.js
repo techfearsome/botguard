@@ -210,7 +210,56 @@ function parseValueTrack(query) {
   return vt;
 }
 
+/**
+ * Recover parameters that arrived packed inside another parameter's value.
+ *
+ * When an ad platform's tracking template or final-URL suffix gets its "&"
+ * encoded as "%26", Express decodes the URL once and hands us a single param:
+ *   utm_source = "google&utm_medium=display_ads&cid=123&gbraid=0AAA..."
+ * Every downstream field (medium, campaign, ValueTrack, gbraid) is then lost.
+ *
+ * This walks each value; if it looks like an embedded query string, the part
+ * before the first "&" becomes the real value and the rest is re-parsed and
+ * merged in. Params that were already present properly are never overwritten.
+ * Runs a second pass to handle double-encoding (%2526).
+ */
+function normalizeQuery(query) {
+  if (!query || typeof query !== 'object') return query || {};
+  let out = { ...query };
+
+  for (let pass = 0; pass < 2; pass++) {
+    let changed = false;
+    const recovered = {};
+
+    for (const [key, raw] of Object.entries(out)) {
+      if (typeof raw !== 'string') continue;
+      let val = raw;
+      // Decode a leftover layer of percent-encoding if it hides "&" or "=".
+      if (/%26|%3d/i.test(val)) {
+        try { val = decodeURIComponent(val); } catch (_) { /* keep raw */ }
+      }
+      // Embedded query string: "value&k=v" (must contain both & and =).
+      if (val.includes('&') && /[&][a-z0-9_]+=/i.test(val)) {
+        const idx = val.indexOf('&');
+        out[key] = val.slice(0, idx);
+        const rest = new URLSearchParams(val.slice(idx + 1));
+        for (const [k, v] of rest) {
+          if (!(k in out) && !(k in recovered)) recovered[k] = v;
+        }
+        changed = true;
+      } else if (val !== raw) {
+        out[key] = val;
+      }
+    }
+
+    out = { ...out, ...recovered };
+    if (!changed) break;
+  }
+  return out;
+}
+
 module.exports = {
+  normalizeQuery,
   parseUtm,
   parseExternalIds,
   parseValueTrack,

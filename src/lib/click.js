@@ -3,7 +3,7 @@ const { parseUA } = require('./uaParser');
 
 const { Click } = require('../models');
 const { getClientIp, hashIp } = require('./ip');
-const { parseUtm, parseExternalIds, parseValueTrack } = require('./utm');
+const { parseUtm, parseExternalIds, parseValueTrack, normalizeQuery } = require('./utm');
 
 // 22-char URL-safe ID, ~131 bits of entropy
 const generateClickId = customAlphabet(
@@ -18,13 +18,6 @@ function buildClickDoc({ req, workspace, campaign }) {
   const ip = getClientIp(req);
   const ua = req.get('user-agent') || '';
   const referer = req.get('referer') || req.get('referrer') || '';
-
-  // Synthetic/load-test traffic: only trusted when the request carries the exact
-  // secret token configured in LOADTEST_TOKEN. Without the env var set, no request
-  // can ever mark itself synthetic (fail-closed), so this can't be abused to slip
-  // real traffic past intelligence.
-  const loadTestToken = process.env.LOADTEST_TOKEN;
-  const isSynthetic = !!(loadTestToken && req.get('x-botguard-loadtest') === loadTestToken);
 
   // Unified UA parse — automatically uses best available tier
   const parsed = parseUA(ua, req.headers);
@@ -68,11 +61,11 @@ function buildClickDoc({ req, workspace, campaign }) {
     referer_host: refererHost,
     in_app_browser: parsed.in_app_browser,
 
-    is_synthetic: isSynthetic,
-
-    utm: parseUtm(req.query),
-    external_ids: parseExternalIds(req.query),
-    valuetrack: parseValueTrack(req.query),
+    // normalizeQuery recovers params packed into another param's value
+    // (encoded "&" from a misconfigured tracking template).
+    utm: parseUtm(normalizeQuery(req.query)),
+    external_ids: parseExternalIds(normalizeQuery(req.query)),
+    valuetrack: parseValueTrack(normalizeQuery(req.query)),
 
     fingerprint: {},
     scores: {

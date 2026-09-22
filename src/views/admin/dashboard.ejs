@@ -52,7 +52,8 @@
       <table class="table">
         <tr><th>utm_source</th><th>Clicks</th></tr>
         <% topSources.forEach(s => { %>
-          <tr><td><%= s._id %></td><td><%= s.count.toLocaleString() %></td></tr>
+          <% var srcLabel = String(s._id || '(none)'); var srcShort = srcLabel.split('&')[0]; %>
+          <tr><td class="cell-truncate" title="<%= srcLabel %>"><%= srcShort %><% if (srcShort !== srcLabel) { %> <small class="muted" title="Legacy record: full query string was packed into utm_source">⚠ malformed</small><% } %></td><td><%= s.count.toLocaleString() %></td></tr>
         <% }) %>
       </table>
     <% } %>
