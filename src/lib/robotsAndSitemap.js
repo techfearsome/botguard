@@ -309,7 +309,11 @@ async function listDisallowedRootPaths(workspaceId) {
 async function listIndexableCampaigns(workspaceId) {
   const filter = {
     indexable: true,
-    status: 'active',                // archived/paused not eligible for indexing
+    // A campaign belongs in the sitemap/robots whether it's actively running
+    // ads or temporarily paused — the URL still resolves (paused just serves
+    // the safe page). Only 'archived' (deleted) campaigns are excluded, so the
+    // sitemap stays stable instead of flickering as campaigns pause/resume.
+    status: { $ne: 'archived' },
   };
   if (workspaceId) filter.workspace_id = workspaceId;
   return Campaign.find(filter).select('slug root_path updated_at').lean();
