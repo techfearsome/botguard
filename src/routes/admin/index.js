@@ -770,6 +770,20 @@ function buildClicksFilter(req, ws) {
   if (req.query.decision) filter.decision = req.query.decision;
   if (req.query.source) filter['utm.source'] = req.query.source;
 
+  // Traffic-type multi-select (residential/business/vpn/proxy/hosting…).
+  // Matches against is_proxy's proxy_type OR the ip_type, mirroring how the
+  // traffic-type chart buckets them.
+  if (req.query.ip_type) {
+    const types = Array.isArray(req.query.ip_type) ? req.query.ip_type : [req.query.ip_type];
+    const clean = types.filter(Boolean);
+    if (clean.length) {
+      filter.$or = (filter.$or || []).concat([
+        { proxy_type: { $in: clean } },
+        { ip_type: { $in: clean } },
+      ]);
+    }
+  }
+
   // Click-ID search: try the value against all five ad-platform identifiers
   // simultaneously. Useful when debugging "did Google ever send us a click
   // with this gclid?" without the admin having to know which platform's
@@ -827,8 +841,89 @@ router.get('/clicks', async (req, res) => {
 
   const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
 
+  // ── Analytics aggregations (respect the same filters as the list) ────────
+  // Granularity is span-based: a window of <= 48h renders hourly, otherwise daily.
+  let useHourly = (range.range === 'today' || range.range === 'yesterday');
+  if (filter.ts && filter.ts.$gte && filter.ts.$lt) {
+    useHourly = ((filter.ts.$lt - filter.ts.$gte) / 36e5) <= 48;
+  }
+
+  const [byDevice, byDecision, byIpType, byCountry, bySource, byCampaign, byTime] = await Promise.all([
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$ua_parsed.device_class', 'unknown'] }, n: { $sum: 1 } } },
+      { $sort: { n: -1 } }, { $limit: 10 },
+    ]),
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$decision', 'unknown'] }, n: { $sum: 1 } } },
+      { $sort: { n: -1 } },
+    ]),
+    Click.aggregate([
+      { $match: filter },
+      { $group: {
+          _id: { $cond: [{ $eq: ['$is_proxy', true] },
+            { $ifNull: ['$proxy_type', 'proxy'] },
+            { $ifNull: ['$ip_type', 'unknown'] }] },
+          n: { $sum: 1 } } },
+      { $sort: { n: -1 } }, { $limit: 12 },
+    ]),
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$country', 'unknown'] }, n: { $sum: 1 },
+                  allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
+      { $sort: { n: -1 } }, { $limit: 5 },
+    ]),
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$utm.source', 'direct/none'] }, n: { $sum: 1 },
+                  allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
+      { $sort: { n: -1 } }, { $limit: 5 },
+    ]),
+    Click.aggregate([
+      { $match: filter },
+      { $group: { _id: '$campaign_id', n: { $sum: 1 },
+                  allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } },
+                  blocked: { $sum: { $cond: [{ $eq: ['$decision', 'block'] }, 1, 0] } },
+                  would:   { $sum: { $cond: [{ $eq: ['$decision', 'would_block'] }, 1, 0] } } } },
+      { $sort: { n: -1 } }, { $limit: 5 },
+    ]),
+    Click.aggregate([
+      { $match: filter },
+      { $group: {
+          _id: useHourly
+            ? { $dateToString: { format: '%H:00', date: '$ts' } }
+            : { $dateToString: { format: '%Y-%m-%d', date: '$ts' } },
+          total: { $sum: 1 },
+          allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } },
+          blocked: { $sum: { $cond: [{ $ne: ['$decision', 'allow'] }, 1, 0] } } } },
+      { $sort: { _id: 1 } }, { $limit: 60 },
+    ]),
+  ]);
+
+  // Resolve campaign ids to names for the campaigns card.
+  const campNameMap = {};
+  for (const c of campaigns) campNameMap[String(c._id)] = c.name;
+  for (const row of byCampaign) row.label = campNameMap[String(row._id)] || (row._id ? 'unknown' : 'none');
+
+  // Distinct traffic types for the filter dropdown (derived from the same
+  // aggregation so it reflects what's actually present in this range).
+  const ipTypeOptions = byIpType.map((r) => r._id).filter((x) => x && x !== 'unknown');
+
+  const stats = {
+    device: byDevice,
+    decision: byDecision,
+    ipType: byIpType,
+    country: byCountry,
+    source: bySource,
+    campaign: byCampaign,
+    time: byTime,
+    timeGranularity: useHourly ? 'hour' : 'day',
+    grandTotal: totalCount,
+  };
+
   res.render('admin/clicks', {
-    ws, clicks, campaigns,
+    ws, clicks, campaigns, stats, ipTypeOptions,
     query: req.query,
     range,
     rangeOptions: RANGE_OPTIONS,
