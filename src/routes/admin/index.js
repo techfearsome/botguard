@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 
 const { resolveSlug } = require('../../lib/slug');
 const cache = require('../../lib/cache');
@@ -43,6 +44,7 @@ router.get('/logout', logout);
 
 // --- Everything below this gate requires authentication ---
 router.use(requireAdmin);
+router.use('/analytics', require('./analytics'));
 
 // Admin pages must never be cached (would leak session-specific data via shared CDN cache)
 router.use((req, res, next) => {
@@ -117,7 +119,7 @@ router.get('/campaigns', async (req, res) => {
 router.get('/campaigns/new', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign: null, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns' });
+  res.render('admin/campaign_form', { ws, campaign: null, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: req.query.type === 'redirect' ? 'redirect' : 'offer' });
 });
 
 router.post('/campaigns', async (req, res) => {
@@ -149,6 +151,7 @@ router.post('/campaigns', async (req, res) => {
     // UTM gate config
     const utmGate = {
       enabled: body.utm_gate_enabled === 'on' || body.utm_gate_enabled === 'true',
+      mode: body.utm_gate_mode === 'monitor' ? 'monitor' : 'enforce',
       required_keys: parseRequiredUtmKeys(body.utm_required_keys),
     };
 
@@ -183,9 +186,15 @@ router.post('/campaigns', async (req, res) => {
         },
         country_gate: countryGate,
         proxy_gate: proxyGate,
+        bot_guard: parseCampaignBotGuard(body),
       },
       postback_url: body.postback_url || '',
       notes: body.notes || '',
+      ad_schedule: parseAdSchedule(body) || { enabled: false, timezone: 'UTC', rules: [] },
+      campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
+      redirect_url: (body.redirect_url || '').trim(),
+      redirect_urls: parseRedirectUrls(body),
+      redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
     });
     // New campaigns may have added a custom root_path - the next /robots.txt
     // request must include the new Disallow rule. Invalidating the cache here
@@ -302,7 +311,76 @@ function parseAutoConversion(body) {
     terms = Array.from(new Set(terms)).slice(0, 50);
   }
   const eventName = (body.auto_conversion_event_name || 'auto_click').trim().slice(0, 50) || 'auto_click';
-  return { enabled, terms, event_name: eventName };
+  const convValue = Math.max(0, parseFloat(body.auto_conversion_value) || 0);
+  return { enabled, terms, event_name: eventName, conversion_value: convValue };
+}
+
+// Parse campaign-level Bot Guard (Level 2) settings, including per-device
+// targeting. `bot_guard_devices` arrives as an array (multiple checked), a
+// string (one checked), or undefined (none checked) from the form parser.
+const GUARD_DEVICE_CLASSES = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
+// Parse the ad schedule from the campaign form. Multiple rules arrive as
+// parallel arrays (sched_day[], sched_start[], sched_end[]).
+//
+// IMPORTANT: if the form did not include the schedule section at all (no
+// sched_enabled field AND no sched_day field), we return null so the caller
+// can SKIP updating ad_schedule — this prevents an unrelated campaign save
+// from silently wiping an existing schedule.
+function parseAdSchedule(body) {
+  const sectionPresent = ('sched_enabled' in body) || ('sched_day' in body) || ('sched_timezone' in body);
+  if (!sectionPresent) return null;   // signal: don't touch the stored schedule
+
+  const enabled = body.sched_enabled === '1' || body.sched_enabled === 'on' || body.sched_enabled === true;
+  const timezone = (body.sched_timezone || 'UTC').trim() || 'UTC';
+  const rules = [];
+
+  if (body.sched_day) {
+    const days = Array.isArray(body.sched_day) ? body.sched_day : [body.sched_day];
+    const starts = Array.isArray(body.sched_start) ? body.sched_start : [body.sched_start];
+    const ends = Array.isArray(body.sched_end) ? body.sched_end : [body.sched_end];
+
+    // Normalize "H:MM" → "HH:MM" (some browsers submit single-digit hours).
+    const normTime = (v, fallback) => {
+      const s = String(v || '').trim();
+      const m = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return fallback;
+      const h = Math.min(23, parseInt(m[1], 10));
+      const mi = Math.min(59, parseInt(m[2], 10));
+      return String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0');
+    };
+
+    for (let i = 0; i < days.length; i++) {
+      const day = parseInt(days[i], 10);
+      if (!Number.isFinite(day) || day < 0 || day > 6) continue;
+      rules.push({
+        day,
+        start: normTime(starts[i], '00:00'),
+        end: normTime(ends[i], '23:59'),
+      });
+    }
+  }
+
+  return { enabled, timezone, rules };
+}
+
+function parseCampaignBotGuard(body) {
+  let devices = body.bot_guard_devices;
+  if (devices === undefined || devices === null) devices = [];
+  else if (!Array.isArray(devices)) devices = [devices];
+  devices = devices.filter((d) => GUARD_DEVICE_CLASSES.includes(d));
+  // Enabled but nothing ticked would silently guard nobody — default to all.
+  const enabled = body.bot_guard_enabled === 'on' || body.bot_guard_enabled === 'true';
+  if (enabled && devices.length === 0) devices = [...GUARD_DEVICE_CLASSES];
+
+  return {
+    enabled,
+    devices,
+    check_timezone:    body.bot_guard_timezone === 'on' || body.bot_guard_timezone === 'true',
+    check_interaction: body.bot_guard_interaction === 'on' || body.bot_guard_interaction === 'true',
+    check_dwell:       body.bot_guard_dwell === 'on' || body.bot_guard_dwell === 'true',
+    min_dwell_ms:      Math.max(1000, Math.min(10000, parseInt(body.bot_guard_min_dwell, 10) || 2000)),
+    check_webgl:       body.bot_guard_webgl === 'on' || body.bot_guard_webgl === 'true',
+  };
 }
 
 // Parse Bot Guard (Level 2) settings from the page form.
@@ -322,7 +400,7 @@ router.get('/campaigns/:id/edit', async (req, res) => {
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
   if (!campaign) return res.status(404).send('Campaign not found');
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns' });
+  res.render('admin/campaign_form', { ws, campaign, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: 'offer' });
 });
 
 router.post('/campaigns/:id', async (req, res) => {
@@ -362,16 +440,18 @@ router.post('/campaigns/:id', async (req, res) => {
 
     const utmGate = {
       enabled: body.utm_gate_enabled === 'on' || body.utm_gate_enabled === 'true',
+      mode: body.utm_gate_mode === 'monitor' ? 'monitor' : 'enforce',
       required_keys: parseRequiredUtmKeys(body.utm_required_keys),
     };
     const countryGate = parseCountryGate(body);
     const proxyGate = parseProxyGate(body);
     const devicePages = parseDevicePages(body.device_pages);
 
-    await Campaign.updateOne(
-      { _id: req.params.id, workspace_id: ws._id },
-      {
-        $set: {
+    // Only include ad_schedule when the form actually submitted that section —
+    // otherwise an unrelated save would wipe an existing schedule.
+    const parsedSchedule = parseAdSchedule(body);
+
+    const setFields = {
           slug,
           root_path: rootPathResult.normalized,
           name: body.name,
@@ -391,10 +471,19 @@ router.post('/campaigns/:id', async (req, res) => {
           },
           'filter_config.country_gate': countryGate,
           'filter_config.proxy_gate': proxyGate,
+          'filter_config.bot_guard': parseCampaignBotGuard(body),
           postback_url: body.postback_url || '',
           notes: body.notes || '',
-        },
-      }
+          campaign_type: body.campaign_type === 'redirect' ? 'redirect' : 'offer',
+          redirect_url: (body.redirect_url || '').trim(),
+          redirect_urls: parseRedirectUrls(body),
+          redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
+    };
+    if (parsedSchedule !== null) setFields.ad_schedule = parsedSchedule;
+
+    await Campaign.updateOne(
+      { _id: req.params.id, workspace_id: ws._id },
+      { $set: setFields }
     );
     // Invalidate both old and new slug to handle slug renames
     await cache.invalidateCampaign(ws._id, existing.slug);
@@ -766,28 +855,55 @@ router.get('/live/stream', async (req, res) => {
  */
 function buildClicksFilter(req, ws) {
   const filter = { workspace_id: ws._id };
-  if (req.query.campaign) filter.campaign_id = req.query.campaign;
-  if (req.query.decision) filter.decision = req.query.decision;
-  if (req.query.source) filter['utm.source'] = req.query.source;
-
-  // Traffic-type multi-select (residential/business/vpn/proxy/hosting…).
-  // Matches against is_proxy's proxy_type OR the ip_type, mirroring how the
-  // traffic-type chart buckets them.
-  if (req.query.ip_type) {
-    const types = Array.isArray(req.query.ip_type) ? req.query.ip_type : [req.query.ip_type];
-    const clean = types.filter(Boolean);
-    if (clean.length) {
-      filter.$or = (filter.$or || []).concat([
-        { proxy_type: { $in: clean } },
-        { ip_type: { $in: clean } },
-      ]);
+  // Cast to ObjectId explicitly: find() auto-casts via the schema, but
+  // aggregate() does NOT — passing a raw string there matches nothing, which
+  // silently emptied the analytics charts whenever a campaign was selected.
+  if (req.query.campaign) {
+    try {
+      filter.campaign_id = new mongoose.Types.ObjectId(String(req.query.campaign));
+    } catch (_) {
+      filter.campaign_id = req.query.campaign; // let an invalid id match nothing
     }
   }
+  if (req.query.decision) filter.decision = req.query.decision;
 
-  // Click-ID search: try the value against all five ad-platform identifiers
-  // simultaneously. Useful when debugging "did Google ever send us a click
-  // with this gclid?" without the admin having to know which platform's
-  // identifier it is. Case-sensitive match - these IDs are case-sensitive.
+  // Helper: case-insensitive substring regex (safe-escaped).
+  const ilike = (v) => new RegExp(v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+
+  // UTM parameters
+  if (req.query.source) filter['utm.source'] = ilike(req.query.source);
+  if (req.query.medium) filter['utm.medium'] = ilike(req.query.medium);
+  if (req.query.utm_campaign) filter['utm.campaign'] = ilike(req.query.utm_campaign);
+  if (req.query.utm_content) filter['utm.content'] = ilike(req.query.utm_content);
+  if (req.query.utm_term) filter['utm.term'] = ilike(req.query.utm_term);
+
+  // Google Ads ValueTrack parameters (exact match for IDs, substring for text)
+  if (req.query.vt_campaignid) filter['valuetrack.google.campaignid'] = req.query.vt_campaignid.trim();
+  if (req.query.vt_adgroupid) filter['valuetrack.google.adgroupid'] = req.query.vt_adgroupid.trim();
+  if (req.query.vt_creative) filter['valuetrack.google.creative'] = req.query.vt_creative.trim();
+  if (req.query.vt_keyword) filter['valuetrack.google.keyword'] = ilike(req.query.vt_keyword);
+  if (req.query.vt_network) filter['valuetrack.google.network'] = req.query.vt_network.trim();
+  if (req.query.vt_device) filter['valuetrack.google.device'] = req.query.vt_device.trim();
+  if (req.query.vt_matchtype) filter['valuetrack.google.matchtype'] = req.query.vt_matchtype.trim();
+  if (req.query.vt_placement) filter['valuetrack.google.placement'] = ilike(req.query.vt_placement);
+
+  // Custom tracking params (tm, ap)
+  if (req.query.vt_tm) filter['valuetrack.google.tm'] = req.query.vt_tm.trim();
+  if (req.query.vt_ap) filter['valuetrack.google.ap'] = req.query.vt_ap.trim();
+
+  // IP + country
+  if (req.query.country) filter.country = req.query.country.trim().toUpperCase();
+  if (req.query.ip) filter.ip = req.query.ip.trim();
+
+  // Traffic type (ip_type) — accepts one value or many (multi-select).
+  if (req.query.ip_type) {
+    const types = (Array.isArray(req.query.ip_type) ? req.query.ip_type : [req.query.ip_type])
+      .map((t) => String(t).trim()).filter(Boolean);
+    if (types.length === 1) filter.ip_type = types[0];
+    else if (types.length > 1) filter.ip_type = { $in: types };
+  }
+
+  // Click-ID search: try the value against all ad-platform identifiers simultaneously.
   if (req.query.click_id && typeof req.query.click_id === 'string') {
     const cid = req.query.click_id.trim();
     if (cid) {
@@ -818,7 +934,7 @@ router.get('/clicks', async (req, res) => {
   // which is built for bulk.
   const PAGE_SIZE_OPTIONS = [50, 100, 250, 500];
   const requestedPerPage = parseInt(req.query.per, 10);
-  const perPage = PAGE_SIZE_OPTIONS.includes(requestedPerPage) ? requestedPerPage : 100;
+  const perPage = PAGE_SIZE_OPTIONS.includes(requestedPerPage) ? requestedPerPage : 50;
   const requestedPage = parseInt(req.query.page_n, 10);
   const pageNum = (Number.isFinite(requestedPage) && requestedPage >= 1) ? requestedPage : 1;
   const skip = (pageNum - 1) * perPage;
@@ -841,45 +957,61 @@ router.get('/clicks', async (req, res) => {
 
   const campaigns = await Campaign.find({ workspace_id: ws._id }).select('name slug').lean();
 
-  // ── Analytics aggregations (respect the same filters as the list) ────────
-  // Granularity is span-based: a window of <= 48h renders hourly, otherwise daily.
+  // Decide time-series granularity from the ACTUAL span of the filter, not the
+  // preset name — a custom range covering a single day should be hourly, not
+  // one giant daily column.
   let useHourly = (range.range === 'today' || range.range === 'yesterday');
   if (filter.ts && filter.ts.$gte && filter.ts.$lt) {
-    useHourly = ((filter.ts.$lt - filter.ts.$gte) / 36e5) <= 48;
+    const spanHours = (filter.ts.$lt - filter.ts.$gte) / 36e5;
+    useHourly = spanHours <= 48;
   }
 
+  // ── Analytics aggregations (respect the same filters as the list) ────────
+  // All five run in parallel against the same filter, so the charts always
+  // describe exactly the rows the table is showing.
   const [byDevice, byDecision, byIpType, byCountry, bySource, byCampaign, byTime] = await Promise.all([
+    // Device distribution
     Click.aggregate([
       { $match: filter },
       { $group: { _id: { $ifNull: ['$ua_parsed.device_class', 'unknown'] }, n: { $sum: 1 } } },
       { $sort: { n: -1 } }, { $limit: 10 },
     ]),
+    // Allowed vs blocked
     Click.aggregate([
       { $match: filter },
       { $group: { _id: { $ifNull: ['$decision', 'unknown'] }, n: { $sum: 1 } } },
       { $sort: { n: -1 } },
     ]),
+    // Traffic type: residential / business / hosting / vpn / proxy / tor
     Click.aggregate([
       { $match: filter },
       { $group: {
-          _id: { $cond: [{ $eq: ['$is_proxy', true] },
-            { $ifNull: ['$proxy_type', 'proxy'] },
-            { $ifNull: ['$ip_type', 'unknown'] }] },
-          n: { $sum: 1 } } },
+          _id: {
+            $cond: [
+              { $eq: ['$is_proxy', true] },
+              { $ifNull: ['$proxy_type', 'proxy'] },
+              { $ifNull: ['$ip_type', 'unknown'] },
+            ],
+          },
+          n: { $sum: 1 },
+      } },
       { $sort: { n: -1 } }, { $limit: 12 },
     ]),
+    // Country distribution
     Click.aggregate([
       { $match: filter },
       { $group: { _id: { $ifNull: ['$country', 'unknown'] }, n: { $sum: 1 },
                   allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
       { $sort: { n: -1 } }, { $limit: 5 },
     ]),
+    // Top traffic sources (utm_source)
     Click.aggregate([
       { $match: filter },
       { $group: { _id: { $ifNull: ['$utm.source', 'direct/none'] }, n: { $sum: 1 },
                   allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } } } },
       { $sort: { n: -1 } }, { $limit: 5 },
     ]),
+    // Top campaigns with a three-way decision split
     Click.aggregate([
       { $match: filter },
       { $group: { _id: '$campaign_id', n: { $sum: 1 },
@@ -888,6 +1020,7 @@ router.get('/clicks', async (req, res) => {
                   would:   { $sum: { $cond: [{ $eq: ['$decision', 'would_block'] }, 1, 0] } } } },
       { $sort: { n: -1 } }, { $limit: 5 },
     ]),
+    // Time series — hourly when the range is a day or less, otherwise daily.
     Click.aggregate([
       { $match: filter },
       { $group: {
@@ -896,7 +1029,8 @@ router.get('/clicks', async (req, res) => {
             : { $dateToString: { format: '%Y-%m-%d', date: '$ts' } },
           total: { $sum: 1 },
           allowed: { $sum: { $cond: [{ $eq: ['$decision', 'allow'] }, 1, 0] } },
-          blocked: { $sum: { $cond: [{ $ne: ['$decision', 'allow'] }, 1, 0] } } } },
+          blocked: { $sum: { $cond: [{ $ne: ['$decision', 'allow'] }, 1, 0] } },
+      } },
       { $sort: { _id: 1 } }, { $limit: 60 },
     ]),
   ]);
@@ -904,11 +1038,9 @@ router.get('/clicks', async (req, res) => {
   // Resolve campaign ids to names for the campaigns card.
   const campNameMap = {};
   for (const c of campaigns) campNameMap[String(c._id)] = c.name;
-  for (const row of byCampaign) row.label = campNameMap[String(row._id)] || (row._id ? 'unknown' : 'none');
-
-  // Distinct traffic types for the filter dropdown (derived from the same
-  // aggregation so it reflects what's actually present in this range).
-  const ipTypeOptions = byIpType.map((r) => r._id).filter((x) => x && x !== 'unknown');
+  for (const row of byCampaign) {
+    row.label = campNameMap[String(row._id)] || (row._id ? 'unknown' : 'none');
+  }
 
   const stats = {
     device: byDevice,
@@ -922,8 +1054,17 @@ router.get('/clicks', async (req, res) => {
     grandTotal: totalCount,
   };
 
+  // Distinct traffic types for the advanced filter multi-select (workspace-wide,
+  // so the option list is stable regardless of the current range/filter).
+  let ipTypeOptions = [];
+  try {
+    ipTypeOptions = (await Click.distinct('ip_type', { workspace_id: ws._id }))
+      .filter(Boolean).sort();
+  } catch (_) { ipTypeOptions = []; }
+
   res.render('admin/clicks', {
-    ws, clicks, campaigns, stats, ipTypeOptions,
+    ws, clicks, campaigns, stats,
+    ipTypeOptions,
     query: req.query,
     range,
     rangeOptions: RANGE_OPTIONS,
@@ -987,72 +1128,12 @@ router.get('/clicks.csv', async (req, res) => {
     // click.valuetrack.google and visible on the click-detail page.
     'g_campaignid', 'g_adgroupid', 'g_creative',
     'g_keyword', 'g_matchtype', 'g_network', 'g_device', 'g_placement',
-    // Resolved app placement for mobileapp:: placements (iOS/Android).
-    'app_platform', 'app_name', 'app_category',
     'referer',
     'user_agent',
     'conversion_count',
   ];
-
-  // Resolve app placements for the export. A click's placement can arrive in
-  // utm_content OR valuetrack.google.placement (mobileapp::1-<id> / ::2-<pkg>).
-  // Resolve each unique placement ONCE — using the cached value already stored
-  // on the click where present, and the app lookup (iTunes/Play) otherwise —
-  // so a large export makes at most one lookup per distinct app, not per row.
-  const { resolveAppPlacement } = require('../../lib/appLookup');
-  const appCache = new Map();          // placement string -> { platform, name, category }
-  async function appInfoFor(c) {
-    // Prefer an already-resolved value stored on the click.
-    if (c.app_placement && (c.app_placement.name || c.app_placement.readable_name)) {
-      return {
-        platform: c.app_placement.platform || '',
-        name: c.app_placement.name || c.app_placement.readable_name || '',
-        category: c.app_placement.category || '',
-      };
-    }
-    const placement = [c.utm?.content, c.valuetrack?.google?.placement]
-      .find((v) => typeof v === 'string' && v.startsWith('mobileapp::'));
-    if (!placement) return null;
-    if (appCache.has(placement)) return appCache.get(placement);
-    let info = null;
-    try {
-      const resolved = await resolveAppPlacement(placement);
-      if (resolved) {
-        info = {
-          platform: resolved.platform || '',
-          name: resolved.name || resolved.readable_name || '',
-          category: resolved.category || '',
-        };
-      }
-    } catch (_) { /* leave blank on lookup failure */ }
-    appCache.set(placement, info);
-    return info;
-  }
-
-  // Pre-resolve all unique placements (bounded concurrency so we don't hammer
-  // the lookup API on a big export).
-  const uniquePlacements = new Set();
-  for (const c of clicks) {
-    if (c.app_placement && (c.app_placement.name || c.app_placement.readable_name)) continue;
-    const p = [c.utm?.content, c.valuetrack?.google?.placement]
-      .find((v) => typeof v === 'string' && v.startsWith('mobileapp::'));
-    if (p) uniquePlacements.add(p);
-  }
-  for (const p of uniquePlacements) {
-    if (appCache.has(p)) continue;
-    try {
-      const resolved = await resolveAppPlacement(p);
-      appCache.set(p, resolved ? {
-        platform: resolved.platform || '',
-        name: resolved.name || resolved.readable_name || '',
-        category: resolved.category || '',
-      } : null);
-    } catch (_) { appCache.set(p, null); }
-  }
-
   const rows = [headers.join(',')];
   for (const c of clicks) {
-    const app = (await appInfoFor(c)) || { platform: '', name: '', category: '' };
     rows.push([
       c.ts ? new Date(c.ts).toISOString() : '',
       c.click_id,
@@ -1067,7 +1148,7 @@ router.get('/clicks.csv', async (req, res) => {
       c.country || '',
       c.asn ?? '',
       c.asn_org || '',
-      c.device_class || '',
+      c.ua_parsed?.device_class || '',
       c.ua_parsed?.device_label || '',
       c.ua_parsed?.os || '',
       c.ua_parsed?.browser || '',
@@ -1091,9 +1172,6 @@ router.get('/clicks.csv', async (req, res) => {
       c.valuetrack?.google?.network    || '',
       c.valuetrack?.google?.device     || '',
       c.valuetrack?.google?.placement  || '',
-      app.platform || '',
-      app.name || '',
-      app.category || '',
       c.referer || '',
       c.user_agent || '',
       c.conversion_count ?? 0,
@@ -1256,6 +1334,81 @@ router.get('/conversions.csv', async (req, res) => {
   res.send(rows.join('\n'));
 });
 
+// Google Ads offline conversion upload format.
+// Columns: Google Click ID, Wbraid, Gbraid, Conversion Name, Conversion Time, Conversion Value, Conversion Currency
+// Each row needs at least one of gclid/wbraid/gbraid. Blank columns are fine.
+router.get('/conversions-gads.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const filter = { workspace_id: ws._id };
+  if (req.query.campaign) filter.campaign_id = req.query.campaign;
+  if (req.query.source) filter.source = req.query.source;
+  if (req.query.event) filter.event_name = req.query.event;
+  if (req.query.auto === '1') filter.auto_detected = true;
+
+  let range;
+  if ((req.query.from || req.query.to) && !req.query.range) {
+    range = parseRange({ range: 'custom', date_from: req.query.from, date_to: req.query.to });
+  } else {
+    range = parseRange(req.query);
+  }
+  applyRangeToFilter(filter, range);
+
+  const conversions = await Conversion.find(filter)
+    .sort({ ts: -1 }).limit(10000)
+    .populate('campaign_id', 'name slug')
+    .lean();
+
+  // Look up gclid for each conversion from the Click collection.
+  const clickIds = Array.from(new Set(conversions.map((c) => c.click_id)));
+  const clicks = clickIds.length
+    ? await Click.find({ workspace_id: ws._id, click_id: { $in: clickIds } })
+        .select('click_id external_ids').lean()
+    : [];
+  const clickMap = Object.fromEntries(clicks.map((c) => [c.click_id, c]));
+
+  const currency = ws.settings?.conversion_currency || 'USD';
+
+  // Google Ads format: yyyy-MM-dd HH:mm:ss+0000 (UTC)
+  function gadsTime(d) {
+    if (!d) return '';
+    const dt = new Date(d);
+    return dt.getUTCFullYear()
+      + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0')
+      + '-' + String(dt.getUTCDate()).padStart(2, '0')
+      + ' ' + String(dt.getUTCHours()).padStart(2, '0')
+      + ':' + String(dt.getUTCMinutes()).padStart(2, '0')
+      + ':' + String(dt.getUTCSeconds()).padStart(2, '0')
+      + '+0000';
+  }
+
+  const headers = ['Google Click ID', 'Wbraid', 'Gbraid', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'];
+  const rows = [headers.join(',')];
+
+  for (const c of conversions) {
+    const click = clickMap[c.click_id] || {};
+    const eid = click.external_ids || {};
+    const gclid = eid.gclid || '';
+    const wbraid = eid.wbraid || '';
+    const gbraid = eid.gbraid || '';
+    // Google Ads needs at least one of gclid, wbraid, or gbraid.
+    if (!gclid && !wbraid && !gbraid) continue;
+
+    rows.push([
+      gclid,
+      wbraid,
+      gbraid,
+      c.event_name || 'lead',
+      gadsTime(c.ts),
+      c.value ?? 0,
+      currency,
+    ].map(csvEscape).join(','));
+  }
+
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="gads-conversions-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(rows.join('\r\n'));
+});
+
 function csvEscape(v) {
   if (v === null || v === undefined) return '';
   const s = String(v);
@@ -1280,13 +1433,15 @@ router.post('/asn', async (req, res) => {
   const body = req.body || {};
   try {
     const ruleType = body.rule_type || 'asn';
+    const listType = body.list_type === 'allow' ? 'allow' : 'block';
     const doc = {
       workspace_id: body.scope === 'global' ? null : ws._id,
       asn_org: body.asn_org || '',
+      list_type: listType,
       category: body.category,
-      severity: body.severity || 'high',
-      score_weight: Number(body.score_weight) || 50,
-      override: body.override || 'mark_proxy',
+      severity: listType === 'allow' ? 'low' : (body.severity || 'high'),
+      score_weight: listType === 'allow' ? 0 : (Number(body.score_weight) || 50),
+      override: listType === 'allow' ? 'mark_clean' : (body.override || 'mark_proxy'),
       source: body.source || 'manual',
       notes: body.notes || '',
       active: true,
@@ -2864,6 +3019,112 @@ async function handleExportTxt(req, res) {
   res.send(lines.join('\n'));
 }
 
+// ── Custom Export ────────────────────────────────────────────────────────
+// A focused, Google-Ads-oriented export: pick a score threshold + frequency,
+// rank by score (worst-offenders-first) or by frequency/hit-count (most-active
+// -first), take the top N (100/200/300/400 or a manual number), preview the
+// eligible ranges, then download a plain .txt (one range per line) that pastes
+// straight into a Google Ads campaign's IP-exclusion box.
+//
+// Ranges are emitted in Google-Ads-safe form: IPv4 as CIDR (/24 or /32 only —
+// other masks are dropped), IPv6 fully expanded (no `::`, which Google rejects).
+// Shares buildExportFilter with the other exports so the score/frequency/
+// version semantics stay identical to the main list.
+
+const {
+  CUSTOM_EXPORT_PRESETS,
+  CUSTOM_EXPORT_MAX,
+  parseCustomExportParams,
+  shapeCustomExportRows,
+  rankSort,
+  applyCountryFilter,
+} = require('../../lib/customExport');
+
+// Resolve the ranked, limited, Google-Ads-safe set of ranges for the given
+// params. Returns { rows, totalEligible }.
+async function resolveCustomExport(ws, params) {
+  // Reuse buildExportFilter for score/frequency/version/status semantics, but
+  // force a sensible status set (actionable + already-blocked + watchlist) and
+  // always live-state (current CidrIntelligence) — this is what you push to
+  // Google Ads right now, not a historical snapshot.
+  const filter = buildExportFilter(ws, {
+    min_score: String(params.minScore),
+    frequency: params.frequency,
+    version: params.version,
+    status: 'all_flagged', // new/reviewing/watchlist/blocked/exported
+    include_exported: '1',
+  });
+
+  // ISO country include/exclude. Applied to the same filter used for both the
+  // docs query and the totalEligible count so "top N of M" stays consistent.
+  applyCountryFilter(filter, params);
+
+  // Pull a bit more than the limit so we can drop Google-Ads-incompatible
+  // ranges (unsupported v4 masks) and still fill the requested count.
+  const fetchN = Math.min(params.limit * 2 + 50, CUSTOM_EXPORT_MAX * 2);
+  const docs = await CidrIntelligence.find(filter)
+    .sort(rankSort(params.rank))
+    .limit(fetchN)
+    .select('cidr score hit_count frequency_label ip_version asn_org country conversion_count')
+    .lean();
+
+  const rows = shapeCustomExportRows(docs, params.limit);
+
+  // totalEligible = how many pass the filter regardless of the N cap, so the UI
+  // can say "showing top 200 of 1,340 eligible".
+  const totalEligible = await CidrIntelligence.countDocuments(filter);
+
+  return { rows, totalEligible };
+}
+
+// Preview page
+router.get('/intelligence/custom-export', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const params = parseCustomExportParams(req.query);
+  // Only run the query once the user has actually submitted (any param present).
+  const submitted = ['min_score', 'frequency', 'version', 'rank', 'limit']
+    .some((k) => req.query[k] !== undefined);
+
+  let rows = [], totalEligible = 0;
+  if (submitted) {
+    ({ rows, totalEligible } = await resolveCustomExport(ws, params));
+  }
+
+  // Build the download querystring so the button downloads exactly the preview.
+  const dlQs = new URLSearchParams({
+    min_score: String(params.minScore),
+    frequency: params.frequency,
+    version: params.version,
+    rank: params.rank,
+    limit: String(params.limit),
+  }).toString();
+
+  res.render('admin/intelligence_custom_export', {
+    ws,
+    page: 'intelligence',
+    params,
+    presets: CUSTOM_EXPORT_PRESETS,
+    submitted,
+    rows,
+    totalEligible,
+    dlQs,
+  });
+});
+
+// Plain .txt download — one Google-Ads-safe range per line, no header.
+router.get('/intelligence/custom-export.txt', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const params = parseCustomExportParams(req.query);
+  const { rows } = await resolveCustomExport(ws, params);
+
+  const body = rows.map((r) => r.out).join('\r\n');
+  const today = new Date().toISOString().slice(0, 10);
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.set('Content-Disposition',
+    `attachment; filename="botguard-custom-${params.rank}-top${params.limit}-${today}.txt"`);
+  res.send(body + (body ? '\r\n' : ''));
+});
+
 router.get('/intelligence/export.txt', handleExportTxt);
 // Backwards-compat: the old route was `export.csv` but returned plain text.
 // Keep that path serving the same plain-text content so existing bookmarks/
@@ -2999,9 +3260,579 @@ router.post('/intelligence/mark-exported', async (req, res) => {
 });
 
 // ---------- Settings (API keys, password info) ----------
+// ── Redirect Logs (redirect campaigns) ───────────────────────────────────
+const REDIRECT_DEVICE_CLASSES = ['iphone', 'android', 'windows', 'mac', 'linux', 'other'];
+
+// Parse default + per-device redirect URLs from the campaign form. Mirrors the
+// device_pages shape. URLs are normalized (scheme added if missing) so a user
+// entering "example.com/x" doesn't cause a relative-redirect / duplicated-domain
+// bug. Empty strings are kept (means "no override for this device").
+const { normalizeRedirectUrl } = require('../../lib/redirect');
+function parseRedirectUrls(body) {
+  const norm = (v) => normalizeRedirectUrl((v || '').trim());
+  const out = { default: norm(body.redirect_url_default || body.redirect_url) };
+  for (const dc of REDIRECT_DEVICE_CLASSES) {
+    out[dc] = norm(body[`redirect_url_${dc}`]);
+  }
+  return out;
+}
+
+// Redirect hub: list redirect campaigns + rich logs (backed by the Click
+// collection, so they carry full UTM/ValueTrack/IP/decision detail and both
+// passed AND failed traffic), at /admin/redirect.
+router.get('/redirect', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Campaign, RedirectLog } = require('../../models');
+  const tab = req.query.tab === 'logs' ? 'logs' : 'campaigns';
+
+  const campaigns = await Campaign.find({ workspace_id: ws._id, campaign_type: 'redirect' })
+    .sort({ created_at: -1 }).lean();
+  const redirectCampaignIds = campaigns.map((c) => c._id);
+
+  // Per-campaign redirect counts for the list (passed redirects only).
+  const counts = await RedirectLog.aggregate([
+    { $match: { workspace_id: ws._id } },
+    { $group: { _id: '$campaign_id', n: { $sum: 1 } } },
+  ]);
+  const countMap = {};
+  for (const c of counts) countMap[String(c._id)] = c.n;
+
+  let logs = [], totalCount = 0, currentPage = 1, perPage = 100, totalPages = 1,
+      showingFrom = 0, showingTo = 0, range = null;
+  const PAGE_SIZE_OPTIONS = [50, 100, 250, 500];
+
+  if (tab === 'logs') {
+    // Reuse the clicks filter (decision / utm source / click-id / campaign) but
+    // constrain to redirect campaigns. A specific campaign selection narrows
+    // further; otherwise show all redirect campaigns.
+    const filter = buildClicksFilter(req, ws);
+    if (!req.query.campaign) {
+      // No specific campaign chosen — constrain to all redirect campaigns.
+      // (When one IS chosen, buildClicksFilter already set it as an ObjectId.)
+      filter.campaign_id = { $in: redirectCampaignIds };
+    }
+    range = parseRange(req.query);
+    applyRangeToFilter(filter, range);
+
+    const requestedPerPage = parseInt(req.query.per, 10);
+    perPage = PAGE_SIZE_OPTIONS.includes(requestedPerPage) ? requestedPerPage : 100;
+    const requestedPage = parseInt(req.query.page_n, 10);
+    currentPage = (Number.isFinite(requestedPage) && requestedPage >= 1) ? requestedPage : 1;
+    const skip = (currentPage - 1) * perPage;
+
+    [logs, totalCount] = await Promise.all([
+      Click.find(filter).sort({ ts: -1 }).skip(skip).limit(perPage)
+        .populate('campaign_id', 'name slug').lean(),
+      Click.countDocuments(filter),
+    ]);
+    totalPages = Math.max(1, Math.ceil(totalCount / perPage));
+    showingFrom = totalCount === 0 ? 0 : skip + 1;
+    showingTo = Math.min(skip + perPage, totalCount);
+  }
+
+  res.render('admin/redirect', {
+    ws, page: 'redirect', tab, campaigns, countMap,
+    logs, totalCount, currentPage, perPage, totalPages, showingFrom, showingTo,
+    perPageOptions: PAGE_SIZE_OPTIONS,
+    range, rangeOptions: RANGE_OPTIONS, query: req.query,
+    campaignId: req.query.campaign || '',
+  });
+});
+
+// CSV export of redirect logs — reuses the clicks filter constrained to
+// redirect campaigns, so it matches the on-screen Logs view exactly.
+router.get('/redirect/logs.csv', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Campaign } = require('../../models');
+  const filter = buildClicksFilter(req, ws);
+  if (!req.query.campaign) {
+    const ids = await Campaign.find({ workspace_id: ws._id, campaign_type: 'redirect' }).distinct('_id');
+    filter.campaign_id = { $in: ids };
+  }
+  const range = parseRange(req.query);
+  applyRangeToFilter(filter, range);
+
+  const rows = await Click.find(filter).sort({ ts: -1 }).limit(10000)
+    .populate('campaign_id', 'name slug').lean();
+
+  const cols = [
+    'ts', 'campaign', 'page_rendered', 'decision', 'decision_reason',
+    'redirect_destination', 'ip', 'country', 'asn', 'asn_org', 'device_class',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+    'gclid', 'wbraid', 'gbraid', 'fbclid', 'msclkid', 'click_id',
+  ];
+  const esc = (v) => {
+    const s = (v == null ? '' : String(v));
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [cols.join(',')];
+  for (const c of rows) {
+    const eid = c.external_ids || {};
+    lines.push([
+      c.ts ? new Date(c.ts).toISOString() : '',
+      c.campaign_id?.name || '',
+      c.page_rendered || '',
+      c.decision || '',
+      c.decision_reason || '',
+      c.redirect_destination || '',
+      c.ip || '',
+      c.country || '',
+      c.asn || '',
+      c.asn_org || '',
+      c.ua_parsed?.device_class || '',
+      c.utm?.source || '', c.utm?.medium || '', c.utm?.campaign || '', c.utm?.term || '', c.utm?.content || '',
+      eid.gclid || '', eid.wbraid || '', eid.gbraid || '', eid.fbclid || '', eid.msclkid || '',
+      c.click_id || '',
+    ].map(esc).join(','));
+  }
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="redirect-logs-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(lines.join('\r\n'));
+});
+
+router.get('/redirect-logs', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { RedirectLog, Campaign } = require('../../models');
+
+  const page = Math.max(parseInt(req.query.p, 10) || 1, 1);
+  const perPage = 100;
+  const campaignId = req.query.campaign || '';
+
+  const filter = { workspace_id: ws._id };
+  if (campaignId) filter.campaign_id = campaignId;
+
+  const [logs, total, campaigns] = await Promise.all([
+    RedirectLog.find(filter).sort({ ts: -1 }).skip((page - 1) * perPage).limit(perPage).lean(),
+    RedirectLog.countDocuments(filter),
+    Campaign.find({ workspace_id: ws._id, campaign_type: 'redirect' }).select('name _id').sort({ name: 1 }).lean(),
+  ]);
+
+  // Map campaign ids → names for display.
+  const campMap = {};
+  for (const c of campaigns) campMap[String(c._id)] = c.name;
+  const allNamed = await Campaign.find({ workspace_id: ws._id }).select('name _id').lean();
+  for (const c of allNamed) campMap[String(c._id)] = c.name;
+
+  res.render('admin/redirect_logs', {
+    ws, page: 'redirect-logs', logs, total, campaigns, campMap,
+    currentPage: page, perPage, campaignId,
+  });
+});
+
+// ── Media Uploads ────────────────────────────────────────────────────────
+// Images are stored in Mongo (no persistent filesystem in this container) and
+// served at /wp-content/uploads/<id>/<filename>. Admin routes are already
+// behind requireAdmin (router.use above).
+const multer = require('multer');
+const { isAllowedMime, MAX_BYTES, sanitizeFilename, publicUrl } = require('../../lib/uploadHelpers');
+const uploadMw = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_BYTES, files: 1 },
+  fileFilter: (req, file, cb) => cb(null, isAllowedMime(file.mimetype)),
+}).single('file');
+
+router.get('/uploads', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Upload } = require('../../models');
+  const uploads = await Upload.find({ workspace_id: ws._id })
+    .select('filename mimetype size created_at')  // never load the Buffer into the list
+    .sort({ created_at: -1 }).limit(500).lean();
+  const host = `${req.protocol}://${req.get('host')}`;
+  res.render('admin/uploads', {
+    ws, page: 'uploads', uploads, host,
+    flash: req.query.flash || '', error: req.query.error || '',
+  });
+});
+
+router.post('/uploads', (req, res) => {
+  uploadMw(req, res, async (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File too large (max 8 MB)' : 'Upload failed';
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent(msg));
+    }
+    if (!req.file) {
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent('No file, or unsupported type (PNG/JPG/GIF/WebP only)'));
+    }
+    try {
+      const ws = await resolveWorkspace(req);
+      const { Upload } = require('../../models');
+      const storage = require('../../lib/storage');
+      const mongoose = require('mongoose');
+      const filename = sanitizeFilename(req.file.originalname, req.file.mimetype);
+
+      // Pre-generate the id so the storage key can include it before the doc exists.
+      const id = new mongoose.Types.ObjectId();
+      const stored = await storage.save({
+        workspaceId: ws._id, id, filename,
+        mimetype: req.file.mimetype, buffer: req.file.buffer,
+      });
+
+      await Upload.create({
+        _id: id,
+        workspace_id: ws._id,
+        filename,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        ...stored,
+      });
+      const url = publicUrl(id, filename);
+      return res.redirect('/admin/uploads?flash=' + encodeURIComponent('Uploaded: ' + url));
+    } catch (e) {
+      logger.error('upload_save_failed', { err: e.message });
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent('Could not save upload'));
+    }
+  });
+});
+
+router.post('/uploads/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Upload } = require('../../models');
+  const storage = require('../../lib/storage');
+  try {
+    const doc = await Upload.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+    if (doc) {
+      await storage.remove(doc);              // delete bytes from local/s3 (mongo: no-op)
+      await Upload.deleteOne({ _id: doc._id });
+    }
+  } catch (e) { /* ignore bad id */ }
+  res.redirect('/admin/uploads?flash=Deleted');
+});
+
+// ── Tools: IP Check ──────────────────────────────────────────────────────
+function isValidIp(ip) {
+  if (!ip) return false;
+  const s = String(ip).trim();
+  // IPv4
+  if (/^(\d{1,3})(\.\d{1,3}){3}$/.test(s)) {
+    return s.split('.').every((o) => Number(o) >= 0 && Number(o) <= 255);
+  }
+  // IPv6 (loose but safe — hex groups and ::)
+  return /^[0-9a-f:]+$/i.test(s) && s.includes(':') && s.length >= 3;
+}
+
+router.get('/tools/ip-check', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const hasProxycheck = !!process.env.PROXYCHECK_API_KEY;
+  const hasIplocate = !!process.env.IPLOCATE_API_KEY;
+
+  const ip = (req.query.ip || '').trim();
+  let provider = req.query.provider === 'iplocate' ? 'iplocate' : 'proxycheck';
+  // If the chosen provider has no key, fall to whichever is available.
+  if (provider === 'proxycheck' && !hasProxycheck && hasIplocate) provider = 'iplocate';
+  if (provider === 'iplocate' && !hasIplocate && hasProxycheck) provider = 'proxycheck';
+
+  let result = null, error = '', ran = false;
+  if (ip) {
+    ran = true;
+    if (!isValidIp(ip)) {
+      error = 'That does not look like a valid IPv4 or IPv6 address.';
+    } else if ((provider === 'proxycheck' && !hasProxycheck) || (provider === 'iplocate' && !hasIplocate)) {
+      error = `The ${provider} API key is not configured.`;
+    } else {
+      try {
+        const mod = provider === 'iplocate' ? require('../../lib/iplocate') : require('../../lib/proxycheck');
+        result = await mod.lookup(ip);
+        if (!result) error = `No data returned for ${ip} from ${provider} (the IP may be unknown, or the provider is unavailable).`;
+      } catch (e) {
+        logger.error('ip_check_failed', { ip, provider, err: e.message });
+        error = 'Lookup failed: ' + e.message;
+      }
+    }
+  }
+
+  res.render('admin/tools_ip_check', {
+    ws, page: 'tools', ip, provider, hasProxycheck, hasIplocate, result, error, ran,
+  });
+});
+
+// ── Security: admin login history ────────────────────────────────────────
+router.get('/security', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { LoginEvent } = require('../../models');
+
+  const filterMode = ['all', 'success', 'failed'].includes(req.query.show) ? req.query.show : 'all';
+  const q = {};
+  if (filterMode === 'success') q.success = true;
+  else if (filterMode === 'failed') q.success = false;
+
+  const perPage = 100;
+  const page = Math.max(parseInt(req.query.p, 10) || 1, 1);
+
+  const [events, total, failed24h, distinctIps] = await Promise.all([
+    LoginEvent.find(q).sort({ created_at: -1 }).skip((page - 1) * perPage).limit(perPage).lean(),
+    LoginEvent.countDocuments(q),
+    LoginEvent.countDocuments({ success: false, created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
+    LoginEvent.distinct('ip', { success: true, created_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }),
+  ]);
+
+  res.render('admin/security', {
+    ws, page: 'security', events, total, filterMode,
+    currentPage: page, perPage,
+    failed24h, successfulIps30d: (distinctIps || []).filter(Boolean).length,
+  });
+});
+
+// ── Conversion currency ───────────────────────────────────────────────────
+router.post('/settings/currency', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Workspace } = require('../../models');
+  const currency = (req.body.conversion_currency || 'USD').trim().toUpperCase().slice(0, 3);
+  await Workspace.updateOne({ _id: ws._id }, { $set: { 'settings.conversion_currency': currency } });
+  cache.invalidateWorkspace(ws.slug);
+  res.redirect('/admin/settings?flash=' + encodeURIComponent('Currency set to ' + currency));
+});
+
+// ── Favicon upload ────────────────────────────────────────────────────────
+router.post('/settings/favicon', (req, res) => {
+  const faviconUpload = require('multer')({
+    storage: require('multer').memoryStorage(),
+    limits: { fileSize: 1 * 1024 * 1024, files: 1 }, // 1 MB max for favicons
+    fileFilter: (req, file, cb) => {
+      const allowed = ['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp'];
+      cb(null, allowed.includes(file.mimetype));
+    },
+  }).single('favicon');
+
+  faviconUpload(req, res, async (err) => {
+    if (err || !req.file) {
+      return res.redirect('/admin/settings?error=' + encodeURIComponent('No file or unsupported type. Use PNG, ICO, SVG, JPG, GIF, or WebP.'));
+    }
+    try {
+      const ws = await resolveWorkspace(req);
+      const { Upload, Workspace } = require('../../models');
+      const storage = require('../../lib/storage');
+      const { sanitizeFilename } = require('../../lib/uploadHelpers');
+      const mongoose = require('mongoose');
+
+      const filename = sanitizeFilename(req.file.originalname, req.file.mimetype);
+      const id = new mongoose.Types.ObjectId();
+      const stored = await storage.save({
+        workspaceId: ws._id, id, filename,
+        mimetype: req.file.mimetype, buffer: req.file.buffer,
+      });
+      await Upload.create({
+        _id: id, workspace_id: ws._id, filename,
+        mimetype: req.file.mimetype, size: req.file.size, ...stored,
+      });
+
+      // Save the favicon reference on the workspace.
+      await Workspace.updateOne({ _id: ws._id }, { $set: { 'settings.favicon_upload_id': id } });
+      cache.invalidateWorkspace(ws.slug);
+      return res.redirect('/admin/settings?flash=' + encodeURIComponent('Favicon updated'));
+    } catch (e) {
+      logger.error('favicon_upload_failed', { err: e.message });
+      return res.redirect('/admin/settings?error=' + encodeURIComponent('Could not save favicon'));
+    }
+  });
+});
+
+router.post('/settings/favicon/remove', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { Workspace } = require('../../models');
+  await Workspace.updateOne({ _id: ws._id }, { $unset: { 'settings.favicon_upload_id': 1 } });
+  cache.invalidateWorkspace(ws.slug);
+  res.redirect('/admin/settings?flash=' + encodeURIComponent('Favicon removed'));
+});
+
 router.get('/settings', async (req, res) => {
   const ws = await resolveWorkspace(req);
-  res.render('admin/settings', { ws, page: 'settings', adminUser: req.adminUser, generated: req.query.key || null });
+  let faviconUrl = null;
+  if (ws.settings?.favicon_upload_id) {
+    const { Upload } = require('../../models');
+    const fav = await Upload.findById(ws.settings.favicon_upload_id).select('filename').lean();
+    if (fav) faviconUrl = `/wp-content/uploads/${fav._id}/${fav.filename}`;
+  }
+  res.render('admin/settings', {
+    ws, page: 'settings', adminUser: req.adminUser,
+    generated: req.query.key || null,
+    faviconUrl,
+    flash: req.query.flash || '', error: req.query.error || '',
+  });
+});
+
+// ── Federated Sync (threat-intel sharing between installs) ───────────────
+const { pullPartner } = require('../../lib/syncImport');
+
+function genPasscode() {
+  return 'bgs_' + require('crypto').randomBytes(24).toString('base64url');
+}
+
+// Dashboard: export credentials, import sources, and staged review.
+router.get('/sync', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner, SyncStagedEntry } = require('../../models');
+
+  const [exporters, importers] = await Promise.all([
+    SyncPartner.find({ workspace_id: ws._id, direction: 'export' }).sort({ created_at: -1 }).lean(),
+    SyncPartner.find({ workspace_id: ws._id, direction: 'import' }).sort({ created_at: -1 }).lean(),
+  ]);
+
+  // Staged entries needing attention (not yet implemented/ignored), newest first.
+  const staged = await SyncStagedEntry.find({ workspace_id: ws._id, state: 'staged' })
+    .sort({ match_status: 1, remote_score: -1 }).limit(500).lean();
+
+  // Per-importer staged/implemented tallies for the dashboard.
+  const tallies = await SyncStagedEntry.aggregate([
+    { $match: { workspace_id: ws._id } },
+    { $group: { _id: { p: '$source_partner_id', s: '$state' }, n: { $sum: 1 } } },
+  ]);
+  const tallyMap = {};
+  for (const t of tallies) {
+    const pid = String(t._id.p);
+    tallyMap[pid] = tallyMap[pid] || { staged: 0, implemented: 0, ignored: 0 };
+    tallyMap[pid][t._id.s] = t.n;
+  }
+
+  // Build the absolute feed base for display (host from request).
+  const feedBase = `${req.protocol}://${req.get('host')}/sync/feed`;
+
+  res.render('admin/sync', {
+    ws, page: 'sync', exporters, importers, staged, tallyMap, feedBase,
+    flash: req.query.flash || '', generated: req.query.generated || '',
+  });
+});
+
+// Create an export credential.
+router.post('/sync/export/create', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const b = req.body || {};
+  const passcode = genPasscode();
+  await SyncPartner.create({
+    workspace_id: ws._id, direction: 'export',
+    name: String(b.name || 'Unnamed partner').slice(0, 100),
+    passcode,
+    share: {
+      cidr: b.share_cidr === 'on',
+      asn: b.share_asn === 'on',
+      sample_ips: b.share_sample_ips === 'on',
+      min_score: Math.min(Math.max(parseInt(b.share_min_score, 10) || 60, 0), 100),
+    },
+  });
+  res.redirect('/admin/sync?flash=Export+credential+created&generated=' + encodeURIComponent(passcode));
+});
+
+router.post('/sync/export/:id/toggle', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const p = await SyncPartner.findOne({ _id: req.params.id, workspace_id: ws._id, direction: 'export' });
+  if (p) { p.enabled = !p.enabled; await p.save(); }
+  res.redirect('/admin/sync?flash=Updated');
+});
+
+router.post('/sync/export/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  await SyncPartner.deleteOne({ _id: req.params.id, workspace_id: ws._id, direction: 'export' });
+  res.redirect('/admin/sync?flash=Export+credential+revoked');
+});
+
+// Add an import source.
+function parseImportBody(b) {
+  return {
+    name: String(b.name || 'Unnamed source').slice(0, 100),
+    feed_url: String(b.feed_url || '').trim().slice(0, 500),
+    passcode: String(b.passcode || '').trim(),
+    pull: { cidr: b.pull_cidr === 'on', asn: b.pull_asn === 'on' },
+    disposition: ['monitor', 'quarantine', 'implement'].includes(b.disposition) ? b.disposition : 'monitor',
+    promotion_mode: ['corroboration', 'percentage', 'full'].includes(b.promotion_mode) ? b.promotion_mode : 'corroboration',
+    thresholds: {
+      min_local_score: Math.min(Math.max(parseInt(b.min_local_score, 10) || 60, 0), 100),
+      min_local_hits: Math.max(parseInt(b.min_local_hits, 10) || 0, 0),
+      match_percentage: Math.min(Math.max(parseInt(b.match_percentage, 10) || 50, 0), 100),
+    },
+    implement_target: b.implement_target === 'direct' ? 'direct' : 'seed',
+    schedule: {
+      mode: b.schedule_mode === 'interval' ? 'interval' : 'manual',
+      interval_minutes: Math.max(parseInt(b.interval_minutes, 10) || 1440, 5),
+    },
+  };
+}
+
+router.post('/sync/import/create', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const cfg = parseImportBody(req.body || {});
+  if (!cfg.feed_url || !cfg.passcode) {
+    return res.redirect('/admin/sync?flash=Feed+URL+and+passcode+are+required');
+  }
+  await SyncPartner.create({ workspace_id: ws._id, direction: 'import', ...cfg });
+  res.redirect('/admin/sync?flash=Import+source+added');
+});
+
+router.post('/sync/import/:id/update', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const cfg = parseImportBody(req.body || {});
+  await SyncPartner.updateOne(
+    { _id: req.params.id, workspace_id: ws._id, direction: 'import' },
+    { $set: cfg }
+  );
+  res.redirect('/admin/sync?flash=Import+source+updated');
+});
+
+router.post('/sync/import/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner, SyncStagedEntry } = require('../../models');
+  await SyncPartner.deleteOne({ _id: req.params.id, workspace_id: ws._id, direction: 'import' });
+  await SyncStagedEntry.deleteMany({ workspace_id: ws._id, source_partner_id: req.params.id });
+  res.redirect('/admin/sync?flash=Import+source+removed');
+});
+
+// Pull now (manual trigger).
+router.post('/sync/import/:id/pull', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner } = require('../../models');
+  const models = require('../../models');
+  const partner = await SyncPartner.findOne({ _id: req.params.id, workspace_id: ws._id, direction: 'import' });
+  if (!partner) return res.redirect('/admin/sync?flash=Source+not+found');
+  const stats = await pullPartner({ models }, ws, partner);
+  const msg = stats.error
+    ? 'Pull failed: ' + stats.error
+    : `Pulled ${stats.pulled} (matched ${stats.matched}, implemented ${stats.implemented}, staged ${stats.staged}, skipped ${stats.skipped})`;
+  res.redirect('/admin/sync?flash=' + encodeURIComponent(msg));
+});
+
+// Manually promote a staged entry into live data.
+router.post('/sync/staged/:id/implement', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncPartner, SyncStagedEntry } = require('../../models');
+  const models = require('../../models');
+  const entry = await SyncStagedEntry.findOne({ _id: req.params.id, workspace_id: ws._id });
+  if (entry && entry.state === 'staged') {
+    const partner = await SyncPartner.findById(entry.source_partner_id);
+    if (partner) {
+      const item = {
+        kind: entry.kind, value: entry.value,
+        raw: { asn_org: entry.asn_org, country: entry.country, category: 'other', severity: 'high' },
+      };
+      if (entry.kind === 'cidr') {
+        const cidrSeed = require('../../lib/cidrSeed');
+        await cidrSeed.importSeeds(ws._id, [entry.value], { seedSource: `sync:${partner.name}`.slice(0, 100) });
+      } else {
+        const { AsnBlacklist } = models;
+        const asn = Number(entry.value);
+        if (Number.isFinite(asn)) {
+          await AsnBlacklist.updateOne(
+            { workspace_id: ws._id, asn },
+            { $setOnInsert: { workspace_id: ws._id, asn, asn_org: entry.asn_org || '', category: 'other', severity: 'high', override: 'mark_proxy', active: true, source: `sync:${partner.name}`.slice(0, 100) } },
+            { upsert: true }
+          );
+        }
+      }
+    }
+    entry.state = 'implemented';
+    entry.implemented_at = new Date();
+    await entry.save();
+  }
+  res.redirect('/admin/sync?flash=Entry+implemented');
+});
+
+router.post('/sync/staged/:id/ignore', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const { SyncStagedEntry } = require('../../models');
+  await SyncStagedEntry.updateOne({ _id: req.params.id, workspace_id: ws._id }, { $set: { state: 'ignored' } });
+  res.redirect('/admin/sync?flash=Entry+ignored');
 });
 
 router.post('/settings/tracking', async (req, res) => {
@@ -3186,12 +4017,18 @@ router.get('/clicks/:id', async (req, res) => {
   if (!click) return res.status(404).send('Click not found');
   const conversions = await Conversion.find({ click_id: click.click_id }).sort({ ts: -1 }).lean();
 
-  // Enrich mobile app placement from utm_content (lazy — only on detail view)
+  // Enrich mobile app placement. Google Ads normally puts the placement in
+  // utm_content (mobileapp::1-<id>), but sometimes leaves utm_content as the
+  // literal "{placement}" token while the real value lands in the ValueTrack
+  // placement field — so we try both, in order.
   let appInfo = click.app_placement || null;
-  if (!appInfo && click.utm?.content) {
+  const placementSources = [click.utm?.content, click.valuetrack?.google?.placement];
+  if (!appInfo && placementSources.some((s) => s && String(s).trim())) {
     try {
       const { resolveAppPlacement } = require('../../lib/appLookup');
-      appInfo = await resolveAppPlacement(click.utm.content);
+      // Use the click's IP-derived country as the iTunes storefront so non-US
+      // apps enrich (US is tried as a fallback inside the lookup).
+      appInfo = await resolveAppPlacement(placementSources, [click.country, 'US']);
       if (appInfo) {
         Click.updateOne({ _id: click._id }, { $set: { app_placement: appInfo } }).catch(() => {});
       }
@@ -3240,6 +4077,170 @@ router.post('/replay', async (req, res) => {
   res.render('admin/replay', {
     ws, campaigns, profiles: Object.keys(PROFILES),
     result, query: { ...body, ...hypothetical }, page: 'replay',
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tools: Stress Test (load testing)
+// Saved proxies + test runs. The CMS spawns scripts/loadtestRunner.js as a
+// child process (kept off the web event loop) which fires synthetic traffic
+// through the proxies and writes results back. Decision breakdown on the detail
+// page is derived from the run's tagged synthetic clicks.
+// ─────────────────────────────────────────────────────────────────────────
+const { spawn } = require('child_process');
+
+router.get('/tools/loadtest', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const SavedProxy = require('../../models/SavedProxy');
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const [proxies, runs, campaigns] = await Promise.all([
+    SavedProxy.find({ workspace_id: ws._id }).sort({ created_at: -1 }).lean(),
+    LoadTestRun.find({ workspace_id: ws._id }).sort({ created_at: -1 }).limit(50).lean(),
+    Campaign.find({ workspace_id: ws._id }).select('name slug root_path').sort({ name: 1 }).lean(),
+  ]);
+  res.render('admin/tools_loadtest', {
+    ws, page: 'tools', proxies, runs, campaigns,
+    lt_domain: ws.settings?.loadtest?.domain || '',
+    lt_valuetrack: ws.settings?.loadtest?.valuetrack || 'tm=tt&ap=gads&cid=123',
+    flash: req.query.flash || '', error: req.query.error || '',
+  });
+});
+
+router.post('/tools/loadtest/proxies', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const SavedProxy = require('../../models/SavedProxy');
+  const b = req.body;
+  try {
+    await SavedProxy.create({
+      workspace_id: ws._id,
+      name: (b.name || '').trim() || 'proxy',
+      protocol: b.protocol === 'socks5' ? 'socks5' : 'http',
+      host: (b.host || '').trim(),
+      port: parseInt(b.port, 10) || 0,
+      username: (b.username || '').trim(),
+      password: (b.password || '').trim(),
+      country: (b.country || '').trim(),
+      expect: ['allow', 'block', 'unknown'].includes(b.expect) ? b.expect : 'unknown',
+    });
+    res.redirect('/admin/tools/loadtest?flash=' + encodeURIComponent('Proxy saved'));
+  } catch (e) {
+    res.redirect('/admin/tools/loadtest?error=' + encodeURIComponent('Save failed: ' + e.message));
+  }
+});
+
+router.post('/tools/loadtest/proxies/:id/delete', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const SavedProxy = require('../../models/SavedProxy');
+  await SavedProxy.deleteOne({ _id: req.params.id, workspace_id: ws._id });
+  res.redirect('/admin/tools/loadtest?flash=' + encodeURIComponent('Proxy deleted'));
+});
+
+router.post('/tools/loadtest', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const b = req.body;
+  try {
+    let campaignName = '';
+    let campaign = null;
+    if (b.campaign_id) {
+      campaign = await Campaign.findOne({ _id: b.campaign_id, workspace_id: ws._id }).select('name slug root_path').lean();
+      campaignName = campaign ? campaign.name : '';
+    }
+
+    // Build the target URL. Priority: explicit override → auto-build from campaign
+    // + saved domain + default ValueTrack params.
+    const domain = (b.domain || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const valuetrack = (b.valuetrack || '').trim().replace(/^[?&]+/, '');
+    let targetUrl = (b.target_url_override || '').trim();
+
+    if (!targetUrl) {
+      if (!campaign) throw new Error('Pick a campaign, or provide an override URL.');
+      if (!domain) throw new Error('Set a domain (once) so the URL can be built from the campaign.');
+      const routePath = campaign.root_path ? `/${campaign.root_path}` : `/go/${campaign.slug}`;
+      const params = new URLSearchParams();
+      params.set('utm_campaign', campaign.slug);
+      // Merge in the default ValueTrack params (they aren't part of the campaign).
+      if (valuetrack) for (const [k, v] of new URLSearchParams(valuetrack)) params.set(k, v);
+      targetUrl = `https://${domain}${routePath}?${params.toString()}`;
+    }
+
+    // Remember domain + valuetrack for next time.
+    await Workspace.updateOne({ _id: ws._id }, { $set: {
+      'settings.loadtest.domain': domain || (ws.settings?.loadtest?.domain || ''),
+      'settings.loadtest.valuetrack': valuetrack || (ws.settings?.loadtest?.valuetrack || ''),
+    } });
+
+    const proxyIds = Array.isArray(b.proxy_ids) ? b.proxy_ids : (b.proxy_ids ? [b.proxy_ids] : []);
+    const runTag = require('crypto').randomBytes(3).toString('hex');
+    const customUas = (b.custom_uas || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    const run = await LoadTestRun.create({
+      workspace_id: ws._id,
+      name: (b.name || '').trim() || `run-${runTag}`,
+      campaign_id: b.campaign_id || undefined,
+      campaign_name: campaignName,
+      target_url: targetUrl,
+      include_utm_gate: b.include_utm_gate === 'on' || b.include_utm_gate === 'true',
+      ua_mode: b.ua_mode === 'custom' ? 'custom' : 'builtin',
+      custom_uas: customUas,
+      weights: (b.weights || '60,25,15').trim(),
+      count: Math.min(parseInt(b.count, 10) || 200, 50000),
+      rps: Math.min(parseInt(b.rps, 10) || 5, 200),
+      proxy_ids: proxyIds,
+      loadtest_token: (b.loadtest_token || '').trim(),
+      run_tag: runTag,
+      status: 'draft',
+    });
+    res.redirect('/admin/tools/loadtest/' + run._id + '?flash=' + encodeURIComponent('Run saved — press Start to launch'));
+  } catch (e) {
+    res.redirect('/admin/tools/loadtest?error=' + encodeURIComponent('Create failed: ' + e.message));
+  }
+});
+
+router.post('/tools/loadtest/:id/run', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const run = await LoadTestRun.findOne({ _id: req.params.id, workspace_id: ws._id });
+  if (!run) return res.redirect('/admin/tools/loadtest?error=Run+not+found');
+  if (run.status === 'running') return res.redirect('/admin/tools/loadtest/' + run._id + '?error=Already+running');
+  try {
+    const runnerPath = require('path').join(__dirname, '../../../scripts/loadtestRunner.js');
+    const child = spawn('node', [runnerPath, '--run-id', String(run._id)], { detached: true, stdio: 'ignore', env: process.env });
+    child.unref();
+    res.redirect('/admin/tools/loadtest/' + run._id + '?flash=' + encodeURIComponent('Started — refresh in a bit for results'));
+  } catch (e) {
+    res.redirect('/admin/tools/loadtest/' + run._id + '?error=' + encodeURIComponent('Launch failed: ' + e.message));
+  }
+});
+
+router.get('/tools/loadtest/:id', async (req, res) => {
+  const ws = await resolveWorkspace(req);
+  const LoadTestRun = require('../../models/LoadTestRun');
+  const SavedProxy = require('../../models/SavedProxy');
+  const run = await LoadTestRun.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
+  if (!run) return res.redirect('/admin/tools/loadtest?error=Run+not+found');
+  const proxies = run.proxy_ids && run.proxy_ids.length
+    ? await SavedProxy.find({ _id: { $in: run.proxy_ids } }).lean() : [];
+
+  // Decision breakdown derived from this run's tagged synthetic clicks.
+  const clicks = await Click.find({
+    workspace_id: ws._id,
+    'utm.content': new RegExp('^synthtest-' + run.run_tag + '-'),
+  }).select('decision decision_reason utm ua_parsed').limit(60000).lean();
+
+  const agg = { total: clicks.length, decision: {}, reason: {}, by_source: {}, by_device: {} };
+  for (const c of clicks) {
+    agg.decision[c.decision] = (agg.decision[c.decision] || 0) + 1;
+    agg.reason[c.decision_reason] = (agg.reason[c.decision_reason] || 0) + 1;
+    const src = c.utm?.source || 'unknown';
+    agg.by_source[src] = agg.by_source[src] || { allow: 0, block: 0 };
+    agg.by_source[src][c.decision === 'allow' ? 'allow' : 'block']++;
+    const dev = c.ua_parsed?.device_class || 'unknown';
+    agg.by_device[dev] = (agg.by_device[dev] || 0) + 1;
+  }
+
+  res.render('admin/tools_loadtest_detail', {
+    ws, page: 'tools', run, proxies, agg,
+    flash: req.query.flash || '', error: req.query.error || '',
   });
 });
 
