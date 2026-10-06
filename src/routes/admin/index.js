@@ -1128,12 +1128,56 @@ router.get('/clicks.csv', async (req, res) => {
     // click.valuetrack.google and visible on the click-detail page.
     'g_campaignid', 'g_adgroupid', 'g_creative',
     'g_keyword', 'g_matchtype', 'g_network', 'g_device', 'g_placement',
+    // Resolved mobile-app placement (iOS/Android) for mobileapp:: placements.
+    'app_platform', 'app_name', 'app_category',
     'referer',
     'user_agent',
     'conversion_count',
   ];
+
+  // Resolve app placements for the export. The placement can arrive in
+  // utm_content OR valuetrack.google.placement (mobileapp::1-<id> / ::2-<pkg>).
+  // Resolve each UNIQUE placement once (cached), so a big export makes at most
+  // one lookup per distinct app. Uses the click's country as the primary
+  // iTunes storefront, matching the detail-page behaviour.
+  const { resolveAppPlacement } = require('../../lib/appLookup');
+  const placementOf = (c) => [c.utm?.content, c.valuetrack?.google?.placement]
+    .find((v) => typeof v === 'string' && v.startsWith('mobileapp::'));
+  const appCache = new Map();   // "<placement>|<country>" -> {platform,name,category}
+  const toInfo = (resolved) => resolved ? {
+    platform: resolved.platform || '',
+    name: resolved.name || resolved.readable_name || '',
+    category: resolved.category || '',
+  } : { platform: '', name: '', category: '' };
+
+  for (const c of clicks) {
+    if (c.app_placement && (c.app_placement.name || c.app_placement.readable_name)) continue;
+    const p = placementOf(c);
+    if (!p) continue;
+    const key = p + '|' + (c.country || '');
+    if (appCache.has(key)) continue;
+    try {
+      const resolved = await resolveAppPlacement(p, [c.country, 'US'].filter(Boolean));
+      appCache.set(key, toInfo(resolved));
+    } catch (_) { appCache.set(key, toInfo(null)); }
+  }
+
+  function appFor(c) {
+    if (c.app_placement && (c.app_placement.name || c.app_placement.readable_name)) {
+      return {
+        platform: c.app_placement.platform || '',
+        name: c.app_placement.name || c.app_placement.readable_name || '',
+        category: c.app_placement.category || '',
+      };
+    }
+    const p = placementOf(c);
+    if (!p) return { platform: '', name: '', category: '' };
+    return appCache.get(p + '|' + (c.country || '')) || { platform: '', name: '', category: '' };
+  }
+
   const rows = [headers.join(',')];
   for (const c of clicks) {
+    const app = appFor(c);
     rows.push([
       c.ts ? new Date(c.ts).toISOString() : '',
       c.click_id,
@@ -1172,6 +1216,9 @@ router.get('/clicks.csv', async (req, res) => {
       c.valuetrack?.google?.network    || '',
       c.valuetrack?.google?.device     || '',
       c.valuetrack?.google?.placement  || '',
+      app.platform,
+      app.name,
+      app.category,
       c.referer || '',
       c.user_agent || '',
       c.conversion_count ?? 0,
