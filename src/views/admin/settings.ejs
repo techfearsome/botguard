@@ -79,6 +79,76 @@
   </script>
 </section>
 
+<% if (typeof enrichStatus !== 'undefined' && enrichStatus) { %>
+<section class="panel" id="ip-enrichment">
+  <h3>IP Enrichment</h3>
+  <p class="muted" style="font-size:13px; margin-bottom:14px;">
+    Proxy/VPN detection providers. Order and keys are set in the environment
+    (<code>IP_PRIMARY_PROVIDER</code>, <code>IP_FALLBACK_ENABLED</code>, and the
+    provider API keys) — this panel is read-only.
+  </p>
+
+  <table style="width:100%; border-collapse:collapse; font-size:13px;">
+    <thead>
+      <tr style="text-align:left; border-bottom:1px solid var(--border-default);">
+        <th style="padding:8px 10px;">Role</th>
+        <th style="padding:8px 10px;">Provider</th>
+        <th style="padding:8px 10px;">API key</th>
+        <th style="padding:8px 10px;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border-default);">
+        <td style="padding:8px 10px;"><strong>Primary</strong></td>
+        <td style="padding:8px 10px;"><%= enrichStatus.primary.label %></td>
+        <td style="padding:8px 10px;">
+          <% if (enrichStatus.primary.keyConfigured) { %>
+            <span style="color:var(--success);">● configured</span>
+          <% } else { %>
+            <span style="color:var(--danger);">● missing</span>
+          <% } %>
+        </td>
+        <td style="padding:8px 10px;">
+          <% if (enrichStatus.primary.keyConfigured) { %>
+            <span style="color:var(--success);">Active</span>
+          <% } else { %>
+            <span style="color:var(--danger);">No key — lookups will return nothing</span>
+          <% } %>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;"><strong>Fallback</strong></td>
+        <td style="padding:8px 10px;"><%= enrichStatus.fallback.label %></td>
+        <td style="padding:8px 10px;">
+          <% if (enrichStatus.fallback.keyConfigured) { %>
+            <span style="color:var(--success);">● configured</span>
+          <% } else { %>
+            <span class="muted">● missing</span>
+          <% } %>
+        </td>
+        <td style="padding:8px 10px;">
+          <% if (!enrichStatus.fallbackEnabled) { %>
+            <span class="muted">Disabled</span>
+          <% } else if (enrichStatus.fallback.keyConfigured) { %>
+            <span style="color:var(--success);">Enabled</span>
+          <% } else { %>
+            <span style="color:var(--danger);">Enabled but no key</span>
+          <% } %>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <small class="muted" style="display:block; margin-top:10px;">
+    Enrichment timeout: <%= enrichStatus.timeoutMs %> ms
+    <% if (enrichStatus.timeoutMs === 0) { %>(no timeout)<% } %>.
+    When the primary fails or times out<% if (enrichStatus.fallbackEnabled) { %>,
+    requests fall back to <%= enrichStatus.fallback.label %><% } else { %>
+    and the fallback is off, the click proceeds unenriched (fail-open)<% } %>.
+  </small>
+</section>
+<% } %>
+
 <section class="panel">
   <h3>Admin Password</h3>
   <p>The admin password is set via the <code>ADMIN_PASSWORD</code> or <code>ADMIN_PASSWORD_HASH</code> environment variable. To change it:</p>

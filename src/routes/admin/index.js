@@ -3706,10 +3706,26 @@ router.get('/settings', async (req, res) => {
     const fav = await Upload.findById(ws.settings.favicon_upload_id).select('filename').lean();
     if (fav) faviconUrl = `/wp-content/uploads/${fav._id}/${fav.filename}`;
   }
+  // IP enrichment provider status (read-only — driven by env).
+  const ipEnrich = require('../../lib/ipEnrich');
+  const primary = ipEnrich.primaryProvider();
+  const fallbackName = primary === 'iplocate' ? 'proxycheck' : 'iplocate';
+  const providerLabel = (p) => (p === 'iplocate' ? 'IPLocate.io' : 'ProxyCheck.io');
+  const keyPresent = (p) =>
+    p === 'iplocate' ? !!process.env.IPLOCATE_API_KEY : !!process.env.PROXYCHECK_API_KEY;
+  const enrichStatus = {
+    primary: { id: primary, label: providerLabel(primary), keyConfigured: keyPresent(primary) },
+    fallbackEnabled: ipEnrich.fallbackEnabled(),
+    fallback: {
+      id: fallbackName, label: providerLabel(fallbackName), keyConfigured: keyPresent(fallbackName),
+    },
+    timeoutMs: ipEnrich.getTimeoutMs(),
+  };
+
   res.render('admin/settings', {
     ws, page: 'settings', adminUser: req.adminUser,
     generated: req.query.key || null,
-    faviconUrl,
+    faviconUrl, enrichStatus,
     flash: req.query.flash || '', error: req.query.error || '',
   });
 });
