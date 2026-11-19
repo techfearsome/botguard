@@ -3472,11 +3472,12 @@ router.get('/redirect-logs', async (req, res) => {
 // behind requireAdmin (router.use above).
 const multer = require('multer');
 const { isAllowedUpload, resolveType, MAX_BYTES, sanitizeFilename, publicUrl } = require('../../lib/uploadHelpers');
+const MAX_UPLOAD_FILES = 20; // per batch
 const uploadMw = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_BYTES, files: 1 },
+  limits: { fileSize: MAX_BYTES, files: MAX_UPLOAD_FILES },
   fileFilter: (req, file, cb) => cb(null, isAllowedUpload(file)),
-}).single('file');
+}).array('file', MAX_UPLOAD_FILES);
 
 router.get('/uploads', async (req, res) => {
   const ws = await resolveWorkspace(req);
@@ -3494,11 +3495,14 @@ router.get('/uploads', async (req, res) => {
 router.post('/uploads', (req, res) => {
   uploadMw(req, res, async (err) => {
     if (err) {
-      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File too large (max 8 MB)' : 'Upload failed';
+      let msg = 'Upload failed';
+      if (err.code === 'LIMIT_FILE_SIZE') msg = 'A file is too large (max 8 MB each)';
+      else if (err.code === 'LIMIT_FILE_COUNT') msg = `Too many files (max ${MAX_UPLOAD_FILES} per upload)`;
       return res.redirect('/admin/uploads?error=' + encodeURIComponent(msg));
     }
-    if (!req.file) {
-      return res.redirect('/admin/uploads?error=' + encodeURIComponent('No file, or unsupported type (PNG, JPG, GIF, WebP, SVG, ICO, or WAV only)'));
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (files.length === 0) {
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent('No files, or unsupported type (PNG, JPG, GIF, WebP, SVG, ICO, or WAV only)'));
     }
     try {
       const ws = await resolveWorkspace(req);
@@ -3506,31 +3510,47 @@ router.post('/uploads', (req, res) => {
       const storage = require('../../lib/storage');
       const mongoose = require('mongoose');
 
-      // Normalize to a canonical MIME/extension (the browser may send a vague
-      // type for .wav/.ico), so what we store and serve is correct and safe.
-      const { mime } = resolveType(req.file.mimetype, req.file.originalname);
-      const filename = sanitizeFilename(req.file.originalname, mime);
+      let saved = 0;
+      const failed = [];
+      for (const file of files) {
+        try {
+          // Normalize to a canonical MIME/extension (the browser may send a vague
+          // type for .wav/.ico), so what we store and serve is correct and safe.
+          const { mime } = resolveType(file.mimetype, file.originalname);
+          const filename = sanitizeFilename(file.originalname, mime);
 
-      // Pre-generate the id so the storage key can include it before the doc exists.
-      const id = new mongoose.Types.ObjectId();
-      const stored = await storage.save({
-        workspaceId: ws._id, id, filename,
-        mimetype: mime, buffer: req.file.buffer,
-      });
+          // Pre-generate the id so the storage key can include it before the doc exists.
+          const id = new mongoose.Types.ObjectId();
+          const stored = await storage.save({
+            workspaceId: ws._id, id, filename,
+            mimetype: mime, buffer: file.buffer,
+          });
 
-      await Upload.create({
-        _id: id,
-        workspace_id: ws._id,
-        filename,
-        mimetype: mime,
-        size: req.file.size,
-        ...stored,
-      });
-      const url = publicUrl(id, filename);
-      return res.redirect('/admin/uploads?flash=' + encodeURIComponent('Uploaded: ' + url));
+          await Upload.create({
+            _id: id,
+            workspace_id: ws._id,
+            filename,
+            mimetype: mime,
+            size: file.size,
+            ...stored,
+          });
+          saved += 1;
+        } catch (e) {
+          logger.error('upload_save_failed', { file: file.originalname, err: e.message });
+          failed.push(file.originalname || 'file');
+        }
+      }
+
+      if (saved === 0) {
+        return res.redirect('/admin/uploads?error=' + encodeURIComponent('Could not save upload' + (files.length > 1 ? 's' : '')));
+      }
+      let msg = saved === 1 ? '1 file uploaded' : `${saved} files uploaded`;
+      if (failed.length) msg += ` · ${failed.length} failed (${failed.slice(0, 3).join(', ')}${failed.length > 3 ? '…' : ''})`;
+      const param = failed.length ? 'error' : 'flash';
+      return res.redirect('/admin/uploads?' + param + '=' + encodeURIComponent(msg));
     } catch (e) {
-      logger.error('upload_save_failed', { err: e.message });
-      return res.redirect('/admin/uploads?error=' + encodeURIComponent('Could not save upload'));
+      logger.error('upload_batch_failed', { err: e.message });
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent('Could not save uploads'));
     }
   });
 });

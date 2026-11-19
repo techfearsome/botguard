@@ -16,9 +16,9 @@
 
 <section class="panel" style="margin-bottom:20px;">
   <form method="POST" action="/admin/uploads" enctype="multipart/form-data" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-    <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/x-icon,.ico,audio/wav,.wav" required>
+    <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/x-icon,.ico,audio/wav,.wav" multiple required>
     <button type="submit" class="btn btn-primary">Upload</button>
-    <span class="muted" style="font-size:12px;">PNG, JPG, GIF, WebP, SVG, ICO, or WAV · max 8 MB</span>
+    <span class="muted" style="font-size:12px;">PNG, JPG, GIF, WebP, SVG, ICO, or WAV · max 8 MB each · up to 20 files</span>
   </form>
 </section>
 
