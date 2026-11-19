@@ -3471,11 +3471,11 @@ router.get('/redirect-logs', async (req, res) => {
 // served at /wp-content/uploads/<id>/<filename>. Admin routes are already
 // behind requireAdmin (router.use above).
 const multer = require('multer');
-const { isAllowedMime, MAX_BYTES, sanitizeFilename, publicUrl } = require('../../lib/uploadHelpers');
+const { isAllowedUpload, resolveType, MAX_BYTES, sanitizeFilename, publicUrl } = require('../../lib/uploadHelpers');
 const uploadMw = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_BYTES, files: 1 },
-  fileFilter: (req, file, cb) => cb(null, isAllowedMime(file.mimetype)),
+  fileFilter: (req, file, cb) => cb(null, isAllowedUpload(file)),
 }).single('file');
 
 router.get('/uploads', async (req, res) => {
@@ -3498,27 +3498,31 @@ router.post('/uploads', (req, res) => {
       return res.redirect('/admin/uploads?error=' + encodeURIComponent(msg));
     }
     if (!req.file) {
-      return res.redirect('/admin/uploads?error=' + encodeURIComponent('No file, or unsupported type (PNG/JPG/GIF/WebP only)'));
+      return res.redirect('/admin/uploads?error=' + encodeURIComponent('No file, or unsupported type (PNG, JPG, GIF, WebP, SVG, ICO, or WAV only)'));
     }
     try {
       const ws = await resolveWorkspace(req);
       const { Upload } = require('../../models');
       const storage = require('../../lib/storage');
       const mongoose = require('mongoose');
-      const filename = sanitizeFilename(req.file.originalname, req.file.mimetype);
+
+      // Normalize to a canonical MIME/extension (the browser may send a vague
+      // type for .wav/.ico), so what we store and serve is correct and safe.
+      const { mime } = resolveType(req.file.mimetype, req.file.originalname);
+      const filename = sanitizeFilename(req.file.originalname, mime);
 
       // Pre-generate the id so the storage key can include it before the doc exists.
       const id = new mongoose.Types.ObjectId();
       const stored = await storage.save({
         workspaceId: ws._id, id, filename,
-        mimetype: req.file.mimetype, buffer: req.file.buffer,
+        mimetype: mime, buffer: req.file.buffer,
       });
 
       await Upload.create({
         _id: id,
         workspace_id: ws._id,
         filename,
-        mimetype: req.file.mimetype,
+        mimetype: mime,
         size: req.file.size,
         ...stored,
       });

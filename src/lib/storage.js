@@ -132,8 +132,16 @@ async function serve(res, doc) {
   const storage = doc.storage || 'mongo';
 
   const setHeaders = () => {
-    res.set('Content-Type', doc.mimetype || 'application/octet-stream');
+    const mt = String(doc.mimetype || 'application/octet-stream').toLowerCase();
+    res.set('Content-Type', mt);
     res.set('X-Content-Type-Options', 'nosniff');
+    // SVG can carry embedded <script>. Served from our own domain, a direct
+    // visit would execute it (stored-XSS). A no-privilege CSP + sandbox lets it
+    // still render as an image (via <img>) but blocks scripts and any external
+    // fetches. Inline styles are allowed so normal SVG artwork renders.
+    if (mt === 'image/svg+xml') {
+      res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    }
     res.set('Cache-Control', 'public, max-age=31536000, immutable');
     res.set('CDN-Cache-Control', 'public, max-age=31536000, immutable');
   };

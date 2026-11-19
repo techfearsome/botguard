@@ -3,7 +3,7 @@
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
   <div>
     <h1 style="margin-bottom:4px;">Uploads</h1>
-    <p class="muted">Upload images and copy a direct link to use in pages, campaigns, or site pages. Links look like <code>/wp-content/uploads/…</code> and are served from the database (survive redeploys).</p>
+    <p class="muted">Upload images, icons, and audio and copy a direct link to use in pages, campaigns, or site pages. Links look like <code>/wp-content/uploads/…</code> and are served from the database (survive redeploys).</p>
   </div>
 </div>
 
@@ -16,24 +16,35 @@
 
 <section class="panel" style="margin-bottom:20px;">
   <form method="POST" action="/admin/uploads" enctype="multipart/form-data" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-    <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp" required>
+    <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/x-icon,.ico,audio/wav,.wav" required>
     <button type="submit" class="btn btn-primary">Upload</button>
-    <span class="muted" style="font-size:12px;">PNG, JPG, GIF, or WebP · max 8 MB</span>
+    <span class="muted" style="font-size:12px;">PNG, JPG, GIF, WebP, SVG, ICO, or WAV · max 8 MB</span>
   </form>
 </section>
 
 <section class="panel">
   <% if (uploads.length === 0) { %>
-    <p class="muted">No uploads yet. Add an image above to get a direct link.</p>
+    <p class="muted">No uploads yet. Add a file above to get a direct link.</p>
   <% } else { %>
     <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:16px;">
       <% uploads.forEach(function(u){
            var url = '/wp-content/uploads/' + u._id + '/' + u.filename;
            var full = host + url;
+           var mt = String(u.mimetype || '').toLowerCase();
+           var isAudio = mt.indexOf('audio/') === 0;
       %>
         <div style="border:1px solid var(--border-subtle,#22303f); border-radius:8px; overflow:hidden; background:var(--color-background-secondary,#0f1720);">
-          <div style="aspect-ratio:16/10; background:#0b1119; display:flex; align-items:center; justify-content:center; overflow:hidden;">
-            <img src="<%= url %>" alt="<%= u.filename %>" loading="lazy" style="max-width:100%; max-height:100%; object-fit:contain;">
+          <div style="aspect-ratio:16/10; background:#0b1119; display:flex; align-items:center; justify-content:center; overflow:hidden; padding:8px;">
+            <% if (isAudio) { %>
+              <div style="width:100%; text-align:center;">
+                <div style="font-size:26px; margin-bottom:6px;">♪</div>
+                <audio controls preload="none" style="width:100%;">
+                  <source src="<%= url %>" type="<%= u.mimetype %>">
+                </audio>
+              </div>
+            <% } else { %>
+              <img src="<%= url %>" alt="<%= u.filename %>" loading="lazy" style="max-width:100%; max-height:100%; object-fit:contain;">
+            <% } %>
           </div>
           <div style="padding:8px 10px;">
             <div style="font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<%= u.filename %>"><%= u.filename %></div>
@@ -43,7 +54,7 @@
                      style="flex:1; min-width:0; font-size:11px; padding:4px 6px; font-family:monospace;">
               <button type="button" class="btn btn-small" onclick="(function(b){navigator.clipboard.writeText('<%= full %>').then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1200);});})(this)">Copy</button>
             </div>
-            <form method="POST" action="/admin/uploads/<%= u._id %>/delete" style="margin-top:6px;" onsubmit="return confirm('Delete this image? Any page still linking to it will break.');">
+            <form method="POST" action="/admin/uploads/<%= u._id %>/delete" style="margin-top:6px;" onsubmit="return confirm('Delete this file? Any page still linking to it will break.');">
               <button type="submit" class="btn btn-small" style="color:#f87171;">Delete</button>
             </form>
           </div>
