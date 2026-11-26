@@ -119,7 +119,7 @@ router.get('/campaigns', async (req, res) => {
 router.get('/campaigns/new', async (req, res) => {
   const ws = await resolveWorkspace(req);
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign: null, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: req.query.type === 'redirect' ? 'redirect' : 'offer' });
+  res.render('admin/campaign_form', { ws, campaign: null, pages, countryList: require('../../lib/countryRules').countryList(), baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: req.query.type === 'redirect' ? 'redirect' : 'offer' });
 });
 
 router.post('/campaigns', async (req, res) => {
@@ -195,6 +195,8 @@ router.post('/campaigns', async (req, res) => {
       redirect_url: (body.redirect_url || '').trim(),
       redirect_urls: parseRedirectUrls(body),
       redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
+      country_rules_enabled: body.country_rules_enabled === 'on' || body.country_rules_enabled === 'true',
+      country_rules: parseCountryRulesFromBody(body) || [],
     });
     // New campaigns may have added a custom root_path - the next /robots.txt
     // request must include the new Disallow rule. Invalidating the cache here
@@ -275,6 +277,15 @@ function parseProxyGate(body) {
 function clamp(n, min, max, fallback) {
   if (typeof n !== 'number' || Number.isNaN(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+// Parse the country rules JSON (serialized client-side into one hidden field so
+// many countries never hit the urlencoded 1000-parameter cap). Returns null on
+// a malformed payload so callers can keep the stored rules.
+function parseCountryRulesFromBody(body) {
+  const { parseCountryRules } = require('../../lib/countryRules');
+  const { normalizeRedirectUrl: normUrl } = require('../../lib/redirect');
+  return parseCountryRules(body.country_rules_json || '[]', { normalizeUrl: normUrl });
 }
 
 // Parse the device_pages nested form input: { iphone: { offer: id, safe: id }, ... }
@@ -400,7 +411,7 @@ router.get('/campaigns/:id/edit', async (req, res) => {
   const campaign = await Campaign.findOne({ _id: req.params.id, workspace_id: ws._id }).lean();
   if (!campaign) return res.status(404).send('Campaign not found');
   const pages = await LandingPage.find({ workspace_id: ws._id }).sort({ name: 1 }).lean();
-  res.render('admin/campaign_form', { ws, campaign, pages, baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: 'offer' });
+  res.render('admin/campaign_form', { ws, campaign, pages, countryList: require('../../lib/countryRules').countryList(), baseUrl: process.env.BASE_URL || '', page: 'campaigns', presetType: 'offer' });
 });
 
 router.post('/campaigns/:id', async (req, res) => {
@@ -480,6 +491,13 @@ router.post('/campaigns/:id', async (req, res) => {
           redirect_delay_ms: Math.max(0, Math.min(parseInt(body.redirect_delay_ms, 10) || 1500, 15000)),
     };
     if (parsedSchedule !== null) setFields.ad_schedule = parsedSchedule;
+    // Country rules: only touch them when the form actually submitted the
+    // section (sentinel), and never wipe stored rules on a malformed payload.
+    if (body.country_rules_present === '1') {
+      setFields.country_rules_enabled = body.country_rules_enabled === 'on' || body.country_rules_enabled === 'true';
+      const parsedRules = parseCountryRulesFromBody(body);
+      if (parsedRules !== null) setFields.country_rules = parsedRules;
+    }
 
     await Campaign.updateOne(
       { _id: req.params.id, workspace_id: ws._id },
@@ -556,6 +574,7 @@ router.post('/campaigns/:id/toggle', async (req, res) => {
  *
  * To peek at safe page: ?kind=safe
  * To pretend to be a specific device: ?device=iphone (or android/windows/mac/linux/other)
+ * To pretend to be from a country (country rules): ?country=DE
  */
 router.get('/campaigns/:id/preview', async (req, res) => {
   const ws = await resolveWorkspace(req);
@@ -567,10 +586,11 @@ router.get('/campaigns/:id/preview', async (req, res) => {
     ? req.query.device : 'other';
 
   const { resolvePageForDevice } = require('../../lib/pageResolver');
+  const previewCountry = require('../../lib/countryRules').normalizeCountryCode(req.query.country);
   const { buildInjection } = require('../../lib/autoConversion');
   const { buildTrackingInjection } = require('../../lib/tracking');
 
-  const page = await resolvePageForDevice(campaign, device, kind);
+  const page = await resolvePageForDevice(campaign, device, kind, previewCountry);
   if (!page) {
     return res.type('text/plain').send(`No ${kind} page configured for device class "${device}".\nFalls back to the built-in stub at request time.`);
   }
@@ -595,7 +615,7 @@ router.get('/campaigns/:id/preview', async (req, res) => {
 
   // Render as plain text so the admin can scroll through the source easily
   res.type('text/plain; charset=utf-8').send(
-    `=== Preview: campaign="${campaign.slug}", kind=${kind}, device=${device}\n` +
+    `=== Preview: campaign="${campaign.slug}", kind=${kind}, device=${device}, country=${previewCountry || '(none)'}\n` +
     `=== Page: "${page.name}" (slug: ${page.slug})\n` +
     `=== auto_conversion.enabled: ${!!page.auto_conversion?.enabled}\n` +
     `=== Clarity project ID: ${trackingId || '(not set)'}\n` +
@@ -614,6 +634,7 @@ router.get('/campaigns/:id/preview', async (req, res) => {
  *
  * GET /admin/campaigns/:id/preview/page/:kind  (kind = "offer" or "safe")
  * Optional: ?device=iphone|android|windows|mac|linux|other (default 'other')
+ *           ?country=DE (ISO code; applies the campaign's country rules)
  */
 router.get('/campaigns/:id/preview/page/:kind', async (req, res) => {
   const ws = await resolveWorkspace(req);
@@ -625,7 +646,8 @@ router.get('/campaigns/:id/preview/page/:kind', async (req, res) => {
     ? req.query.device : 'other';
 
   const { resolvePageForDevice } = require('../../lib/pageResolver');
-  const page = await resolvePageForDevice(campaign, device, kind);
+  const previewCountry = require('../../lib/countryRules').normalizeCountryCode(req.query.country);
+  const page = await resolvePageForDevice(campaign, device, kind, previewCountry);
   if (!page) {
     setPreviewHeaders(res);
     return res.send(`<!DOCTYPE html><html><body style="font-family:system-ui;padding:40px;max-width:600px;margin:0 auto;"><h2>No ${kind} page configured</h2><p>This campaign has no ${kind} page set for device class "${device}". A real visit would render the built-in stub.</p></body></html>`);

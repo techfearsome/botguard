@@ -1,5 +1,39 @@
 const mongoose = require('mongoose');
 
+// ── Country rules (nation-based overrides) ─────────────────────────────
+// Factory so every path gets its own definition object.
+const pageSlot = () => ({
+  offer: { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
+  safe:  { type: mongoose.Schema.Types.ObjectId, ref: 'LandingPage' },
+});
+const urlSlot = () => ({ type: String, default: '' });
+
+// One rule per country (ISO 3166-1 alpha-2). `default` = all devices in that
+// country; device keys override it. Unset slots fall back to the campaign's
+// own per-device / default settings. See src/lib/countryRules.js.
+const CountryRuleSchema = new mongoose.Schema({
+  country: { type: String, uppercase: true, trim: true, required: true },
+  enabled: { type: Boolean, default: true },
+  pages: {
+    default: pageSlot(),
+    iphone:  pageSlot(),
+    android: pageSlot(),
+    windows: pageSlot(),
+    mac:     pageSlot(),
+    linux:   pageSlot(),
+    other:   pageSlot(),
+  },
+  redirect_urls: {
+    default: urlSlot(),
+    iphone:  urlSlot(),
+    android: urlSlot(),
+    windows: urlSlot(),
+    mac:     urlSlot(),
+    linux:   urlSlot(),
+    other:   urlSlot(),
+  },
+}, { _id: false });
+
 const CampaignSchema = new mongoose.Schema({
   workspace_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', required: true, index: true },
   slug: { type: String, required: true, lowercase: true, trim: true },
@@ -187,6 +221,13 @@ const CampaignSchema = new mongoose.Schema({
   },
   // Delay before the client-side redirect fires. 0 = instant 302 (no interstitial).
   redirect_delay_ms: { type: Number, default: 1500 },
+
+  // Optional advanced nation-based routing. When enabled, a visitor whose
+  // country matches a rule gets that rule's page / redirect URL for their
+  // device class (or the rule's all-devices default), falling back to the
+  // campaign-level settings above when a slot is unset.
+  country_rules_enabled: { type: Boolean, default: false },
+  country_rules: { type: [CountryRuleSchema], default: [] },
 
   // Optional cost & metadata
   notes: String,

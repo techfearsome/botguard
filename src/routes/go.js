@@ -6,6 +6,7 @@ const { buildClickDoc, writeClick } = require('../lib/click');
 const { pickVariant } = require('../lib/variant');
 const { runFilterChain } = require('../lib/filterChain');
 const { resolvePageForDevice } = require('../lib/pageResolver');
+const { visitorCountry, findCountryRule } = require('../lib/countryRules');
 const { resolveGuardConfig } = require('../lib/guardEligibility');
 const { buildRedirectPage, writeRedirectLog, isSafeRedirectUrl, resolveRedirectUrl } = require('../lib/redirect');
 const cache = require('../lib/cache');
@@ -77,6 +78,9 @@ async function handleClick(req, res, opts) {
     // Build base click record
     const doc = buildClickDoc({ req, workspace, campaign });
     const deviceClass = doc.ua_parsed?.device_class || 'other';
+    // Visitor country for nation-based rules. A function, because doc.country is
+    // only filled after IP enrichment; earlier exits use CF-IPCountry instead.
+    const cc = () => visitorCountry(doc, req);
 
     // --- Campaign status gate ---
     // `status` is the SINGLE SOURCE OF TRUTH for whether a campaign serves.
@@ -100,7 +104,7 @@ async function handleClick(req, res, opts) {
       doc.mode_at_decision = 'enforce';
       doc.page_rendered = 'safe';
 
-      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe', cc());
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
       if (safePage) doc.landing_page_id = safePage._id;
 
@@ -126,7 +130,7 @@ async function handleClick(req, res, opts) {
       doc.mode_at_decision = 'enforce';   // gate is always enforcing - it's not a score
       doc.page_rendered = 'safe';
 
-      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe', cc());
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
@@ -156,7 +160,7 @@ async function handleClick(req, res, opts) {
       doc.mode_at_decision = 'enforce';
       doc.page_rendered = 'safe';
 
-      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe', cc());
       const html = safePage ? (safePage.html_template || pickVariantHtml(safePage)) : renderSafeFallback();
 
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
@@ -222,7 +226,7 @@ async function handleClick(req, res, opts) {
       doc.mode_at_decision = 'enforce';   // gate is always enforcing
       doc.page_rendered = 'safe';
 
-      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe', cc());
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
       registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res, campaign); return res.status(200).type('html').send(applyPageTracking(html, workspace));
@@ -243,7 +247,7 @@ async function handleClick(req, res, opts) {
       doc.mode_at_decision = 'enforce';
       doc.page_rendered = 'safe';
 
-      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+      const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe', cc());
       const html = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
       writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
       registerLiveVisitor(doc, campaign, workspace); setGoCookies(req, res, doc); setNoCacheHeaders(req, res, campaign); return res.status(200).type('html').send(applyPageTracking(html, workspace));
@@ -252,7 +256,13 @@ async function handleClick(req, res, opts) {
 
     // Resolve which page to show (per-device override applies)
     const showSafePage = (doc.decision === 'block');
-    const targetPage = await resolvePageForDevice(campaign, deviceClass, showSafePage ? 'safe' : 'offer');
+    const targetPage = await resolvePageForDevice(campaign, deviceClass, showSafePage ? 'safe' : 'offer', cc());
+    // Surface nation-based routing in the Click Log when a country rule matched.
+    const countryRuleHit = findCountryRule(campaign, cc());
+    if (countryRuleHit) {
+      doc.scores = doc.scores || {};
+      doc.scores.flags = [...(doc.scores.flags || []), `country_rule_${countryRuleHit.country}`];
+    }
 
     // ── Bot Guard (Level 2) ─────────────────────────────────────────
     // Resolve whether THIS click (for THIS device class) should run through
@@ -305,7 +315,7 @@ async function handleClick(req, res, opts) {
         doc.decision = 'block';
         doc.decision_reason = 'guard_failed';
         doc.page_rendered = 'safe';
-        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe', cc());
         writeClick(doc).catch((err) => logger.error('click_write_failed', { err: err.message }));
         setGoCookies(req, res, doc);
         if (safePage) {
@@ -362,7 +372,7 @@ async function handleClick(req, res, opts) {
     // campaign, clean traffic is sent to the declared URL instead of an offer
     // page. Filtered traffic is unaffected — it already got the safe page.
     if (!showSafePage && campaign.campaign_type === 'redirect') {
-      const destUrl = resolveRedirectUrl(campaign, deviceClass);
+      const destUrl = resolveRedirectUrl(campaign, deviceClass, cc());
       if (!isSafeRedirectUrl(destUrl)) {
         // Misconfigured redirect campaign — fail safe. Show the campaign's
         // configured safe page (device-resolved), not the generic built-in
@@ -370,7 +380,7 @@ async function handleClick(req, res, opts) {
         logger.error('redirect_url_invalid', { campaign: String(campaign._id), url: destUrl });
         doc.page_rendered = 'safe';
         doc.decision_reason = 'redirect_url_invalid';
-        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe');
+        const safePage = await resolvePageForDevice(campaign, deviceClass, 'safe', cc());
         const safeHtml = safePage ? pickVariantHtml(safePage) : renderSafeFallback();
         if (safePage) doc.landing_page_id = safePage._id;
         setGoCookies(req, res, doc);

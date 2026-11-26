@@ -238,6 +238,221 @@
     </table>
   </fieldset>
 
+  <%
+    // ── Country Rules (advanced) ──────────────────────────────────────────
+    var crEnabled = !!(campaign && campaign.country_rules_enabled);
+    var crRules = (campaign && campaign.country_rules) ? JSON.parse(JSON.stringify(campaign.country_rules)) : [];
+    var crCountries = (typeof countryList !== 'undefined' && countryList) ? countryList : [];
+    var crPages = pages.map(function (p) { return { id: String(p._id), name: p.name, kind: p.kind === 'safe' ? 'safe' : 'offer' }; });
+    var crData = JSON.stringify({ rules: crRules, pages: crPages, countries: crCountries }).replace(/</g, '\\u003c');
+    var crInitialType = (campaign && campaign.campaign_type) ? campaign.campaign_type : (typeof presetType !== 'undefined' ? presetType : 'offer');
+  %>
+  <fieldset id="countryRulesFieldset" class="cr-type-<%= crInitialType === 'redirect' ? 'redirect' : 'offer' %>">
+    <legend style="font-weight:600; padding:0 6px;">🌍 Country Rules <span class="muted" style="font-weight:400;">(advanced, optional)</span></legend>
+    <style>
+      #countryRulesFieldset .cr-add { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0 14px; }
+      #countryRulesFieldset .cr-add input { flex:1; min-width:240px; }
+      #countryRulesFieldset .cr-card { border:1px solid var(--border-default, #2a3441); border-radius:var(--radius-md, 8px); margin-bottom:12px; overflow:hidden; }
+      #countryRulesFieldset .cr-card.cr-off { opacity:.55; }
+      #countryRulesFieldset .cr-head { display:flex; align-items:center; gap:10px; padding:10px 12px; background:rgba(255,255,255,.03); flex-wrap:wrap; }
+      #countryRulesFieldset .cr-head .cr-flag { font-size:20px; line-height:1; }
+      #countryRulesFieldset .cr-head .cr-spacer { flex:1; }
+      #countryRulesFieldset .cr-head label { display:flex; align-items:center; gap:6px; font-weight:400; margin:0; }
+      #countryRulesFieldset .cr-head input[type=checkbox] { width:auto; margin:0; }
+      #countryRulesFieldset .cr-card table { margin:0; }
+      #countryRulesFieldset .cr-card.cr-collapsed table { display:none; }
+      #countryRulesFieldset .cr-card select, #countryRulesFieldset .cr-card input[type=text] { width:100%; }
+      #countryRulesFieldset .cr-row-default td { background:rgba(59,130,246,.06); }
+      #countryRulesFieldset.cr-type-redirect .cr-col-offer { display:none; }
+      #countryRulesFieldset.cr-type-offer .cr-col-redirect { display:none; }
+      #countryRulesFieldset .cr-msg { font-size:12px; }
+      #countryRulesFieldset .cr-msg.cr-err { color:#f87171; }
+    </style>
+
+    <p class="muted" style="margin-top:0;">
+      Give visitors from specific countries their own pages per device class — and, on redirect campaigns,
+      their own redirect URLs. For a visitor from a listed country the order is:
+      <strong>country + device</strong> → <strong>country "All devices"</strong> → Per-Device Pages above → Default Pages.
+      Countries that aren't listed, unknown countries, or rules switched off always use the campaign settings above.
+      The visitor's country comes from IP enrichment (ProxyCheck / IPLocate), falling back to Cloudflare.
+    </p>
+
+    <div class="form-row">
+      <label style="font-weight:normal; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" name="country_rules_enabled" id="crEnabled" <%= crEnabled ? 'checked' : '' %> style="width:auto;">
+        Enable country rules for this campaign
+      </label>
+    </div>
+
+    <input type="hidden" name="country_rules_present" value="1">
+    <%# Pre-filled with the stored rules so a save without JS round-trips them unchanged. %>
+    <input type="hidden" name="country_rules_json" id="crJson" value="<%= JSON.stringify(crRules) %>">
+
+    <div id="crBody" style="display:<%= crEnabled ? 'block' : 'none' %>;">
+      <div class="cr-add">
+        <input type="text" id="crAddInput" list="crCountryOptions" autocomplete="off"
+               placeholder="Type a country name or ISO code — e.g. Germany or DE">
+        <button type="button" class="btn btn-small" id="crAddBtn">+ Add country</button>
+        <span class="cr-msg muted" id="crAddMsg"></span>
+      </div>
+      <datalist id="crCountryOptions">
+        <% crCountries.forEach(function (c) { %><option value="<%= c.code %> — <%= c.name %>"></option><% }); %>
+      </datalist>
+      <div id="crList"></div>
+      <p class="muted" id="crEmpty" style="margin:4px 0 0;">No countries added yet. Add one above to give it its own pages.</p>
+    </div>
+
+    <script type="application/json" id="crData"><%- crData %></script>
+    <script>
+    (function () {
+      var fs = document.getElementById('countryRulesFieldset');
+      if (!fs) return;
+      var data = {};
+      try { data = JSON.parse(document.getElementById('crData').textContent || '{}'); } catch (e) { return; }
+      var pages = data.pages || [];
+      var countries = data.countries || [];
+      var byCode = {};
+      countries.forEach(function (c) { byCode[c.code] = c; });
+      var SLOTS = [
+        ['default', 'All devices <span class="muted" style="font-weight:400;">(country default)</span>'],
+        ['iphone', 'iPhone'], ['android', 'Android'], ['windows', 'Windows'],
+        ['mac', 'Mac'], ['linux', 'Linux'], ['other', 'Other (iPad, TV, unknown)'],
+      ];
+      var list = document.getElementById('crList');
+      var empty = document.getElementById('crEmpty');
+      var msg = document.getElementById('crAddMsg');
+      var input = document.getElementById('crAddInput');
+
+      function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+      function flag(code) {
+        if (!/^[A-Z]{2}$/.test(code)) return '🏳️';
+        return String.fromCodePoint(0x1F1E6 + code.charCodeAt(0) - 65, 0x1F1E6 + code.charCodeAt(1) - 65);
+      }
+      function pageOptions(kind, selected, isDefaultRow) {
+        var html = '<option value="">' + (isDefaultRow ? '— use campaign setting —' : '— use default —') + '</option>';
+        pages.filter(function (p) { return p.kind === kind; }).forEach(function (p) {
+          html += '<option value="' + esc(p.id) + '"' + (p.id === selected ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+        });
+        return html;
+      }
+      function setMsg(text, isErr) {
+        msg.textContent = text || '';
+        msg.className = 'cr-msg ' + (isErr ? 'cr-err' : 'muted');
+      }
+      function refreshEmpty() { empty.style.display = list.children.length ? 'none' : 'block'; }
+
+      function addCard(rule, opts) {
+        var code = rule.country;
+        var name = (byCode[code] && byCode[code].name) || code;
+        var pg = rule.pages || {};
+        var ru = rule.redirect_urls || {};
+        var card = document.createElement('div');
+        card.className = 'cr-card' + (rule.enabled === false ? ' cr-off' : '') + (opts && opts.collapsed ? ' cr-collapsed' : '');
+        card.setAttribute('data-country', code);
+        var rows = SLOTS.map(function (s) {
+          var slot = s[0], isDef = slot === 'default', e = pg[slot] || {};
+          return '<tr class="' + (isDef ? 'cr-row-default' : '') + '" data-slot="' + slot + '">' +
+            '<td><strong>' + s[1] + '</strong></td>' +
+            '<td class="cr-col-offer"><select class="cr-offer">' + pageOptions('offer', e.offer || '', isDef) + '</select></td>' +
+            '<td><select class="cr-safe">' + pageOptions('safe', e.safe || '', isDef) + '</select></td>' +
+            '<td class="cr-col-redirect"><input type="text" class="cr-url" value="' + esc(ru[slot] || '') + '" placeholder="' +
+              (isDef ? 'https://… (blank = campaign setting)' : '(use default)') + '"></td>' +
+          '</tr>';
+        }).join('');
+        card.innerHTML =
+          '<div class="cr-head">' +
+            '<span class="cr-flag">' + flag(code) + '</span>' +
+            '<strong>' + esc(name) + '</strong> <code>' + esc(code) + '</code>' +
+            '<span class="cr-spacer"></span>' +
+            '<label><input type="checkbox" class="cr-on"' + (rule.enabled === false ? '' : ' checked') + '> Active</label>' +
+            '<button type="button" class="btn btn-small cr-toggle">' + (opts && opts.collapsed ? 'Expand' : 'Collapse') + '</button>' +
+            '<button type="button" class="btn btn-small cr-remove" style="color:#f87171;">Remove</button>' +
+          '</div>' +
+          '<table class="table table-dense"><thead><tr>' +
+            '<th style="width:190px;">Device class</th>' +
+            '<th class="cr-col-offer">Offer page</th><th>Safe page</th>' +
+            '<th class="cr-col-redirect">Redirect URL</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody></table>';
+        card.querySelector('.cr-on').addEventListener('change', function () { card.classList.toggle('cr-off', !this.checked); });
+        card.querySelector('.cr-toggle').addEventListener('click', function () {
+          var c = card.classList.toggle('cr-collapsed');
+          this.textContent = c ? 'Expand' : 'Collapse';
+        });
+        card.querySelector('.cr-remove').addEventListener('click', function () {
+          if (!confirm('Remove the rule for ' + name + ' (' + code + ')?')) return;
+          card.remove(); refreshEmpty();
+        });
+        list.appendChild(card);
+        refreshEmpty();
+        return card;
+      }
+
+      // Accepts "DE", "de", "DE — Germany", "Germany", or a unique name prefix.
+      function resolveCountry(raw) {
+        var v = String(raw || '').trim();
+        if (!v) return null;
+        var m = v.match(/^([A-Za-z]{2})(?:\s|—|-|$)/);
+        if (m && byCode[m[1].toUpperCase()]) return m[1].toUpperCase();
+        var lower = v.toLowerCase();
+        var exact = countries.filter(function (c) { return c.name.toLowerCase() === lower; });
+        if (exact.length === 1) return exact[0].code;
+        var pre = countries.filter(function (c) { return c.name.toLowerCase().indexOf(lower) === 0; });
+        if (pre.length === 1) return pre[0].code;
+        return null;
+      }
+
+      function doAdd() {
+        var code = resolveCountry(input.value);
+        if (!code) { setMsg('Unknown country — pick one from the list or type a 2-letter ISO code.', true); return; }
+        var existing = list.querySelector('[data-country="' + code + '"]');
+        if (existing) {
+          setMsg((byCode[code] ? byCode[code].name : code) + ' is already added.', true);
+          existing.classList.remove('cr-collapsed');
+          existing.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return;
+        }
+        addCard({ country: code, enabled: true, pages: {}, redirect_urls: {} });
+        input.value = '';
+        setMsg('Added ' + (byCode[code] ? byCode[code].name : code) + '.', false);
+      }
+      document.getElementById('crAddBtn').addEventListener('click', doAdd);
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+
+      document.getElementById('crEnabled').addEventListener('change', function () {
+        document.getElementById('crBody').style.display = this.checked ? 'block' : 'none';
+      });
+      var typeSel = document.getElementById('campaignType');
+      if (typeSel) typeSel.addEventListener('change', function () {
+        fs.classList.toggle('cr-type-redirect', this.value === 'redirect');
+        fs.classList.toggle('cr-type-offer', this.value !== 'redirect');
+      });
+
+      function serialize() {
+        var out = [];
+        list.querySelectorAll('.cr-card').forEach(function (card) {
+          var rule = { country: card.getAttribute('data-country'), enabled: card.querySelector('.cr-on').checked, pages: {}, redirect_urls: {} };
+          card.querySelectorAll('tbody tr').forEach(function (tr) {
+            var slot = tr.getAttribute('data-slot');
+            var offer = tr.querySelector('.cr-offer').value;
+            var safe = tr.querySelector('.cr-safe').value;
+            if (offer || safe) { rule.pages[slot] = {}; if (offer) rule.pages[slot].offer = offer; if (safe) rule.pages[slot].safe = safe; }
+            rule.redirect_urls[slot] = tr.querySelector('.cr-url').value.trim();
+          });
+          out.push(rule);
+        });
+        document.getElementById('crJson').value = JSON.stringify(out);
+      }
+      var form = fs.closest('form');
+      if (form) form.addEventListener('submit', serialize);
+
+      // Existing rules start collapsed when there are several, to keep the form short.
+      var initial = data.rules || [];
+      initial.forEach(function (r) { if (r && r.country) addCard(r, { collapsed: initial.length > 2 }); });
+      refreshEmpty();
+    })();
+    </script>
+  </fieldset>
+
   <div class="form-row">
     <label>Filter Threshold (0–100)</label>
     <input type="number" name="threshold" min="0" max="100" value="<%= campaign?.filter_config?.threshold ?? 70 %>">

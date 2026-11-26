@@ -114,23 +114,32 @@ function normalizeRedirectUrl(url) {
 /**
  * Resolve the redirect destination for a click, mirroring resolvePageForDevice.
  * Resolution order:
- *   1. campaign.redirect_urls[deviceClass] — per-device override
- *   2. campaign.redirect_urls.default      — campaign default
- *   3. campaign.redirect_url               — legacy single URL (back-compat)
+ *   1. country rule → redirect_urls[deviceClass]  (only if country rules are
+ *   2. country rule → redirect_urls.default         enabled and one matches)
+ *   3. campaign.redirect_urls[deviceClass] — per-device override
+ *   4. campaign.redirect_urls.default      — campaign default
+ *   5. campaign.redirect_url               — legacy single URL (back-compat)
  * The result is normalized (scheme added if missing). Returns '' if none.
  *
  * @param {object} campaign
  * @param {string} deviceClass  'iphone'|'android'|'windows'|'mac'|'linux'|'other'
+ * @param {string} [country]    visitor's ISO 3166-1 alpha-2 code (optional)
  * @returns {string}
  */
-function resolveRedirectUrl(campaign, deviceClass) {
+function resolveRedirectUrl(campaign, deviceClass, country) {
   if (!campaign) return '';
-  const map = campaign.redirect_urls || {};
-  const perDevice = deviceClass && map[deviceClass];
+  const { findCountryRule } = require('./countryRules');
+  const pick = (v) => (v && String(v).trim() ? String(v).trim() : '');
+
   let picked = '';
-  if (perDevice && String(perDevice).trim()) picked = String(perDevice).trim();
-  else if (map.default && String(map.default).trim()) picked = String(map.default).trim();
-  else if (campaign.redirect_url) picked = String(campaign.redirect_url).trim();
+  const rule = findCountryRule(campaign, country);
+  if (rule && rule.redirect_urls) {
+    picked = pick(deviceClass && rule.redirect_urls[deviceClass]) || pick(rule.redirect_urls.default);
+  }
+  if (!picked) {
+    const map = campaign.redirect_urls || {};
+    picked = pick(deviceClass && map[deviceClass]) || pick(map.default) || pick(campaign.redirect_url);
+  }
   return normalizeRedirectUrl(picked);
 }
 
